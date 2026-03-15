@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__zoho__ZohoDesk_getTickets",
+      "mcp__zoho__ZohoDesk_searchTickets",
+      "mcp__zoho__ZohoDesk_getThreads",
+      "Bash(curl -s -X POST http://localhost:8000/webhook/zoho-ticket -H \"Content-Type: application/json\" -d \"{\"\"ticket_id\"\":\"\"569440000036750179\"\",\"\"subject\"\":\"\"Test\"\",\"\"body\"\":\"\"Test\"\",\"\"contact_email\"\":\"\"rebeccak@arbutusnh.org\"\",\"\"contact_name\"\":\"\"Rebecca Klaassen\"\"}\")",
+      "Bash(choco install:*)",
+      "Bash(cmd.exe /c \"choco install ngrok -y\")",
+      "Bash(curl -s -o /tmp/ngrok.zip https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip)",
+      "Read(//tmp/**)",
+      "Bash(~/bin/ngrok.exe version:*)"
+    ]
+  }
+}

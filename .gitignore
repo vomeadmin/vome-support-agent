@@ -1,0 +1,13 @@
+.env
+.mcp.json
+__pycache__/
+*.pyc
+
+# Vector database folders
+chroma_data/
+chromadb/
+*.chroma
+
+# IDE
+.vscode/
+.idea/

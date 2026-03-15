@@ -1,0 +1,7 @@
+anthropic
+fastapi
+uvicorn
+python-dotenv
+httpx
+chromadb
+slack-sdk
