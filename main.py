@@ -114,4 +114,5 @@ async def zoho_update_webhook(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    env_status = {v: bool(os.environ.get(v)) for v in REQUIRED_ENV}
+    return {"status": "ok", "env": env_status}
