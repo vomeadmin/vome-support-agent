@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
 
-from agent import process_ticket
+from agent import process_ticket, process_ticket_update
 
 REQUIRED_ENV = [
     "ANTHROPIC_API_KEY",
@@ -51,6 +51,20 @@ async def zoho_ticket_webhook(request: Request):
     )
 
     process_ticket(ticket_data)
+
+    return {"status": "ok"}
+
+
+@app.post("/webhook/zoho-update")
+async def zoho_update_webhook(request: Request):
+    payload = await request.json()
+
+    ticket_id = payload.get("ticket_id", "unknown")
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    print(f"[{timestamp}] Ticket update #{ticket_id}")
+
+    process_ticket_update(ticket_id)
 
     return {"status": "ok"}
 

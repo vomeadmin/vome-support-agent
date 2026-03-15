@@ -20,6 +20,8 @@ ZOHO_MCP_TOKEN = os.environ.get("ZOHO_MCP_TOKEN", "")
 ZOHO_ORG_ID = os.environ.get("ZOHO_ORG_ID", "")
 
 NOTE_HEADER = "\U0001f916 AGENT ANALYSIS \u2014 DO NOT SEND \u2014 FOR REVIEW ONLY"
+UPDATE_HEADER = "\U0001f504 AGENT UPDATE \u2014 CLIENT REPLIED"
+AGENT_EMAILS = {"admin@vomevolunteer.com", "s.fagen@vomevolunteer.com", "r.segev@vomevolunteer.com"}
 
 
 def _zoho_mcp_call(tool_name: str, arguments: dict) -> dict | None:
@@ -388,4 +390,133 @@ def process_ticket(ticket_data: dict) -> str | None:
         return result
     except Exception as e:
         print(f"Agent error processing ticket {ticket_id}: {e}")
+        return None
+
+
+def _is_client_reply(conversations_result: dict | None) -> bool:
+    """Check if the most recent conversation entry is a client reply, not an internal action."""
+    if not conversations_result:
+        return False
+
+    data = _unwrap_mcp_result(conversations_result)
+    if isinstance(data, dict):
+        data = data.get("data", [])
+    if not isinstance(data, list) or not data:
+        return False
+
+    latest = data[0]
+
+    # Check for agent's own output
+    content = latest.get("content", "") or ""
+    if NOTE_HEADER in content or UPDATE_HEADER in content:
+        return False
+
+    # Check if it's an internal note (not a client reply)
+    if not latest.get("isPublic", True):
+        return False
+
+    # Check if author is a team member
+    author = latest.get("author", {}) or {}
+    author_email = (author.get("email") or "").lower()
+    if author_email in AGENT_EMAILS:
+        return False
+
+    # Check direction — client replies come inbound
+    direction = (latest.get("direction") or "").lower()
+    if direction == "out":
+        return False
+
+    return True
+
+
+def process_ticket_update(ticket_id: str) -> str | None:
+    """Reprocess a ticket after a client reply. Returns agent output or None."""
+    try:
+        conversations_result = fetch_ticket_conversations(ticket_id)
+
+        if not _is_client_reply(conversations_result):
+            print(f"Ticket update ignored -- not a client reply (ticket {ticket_id})")
+            return None
+
+        print(f"Client reply detected on ticket {ticket_id} -- reprocessing")
+
+        zoho_ticket = fetch_ticket_from_zoho(ticket_id)
+        if zoho_ticket:
+            fields = _extract_ticket_fields(zoho_ticket)
+            contact_name = fields["contact_name"]
+            contact_email = fields["contact_email"]
+            subject = fields["subject"]
+            body = fields["description"]
+            extra_context = (
+                f"Status: {fields['status']}\n"
+                f"Created: {fields['created_time']}"
+            )
+        else:
+            print(f"Zoho fetch failed for update on ticket {ticket_id}")
+            return None
+
+        thread_text = _format_conversations(conversations_result)
+
+        crm = fetch_crm_account(contact_email)
+        if crm["found"]:
+            enrichment_block = (
+                "ACCOUNT ENRICHMENT:\n"
+                f"Account: {crm['account_name']}\n"
+                f"Contact type: Admin\n"
+                f"Tier: {crm['tier']}\n"
+                f"ARR: {crm['arr']} {crm['currency']}\n"
+                f"Account ID: {crm['account_id']}"
+            )
+        else:
+            enrichment_block = (
+                "ACCOUNT ENRICHMENT:\n"
+                "Contact type: Volunteer\n"
+                "Not found in CRM — treat as volunteer"
+            )
+
+        user_message = (
+            "\u26a0\ufe0f MANDATORY PROCESSING RULE \u2014 READ FIRST:\n"
+            "This is a REPROCESSING of an existing ticket.\n"
+            "The CLIENT HAS REPLIED with new information.\n"
+            "Review the full thread including the new reply.\n"
+            "Update your classification and draft if needed.\n"
+            "Do NOT treat this as a new ticket.\n\n"
+            f"{enrichment_block}\n\n"
+            f"SOURCE: Zoho Desk (ticket update — client replied)\n"
+            f"Ticket ID: {ticket_id}\n"
+            f"Client contact: {contact_name} ({contact_email})\n"
+            f"Subject: {subject}\n"
+            f"\n{extra_context}\n"
+            f"\nOriginal ticket body:\n{body}\n\n"
+            f"Full conversation thread (newest first):\n{thread_text}"
+        )
+
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        result = response.content[0].text
+        print(f"\n{'='*60}")
+        print(result)
+        print(f"{'='*60}")
+        print(f"Agent reprocessed ticket {ticket_id} -- response length: {len(result)} chars\n")
+
+        note_content = f"{UPDATE_HEADER}\n\n{result}"
+        _zoho_mcp_call("ZohoDesk_createTicketComment", {
+            "body": {
+                "content": note_content,
+                "contentType": "plainText",
+                "isPublic": False,
+                "attachmentIds": [],
+            },
+            "path_variables": {"ticketId": str(ticket_id)},
+            "query_params": {"orgId": str(ZOHO_ORG_ID)},
+        })
+        print(f"Update note posted to Zoho ticket {ticket_id}")
+
+        return result
+    except Exception as e:
+        print(f"Agent error processing ticket update {ticket_id}: {e}")
         return None
