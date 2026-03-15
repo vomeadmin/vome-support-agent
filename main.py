@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import json
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
@@ -33,14 +34,26 @@ app = FastAPI(title="Vome Support Agent")
 
 @app.post("/webhook/zoho-ticket")
 async def zoho_ticket_webhook(request: Request):
-    payload = await request.json()
+    raw_body = await request.body()
+    print(f"[RAW PAYLOAD] {raw_body.decode('utf-8', errors='replace')}")
+
+    payload = json.loads(raw_body)
+
+    # Zoho may send a list or a dict
+    if isinstance(payload, list):
+        print(f"Payload is a list with {len(payload)} item(s) -- using first")
+        entry = payload[0] if payload else {}
+    else:
+        entry = payload
+
+    print(f"[PARSED ENTRY] {json.dumps(entry, default=str)[:2000]}")
 
     ticket_data = {
-        "ticket_id": payload.get("ticket_id", "unknown"),
-        "subject": payload.get("subject", ""),
-        "body": payload.get("body", ""),
-        "contact_email": payload.get("contact_email", ""),
-        "contact_name": payload.get("contact_name", ""),
+        "ticket_id": entry.get("ticket_id", entry.get("ticketId", entry.get("id", "unknown"))),
+        "subject": entry.get("subject", ""),
+        "body": entry.get("body", entry.get("description", "")),
+        "contact_email": entry.get("contact_email", entry.get("contactEmail", entry.get("email", ""))),
+        "contact_name": entry.get("contact_name", entry.get("contactName", "")),
     }
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -57,9 +70,20 @@ async def zoho_ticket_webhook(request: Request):
 
 @app.post("/webhook/zoho-update")
 async def zoho_update_webhook(request: Request):
-    payload = await request.json()
+    raw_body = await request.body()
+    print(f"[RAW UPDATE PAYLOAD] {raw_body.decode('utf-8', errors='replace')}")
 
-    ticket_id = payload.get("ticket_id", "unknown")
+    payload = json.loads(raw_body)
+
+    if isinstance(payload, list):
+        print(f"Update payload is a list with {len(payload)} item(s) -- using first")
+        entry = payload[0] if payload else {}
+    else:
+        entry = payload
+
+    print(f"[PARSED UPDATE ENTRY] {json.dumps(entry, default=str)[:2000]}")
+
+    ticket_id = entry.get("ticket_id", entry.get("ticketId", entry.get("id", "unknown")))
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     print(f"[{timestamp}] Ticket update #{ticket_id}")
