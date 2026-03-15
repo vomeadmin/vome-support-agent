@@ -175,6 +175,79 @@ def _normalize_tier(offering: str | None) -> str:
     return "Unknown"
 
 
+def _is_auth_error(result: dict | None) -> bool:
+    """Check if an MCP result contains a 401/authorization error."""
+    if result is None:
+        return False
+    raw = json.dumps(result, default=str).lower()
+    return "401" in raw or "unauthorized" in raw or "invalid_token" in raw
+
+
+def _fetch_desk_fallback(contact_email: str) -> dict:
+    """Fall back to Zoho Desk contact/account search when CRM is unavailable."""
+    not_found = {"found": False, "contact_type": "volunteer", "enrichment_source": "Desk only — CRM unavailable"}
+
+    try:
+        result = _zoho_mcp_call("ZohoDesk_searchContacts", {
+            "query_params": {
+                "orgId": str(ZOHO_ORG_ID),
+                "_all": contact_email,
+                "limit": "1",
+            },
+        })
+        data = _unwrap_mcp_result(result)
+
+        if not data:
+            print(f"Desk fallback: contact not found ({contact_email})")
+            return not_found
+
+        # Normalize to list
+        contacts = data.get("data", data) if isinstance(data, dict) else data
+        if not isinstance(contacts, list) or not contacts:
+            print(f"Desk fallback: contact not found ({contact_email})")
+            return not_found
+
+        contact = contacts[0]
+        contact_id = str(contact.get("id", ""))
+        contact_name = contact.get("name") or contact.get("lastName") or "unknown"
+        account_id = contact.get("accountId") or contact.get("account", {}).get("id") if isinstance(contact.get("account"), dict) else contact.get("accountId")
+        print(f"Desk fallback: found contact {contact_name} ({contact_id})")
+
+        enrichment = {
+            "found": True,
+            "contact_type": "admin",
+            "account_name": None,
+            "tier": "Unknown",
+            "arr": None,
+            "currency": None,
+            "account_id": str(account_id) if account_id else None,
+            "contact_id": contact_id,
+            "enrichment_source": "Desk only — CRM unavailable",
+        }
+
+        if not account_id:
+            print("Desk fallback: no account ID on contact")
+            return enrichment
+
+        acct_result = _zoho_mcp_call("ZohoDesk_getAccount", {
+            "path_variables": {"accountId": str(account_id)},
+            "query_params": {"orgId": str(ZOHO_ORG_ID)},
+        })
+        acct_data = _unwrap_mcp_result(acct_result)
+
+        if acct_data and isinstance(acct_data, dict):
+            enrichment["account_name"] = acct_data.get("accountName") or acct_data.get("name")
+            print(f"Desk fallback: account {enrichment['account_name']} ({account_id})")
+        else:
+            print("Desk fallback: could not fetch account details")
+
+        return enrichment
+
+    except Exception as e:
+        print(f"Desk fallback failed: {e}")
+        return not_found
+
+
 def fetch_crm_account(contact_email: str) -> dict:
     """Look up a contact in Zoho CRM by email and pull account + deal data."""
     not_found = {"found": False, "contact_type": "volunteer"}
@@ -189,6 +262,11 @@ def fetch_crm_account(contact_email: str) -> dict:
             "path_variables": {"module": "Contacts"},
             "query_params": {"email": contact_email},
         })
+
+        if _is_auth_error(result):
+            print("CRM authorization error — re-authorization needed in Zoho MCP portal")
+            return _fetch_desk_fallback(contact_email)
+
         data = _unwrap_mcp_result(result)
 
         if not data or not isinstance(data, dict):
@@ -240,6 +318,11 @@ def fetch_crm_account(contact_email: str) -> dict:
                 "fields": "Deal_Name,Stage,Amount,Currency",
             },
         })
+
+        if _is_auth_error(deal_result):
+            print("CRM authorization error on deals — returning contact-only enrichment")
+            return enrichment
+
         deal_data = _unwrap_mcp_result(deal_result)
 
         if not deal_data or not isinstance(deal_data, dict):
@@ -273,7 +356,8 @@ def fetch_crm_account(contact_email: str) -> dict:
 
     except Exception as e:
         print(f"CRM lookup failed: {e}")
-        return not_found
+        print("Attempting Desk fallback...")
+        return _fetch_desk_fallback(contact_email)
 
 
 def post_to_zoho(ticket_id: str, agent_response: str) -> bool:
@@ -334,6 +418,8 @@ def process_ticket(ticket_data: dict) -> str | None:
     # CRM enrichment
     crm = fetch_crm_account(contact_email)
     if crm["found"]:
+        source_note = crm.get("enrichment_source", "")
+        source_line = f"\nEnrichment source: {source_note}" if source_note else ""
         enrichment_block = (
             "ACCOUNT ENRICHMENT:\n"
             f"Account: {crm['account_name']}\n"
@@ -341,6 +427,7 @@ def process_ticket(ticket_data: dict) -> str | None:
             f"Tier: {crm['tier']}\n"
             f"ARR: {crm['arr']} {crm['currency']}\n"
             f"Account ID: {crm['account_id']}"
+            f"{source_line}"
         )
     else:
         enrichment_block = (
