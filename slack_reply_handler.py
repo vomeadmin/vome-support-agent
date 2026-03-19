@@ -130,6 +130,32 @@ _REPHRASE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Patterns that mean Sam is describing what to tell the client.
+# These trigger immediate AI-generated draft generation.
+_DRAFT_TRIGGERS = re.compile(
+    r"\b(?:"
+    r"draft\s+(?:a\s+)?(?:reply|response|something|an?\s+\w+)"
+    r"|write\s+(?:a\s+)?(?:reply|response|message)"
+    r"|tell\s+them\b"
+    r"|let\s+them\s+know\b"
+    r"|respond\s+saying\b"
+    r"|say\s+something\s+like\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# Patterns that signal Sam wants the ticket closed after sending.
+_CLOSE_TICKET_RE = re.compile(
+    r"\b(?:close\s+(?:the\s+)?ticket|close\s+it)\b",
+    re.IGNORECASE,
+)
+
+# Explicit note syntax — ONLY these trigger ClickUp note creation.
+_EXPLICIT_NOTE_RE = re.compile(
+    r"^(?:add\s+)?note\s+(.+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 # ---------------------------------------------------------------------------
 # ClickUp REST helpers
@@ -235,11 +261,14 @@ def _set_thread_status(thread_ts: str, status: str):
         _save_thread_map(data)
 
 
-def _store_pending_send(thread_ts: str, message: str):
+def _store_pending_send(
+    thread_ts: str, message: str, close_after: bool = False
+):
     """Save a client message that needs Sam's `confirm` before sending."""
     data = _load_thread_map()
     if thread_ts in data:
         data[thread_ts]["pending_send"] = message
+        data[thread_ts]["close_after_send"] = close_after
         _save_thread_map(data)
 
 
@@ -345,6 +374,20 @@ def _zoho_set_status(ticket_id: str, status: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Draft instruction detection helpers
+# ---------------------------------------------------------------------------
+
+def _has_close_instruction(text: str) -> bool:
+    """Return True if Sam's message asks to close the ticket."""
+    return bool(_CLOSE_TICKET_RE.search(text))
+
+
+def _is_client_response_instruction(text: str) -> bool:
+    """Return True if Sam's message describes what to tell the client."""
+    return bool(_DRAFT_TRIGGERS.search(text)) or _has_close_instruction(text)
+
+
+# ---------------------------------------------------------------------------
 # Draft generation
 # ---------------------------------------------------------------------------
 
@@ -396,6 +439,45 @@ def _generate_draft(ticket_id: str) -> str:
     response = _anthropic.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1000,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_message}],
+    )
+    return response.content[0].text
+
+
+def _generate_draft_from_instruction(
+    ticket_id: str, sam_instruction: str
+) -> str:
+    """Generate a client-facing draft from Sam's plain-language instruction."""
+    zoho_ticket = fetch_ticket_from_zoho(ticket_id)
+    conversations_result = fetch_ticket_conversations(ticket_id)
+
+    if not zoho_ticket:
+        return "(Could not fetch ticket data to generate draft)"
+
+    fields = _extract_ticket_fields(zoho_ticket)
+    contact_name = fields["contact_name"]
+    body = fields["description"]
+    subject = fields["subject"]
+    thread_text = _format_conversations(conversations_result)
+
+    user_message = (
+        f"Sam wants to send this message to the client: "
+        f"'{sam_instruction}'\n\n"
+        f"The ticket context is:\n"
+        f"Subject: {subject}\n"
+        f"Client: {contact_name}\n"
+        f"Ticket body:\n{body}\n\n"
+        f"Full thread:\n{thread_text}\n\n"
+        "Write a clean client-facing response following the voice guidelines "
+        "in the system prompt. Keep it short and warm. "
+        "Do not use em-dash. "
+        "Sign off: Best, Sam | Vome team"
+    )
+
+    response = _anthropic.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=800,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
     )
@@ -595,12 +677,6 @@ def _parse_commands(text: str) -> tuple[dict, str]:
     m = re.search(r"\bscore\s+(\d+)", remaining, re.IGNORECASE)
     if m:
         commands["score"] = m.group(1)
-        remaining = remaining[:m.start()] + remaining[m.end():]
-
-    # note [text] — consumes everything after "note" to end of string
-    m = re.search(r"\bnote\s+(.+)", remaining, re.IGNORECASE | re.DOTALL)
-    if m:
-        commands["note"] = m.group(1).strip()
         remaining = remaining[:m.start()] + remaining[m.end():]
 
     # Clean up separators left behind after command extraction
@@ -827,9 +903,21 @@ def handle_reply(event: dict):
                 "`reply: [your message]`",
             )
             return
+
+        # Check close_after_send flag before clearing thread state
+        close_after = thread_data.get("close_after_send", False)
+
         _send_client_reply(ticket_id, pending)
         _add_reaction(channel, thread_ts, "white_check_mark")
         _set_thread_status(thread_ts, "handled")
+
+        # Clear close_after_send flag
+        if close_after:
+            data = _load_thread_map()
+            if thread_ts in data:
+                data[thread_ts]["close_after_send"] = False
+                _save_thread_map(data)
+
         zoho_base = "https://desk.zoho.com/support/vomevolunteer"
         zoho_url = (
             f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
@@ -837,7 +925,19 @@ def handle_reply(event: dict):
         is_on_prod = (
             thread_data.get("status") == "on_prod_pending"
         )
-        if clickup_task_id:
+
+        if close_after:
+            # Close Zoho ticket and finish ClickUp task
+            _zoho_set_status(ticket_id, "Closed")
+            if clickup_task_id:
+                _cu_update_task(clickup_task_id, {"status": "FINISHED"})
+            _reply(
+                channel, thread_ts,
+                "✓ Sent to client\n"
+                "✓ Zoho ticket closed\n"
+                "✓ ClickUp marked FINISHED",
+            )
+        elif clickup_task_id:
             if is_on_prod:
                 from on_prod_handler import (
                     update_clickup_status_finished,
@@ -847,12 +947,17 @@ def handle_reply(event: dict):
                 _cu_update_task(
                     clickup_task_id, {"status": "acknowledged"}
                 )
-        if is_on_prod:
-            _reply(
-                channel, thread_ts,
-                "✓ Sent to client\n"
-                "✓ ClickUp marked FINISHED",
-            )
+            if is_on_prod:
+                _reply(
+                    channel, thread_ts,
+                    "✓ Sent to client\n"
+                    "✓ ClickUp marked FINISHED",
+                )
+            else:
+                _reply(
+                    channel, thread_ts,
+                    f"✓ Sent to client\nView in Zoho: {zoho_url}",
+                )
         else:
             _reply(
                 channel, thread_ts,
@@ -924,6 +1029,52 @@ def handle_reply(event: dict):
         return
 
     # -----------------------------------------------------------------------
+    # Draft instruction — Sam describing what to tell the client.
+    # This MUST come before command parsing so it never falls through
+    # to "note added" behaviour.
+    # -----------------------------------------------------------------------
+
+    if _is_client_response_instruction(text):
+        close_after = _has_close_instruction(text)
+        try:
+            draft = _generate_draft_from_instruction(ticket_id, text)
+            _store_pending_send(thread_ts, draft, close_after=close_after)
+            close_note = (
+                "\nTicket will be closed after sending."
+                if close_after else ""
+            )
+            _reply(
+                channel, thread_ts,
+                f"Here's a draft — not sent yet:{close_note}\n"
+                f"{_CONV_SEP}\n"
+                f"{draft}\n"
+                f"{_CONV_SEP}\n"
+                "Reply `confirm` to send\n"
+                "Reply `send: [your version]` to edit\n"
+                "Reply `cancel` to do nothing",
+            )
+        except Exception as e:
+            _reply(channel, thread_ts, f"Draft generation failed: {e}")
+        return
+
+    # -----------------------------------------------------------------------
+    # Explicit note: / add note: — ONLY these add to ClickUp notes.
+    # -----------------------------------------------------------------------
+
+    explicit_note_m = _EXPLICIT_NOTE_RE.match(text)
+    if explicit_note_m and clickup_task_id:
+        note_text = explicit_note_m.group(1).strip()
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _cu_update_task(
+            clickup_task_id,
+            {"description": (
+                f"[Note from Sam — {date_str}]: {note_text}"
+            )},
+        )
+        _reply(channel, thread_ts, "✓ Note added to ClickUp")
+        return
+
+    # -----------------------------------------------------------------------
     # Command parsing (exact keywords first, Claude NLP fallback)
     # -----------------------------------------------------------------------
 
@@ -970,9 +1121,8 @@ def handle_reply(event: dict):
                 commands["arr"] = str(int(nl["arr"]))
             except (ValueError, TypeError):
                 pass
-        if nl.get("note"):
-            commands["note"] = nl["note"]
-        # NLP client_response is ignored here — Sam must use reply: prefix
+        # NLP note and client_response are ignored — Sam must use
+        # explicit "note [text]" syntax or the draft instruction flow.
 
     # Nothing actionable at all
     if not commands:
@@ -1053,16 +1203,6 @@ def handle_reply(event: dict):
             action_lines.append(f"Auto Score updated: {score_val}")
         except ValueError:
             pass
-
-    if "note" in commands and clickup_task_id:
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        _cu_update_task(
-            clickup_task_id,
-            {"description": (
-                f"[Note from Sam — {date_str}]: {commands['note']}"
-            )},
-        )
-        action_lines.append("Note added to ClickUp")
 
     # -----------------------------------------------------------------------
     # Confirmation — always post, never auto-send to client
