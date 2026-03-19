@@ -200,23 +200,42 @@ def _has_internal_keyword(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Zoho public reply
+# Zoho client reply (emails the client via ZohoDesk_sendReply)
 # ---------------------------------------------------------------------------
 
-def _post_public_reply(ticket_id: str, content: str) -> bool:
-    result = _zoho_mcp_call("ZohoDesk_createTicketComment", {
-        "body": {
-            "content": content,
-            "contentType": "plainText",
-            "isPublic": True,
-        },
+ZOHO_FROM_ADDRESS = os.environ.get(
+    "ZOHO_FROM_ADDRESS", "admin@vomevolunteer.com"
+)
+
+
+def _send_client_reply(
+    ticket_id: str, content: str, to_email: str = ""
+) -> bool:
+    """Send an email reply to the client via ZohoDesk_sendReply.
+
+    This actually emails the client — do NOT use for internal notes.
+    Internal notes use ZohoDesk_createTicketComment with isPublic=False.
+    """
+    body: dict = {
+        "channel": "EMAIL",
+        "fromEmailAddress": ZOHO_FROM_ADDRESS,
+        "content": content,
+        "contentType": "plainText",
+    }
+    if to_email:
+        body["to"] = to_email
+
+    result = _zoho_mcp_call("ZohoDesk_sendReply", {
+        "body": body,
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
     })
     if result:
-        print(f"Public reply posted to Zoho ticket {ticket_id}")
+        print(f"Email reply sent to client — Zoho ticket {ticket_id}")
         return True
-    print(f"Failed to post public reply to Zoho ticket {ticket_id}")
+    print(
+        f"Failed to send email reply — Zoho ticket {ticket_id}"
+    )
     return False
 
 
@@ -566,7 +585,7 @@ def handle_reply(event: dict):
                 "`reply: [your message]`",
             )
             return
-        _post_public_reply(ticket_id, pending)
+        _send_client_reply(ticket_id, pending)
         _add_reaction(channel, thread_ts, "white_check_mark")
         _set_thread_status(thread_ts, "handled")
         if clickup_task_id:
