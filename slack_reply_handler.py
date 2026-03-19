@@ -44,6 +44,10 @@ CLICKUP_ACCEPTED_BACKLOG_LIST = "901113389889"
 
 PRIORITY_MAP = {"p1": 1, "p2": 2, "p3": 3}
 
+# ---------------------------------------------------------------------------
+# Assignee config — ClickUp IDs, Zoho agent IDs, Zoho statuses
+# ---------------------------------------------------------------------------
+
 # Canonical key → ClickUp user ID
 _ASSIGNEE_IDS = {
     "sam":    os.environ.get("CLICKUP_USER_SAM", ""),
@@ -52,12 +56,36 @@ _ASSIGNEE_IDS = {
     "ron":    os.environ.get("CLICKUP_USER_RON", ""),
 }
 
-# Display name for each canonical key
+# Canonical key → Zoho Desk agent ID
+_ZOHO_AGENT_IDS = {
+    "sam":    os.environ.get("ZOHO_AGENT_SAM", ""),
+    "onlyg":  os.environ.get("ZOHO_AGENT_BACKEND", ""),
+    "sanjay": os.environ.get("ZOHO_AGENT_FRONTEND", ""),
+    "ron":    os.environ.get("ZOHO_AGENT_RON", ""),
+}
+
+# Canonical key → Zoho ticket status after assignment
+_ZOHO_STATUS = {
+    "sam":    "Processing",
+    "onlyg":  "Pending Dev Fix",
+    "sanjay": "Pending Dev Fix",
+    "ron":    "Processing",
+}
+
+# Canonical key → human-readable display label
 _ASSIGNEE_DISPLAY = {
     "sam":    "Sam",
     "onlyg":  "OnlyG",
     "sanjay": "Sanjay",
     "ron":    "Ron",
+}
+
+# Canonical key → Zoho team/agent display label (shown in confirmation)
+_ZOHO_AGENT_LABEL = {
+    "sam":    "Support Agent (Sam)",
+    "onlyg":  "Backend Team (OnlyG)",
+    "sanjay": "Frontend Team (Sanjay)",
+    "ron":    "Vome Support Team (Ron)",
 }
 
 # All accepted aliases → canonical key (case-insensitive after .lower())
@@ -78,7 +106,7 @@ _ASSIGNEE_ALIASES: dict[str, str] = {
     "ron":      "ron",
 }
 
-# Keep for any legacy references (field_feedback.py imports this name)
+# Keep for any legacy references
 ASSIGNEE_MAP = _ASSIGNEE_IDS
 
 # Custom field IDs (from context.md)
@@ -277,6 +305,42 @@ def _send_client_reply(
     print(
         f"Failed to send email reply — Zoho ticket {ticket_id}"
     )
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Zoho ticket assignment helpers
+# ---------------------------------------------------------------------------
+
+def _zoho_assign_ticket(ticket_id: str, agent_id: str) -> bool:
+    """Reassign a Zoho Desk ticket to the given agent ID."""
+    result = _zoho_mcp_call("ZohoDesk_updateTicket", {
+        "body": {"assigneeId": str(agent_id)},
+        "path_variables": {"ticketId": str(ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+    if result:
+        print(
+            f"Zoho ticket {ticket_id} assigned to agent {agent_id}"
+        )
+        return True
+    print(
+        f"Zoho assign failed — ticket {ticket_id}, agent {agent_id}"
+    )
+    return False
+
+
+def _zoho_set_status(ticket_id: str, status: str) -> bool:
+    """Update the status of a Zoho Desk ticket."""
+    result = _zoho_mcp_call("ZohoDesk_updateTicket", {
+        "body": {"status": status},
+        "path_variables": {"ticketId": str(ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+    if result:
+        print(f"Zoho ticket {ticket_id} status → {status}")
+        return True
+    print(f"Zoho status update failed — ticket {ticket_id}")
     return False
 
 
@@ -928,21 +992,35 @@ def handle_reply(event: dict):
             _cu_update_task(clickup_task_id, {"priority": cu_p})
             action_lines.append(f"Priority set: {p.upper()}")
 
-    if "assign" in commands and clickup_task_id:
+    if "assign" in commands:
         raw_name = commands["assign"].lower().strip()
         canonical = _ASSIGNEE_ALIASES.get(raw_name)
         if canonical:
-            user_id = _ASSIGNEE_IDS.get(canonical, "")
-            display = _ASSIGNEE_DISPLAY[canonical]
-            if user_id:
+            cu_user_id = _ASSIGNEE_IDS.get(canonical, "")
+            zoho_agent_id = _ZOHO_AGENT_IDS.get(canonical, "")
+            zoho_status = _ZOHO_STATUS[canonical]
+            zoho_label = _ZOHO_AGENT_LABEL[canonical]
+            cu_display = _ASSIGNEE_DISPLAY[canonical]
+
+            if clickup_task_id and cu_user_id:
                 _cu_update_task(
                     clickup_task_id,
-                    {"assignees": {"add": [int(user_id)]}},
+                    {"assignees": {"add": [int(cu_user_id)]}},
                 )
-                action_lines.append(f"Assigned to: {display}")
+
+            if zoho_agent_id:
+                _zoho_assign_ticket(ticket_id, zoho_agent_id)
+                _zoho_set_status(ticket_id, zoho_status)
+
+            if cu_user_id or zoho_agent_id:
+                action_lines.append(
+                    f"Assigned to: {zoho_label}\n"
+                    f"  Zoho status: {zoho_status}\n"
+                    f"  ClickUp assignee: {cu_display}"
+                )
             else:
                 action_lines.append(
-                    f"Assign failed: {display} user ID not configured"
+                    f"Assign failed: {cu_display} IDs not configured"
                 )
         else:
             action_lines.append(
