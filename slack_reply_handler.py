@@ -53,6 +53,14 @@ FIELD_HIGHEST_TIER = "be348a1d-6a63-4da8-83bb-9038b24264ff"
 FIELD_COMBINED_ARR = "29c41859-f24b-4143-9af4-a34202205641"
 FIELD_AUTO_SCORE = "fd77f978-eca8-499e-bc3c-dc1bf4b8181e"
 
+# Words that signal an internal instruction — never send to client
+_INTERNAL_KEYWORDS = {
+    "assign", "clickup", "priority", "score",
+    "p1", "p2", "p3", "tier", "arr", "onlyg", "sanjay",
+    "sam", "note", "skip", "move", "backlog", "draft",
+    "route", "fix",
+}
+
 
 # ---------------------------------------------------------------------------
 # ClickUp REST helpers
@@ -156,6 +164,39 @@ def _set_thread_status(thread_ts: str, status: str):
     if thread_ts in data:
         data[thread_ts]["status"] = status
         _save_thread_map(data)
+
+
+def _store_pending_send(thread_ts: str, message: str):
+    """Save a client message that needs Sam's `confirm` before sending."""
+    data = _load_thread_map()
+    if thread_ts in data:
+        data[thread_ts]["pending_send"] = message
+        _save_thread_map(data)
+
+
+def _pop_pending_send(thread_ts: str) -> str | None:
+    """Return and clear the pending client message, or None if absent."""
+    data = _load_thread_map()
+    entry = data.get(thread_ts)
+    if not entry:
+        return None
+    msg = entry.pop("pending_send", None)
+    if msg is not None:
+        _save_thread_map(data)
+    return msg
+
+
+def _has_internal_keyword(text: str) -> bool:
+    """Return True if text contains any internal-only keyword."""
+    words = set(re.findall(r"\b\w+\b", text.lower()))
+    if words & _INTERNAL_KEYWORDS:
+        return True
+    # Phrase checks
+    low = text.lower()
+    return any(
+        phrase in low
+        for phrase in ("on clickup", "in clickup", "to clickup")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -343,12 +384,13 @@ def _parse_commands(text: str) -> tuple[dict, str]:
 # ---------------------------------------------------------------------------
 
 _NL_HELP = (
-    "I didn't detect any commands or a client response in that message.\n\n"
-    "To send to client: reply with just the message text\n"
-    "To assign: `assign Sam`\n"
-    "To set priority: `p1` `p2` `p3`\n"
-    "To set score: `score [number]`\n"
-    "To skip: `skip`"
+    "Got it — no actions taken.\n\n"
+    "Nothing sent to client.\n"
+    "To send a response use:\n"
+    "`send: [your message]`\n"
+    "Or reply `draft` for a suggested response.\n\n"
+    "Other commands: `assign Sam` `p1` `p2` `p3` "
+    "`score [n]` `skip` `move backlog`"
 )
 
 
@@ -373,11 +415,16 @@ def _parse_with_claude(text: str) -> dict:
         '  "skip": false or true\n'
         "}\n\n"
         "Rules:\n"
-        "- client_response: only text clearly intended to be sent to "
-        "the client. If the message is entirely internal instructions, "
-        "client_response must be null.\n"
-        "- assign_to: look for names Sam, Saul (=Sam), OnlyG, Sanjay, Ron\n"
-        "- score: any number mentioned in context of priority/importance"
+        "- client_response: only text clearly written TO the client "
+        "(e.g. starts with Hi/Hello/Thanks, or is a direct answer to "
+        "their question). If the message contains internal instructions "
+        "(assign, clickup, priority, score, tier, arr, sam, onlyg, "
+        "sanjay, skip, move, backlog, draft) set client_response to "
+        "null — never mix client text with internal instructions.\n"
+        "- assign_to: look for names Sam, Saul (=Sam), OnlyG, "
+        "Sanjay, Ron\n"
+        "- score: any number mentioned in context of "
+        "priority/importance"
     )
     try:
         response = _anthropic.messages.create(
@@ -396,30 +443,18 @@ def _parse_with_claude(text: str) -> dict:
         return {}
 
 
-def _build_confirmation(
-    action_lines: list[str],
-    client_sent: bool,
-    ticket_id: str | None,
-) -> str:
-    """Build the structured ✓ Actions taken confirmation message."""
-    lines = ["✓ Actions taken:"]
+def _build_confirmation(action_lines: list[str]) -> str:
+    """Build the structured confirmation message after commands run."""
+    lines = ["Got it — actions taken:"]
     for al in action_lines:
         lines.append(f"→ {al}")
-
-    if client_sent and ticket_id:
-        zoho_base = "https://desk.zoho.com/support/vomevolunteer"
-        zoho_url = f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
-        lines.append(f"→ Sent to client — view in Zoho: {zoho_url}")
-    else:
-        lines.append(
-            "→ No client response sent (no message detected)"
-        )
-        lines.append("")
-        lines.append(
-            "To send a response to the client, reply with just the "
-            "message text."
-        )
-
+    lines.append("")
+    lines.append(
+        "Nothing sent to client.\n"
+        "To send a response use:\n"
+        "`send: [your message]`\n"
+        "Or reply `draft` for a suggested response."
+    )
     return "\n".join(lines)
 
 
@@ -463,7 +498,10 @@ def handle_reply(event: dict):
 
     if text_lower == "skip":
         _add_reaction(channel, thread_ts, "double_vertical_bar")
-        _reply(channel, thread_ts, "Parked — will appear in tonight's digest")
+        _reply(
+            channel, thread_ts,
+            "Parked — will appear in tonight's digest",
+        )
         if clickup_task_id:
             date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             _cu_update_task(
@@ -478,14 +516,22 @@ def handle_reply(event: dict):
     if text_lower == "draft":
         try:
             draft = _generate_draft(ticket_id)
+            _store_pending_send(thread_ts, draft)
             _reply(
                 channel,
                 thread_ts,
-                f"*Draft:*\n\n{draft}\n\n"
-                "_Edit the above and reply with the final version to send._",
+                f"DRAFT — not sent yet:\n\"{draft}\"\n\n"
+                "Reply `confirm` to send this, "
+                "or `send: [edited version]` to send a different version, "
+                "or `cancel` to discard.",
             )
         except Exception as e:
             _reply(channel, thread_ts, f"Draft generation failed: {e}")
+        return
+
+    if text_lower == "cancel":
+        _pop_pending_send(thread_ts)
+        _reply(channel, thread_ts, "Cancelled — nothing sent to client.")
         return
 
     if text_lower == "move backlog":
@@ -496,8 +542,7 @@ def handle_reply(event: dict):
                 _reply(channel, thread_ts, "✓ Moved to Accepted Backlog")
             else:
                 _reply(
-                    channel,
-                    thread_ts,
+                    channel, thread_ts,
                     "Could not move task — check ClickUp manually",
                 )
         else:
@@ -508,20 +553,87 @@ def handle_reply(event: dict):
         return
 
     # -----------------------------------------------------------------------
-    # Multi-command + optional client response parsing
+    # SAFETY: confirm — fire the pending client message
     # -----------------------------------------------------------------------
 
-    commands, response_text = _parse_commands(text)
+    if text_lower == "confirm":
+        pending = _pop_pending_send(thread_ts)
+        if not pending:
+            _reply(
+                channel, thread_ts,
+                "Nothing pending to confirm.\n"
+                "To compose a client response: "
+                "`reply: [your message]`",
+            )
+            return
+        _post_public_reply(ticket_id, pending)
+        _add_reaction(channel, thread_ts, "white_check_mark")
+        _set_thread_status(thread_ts, "handled")
+        if clickup_task_id:
+            _cu_update_task(
+                clickup_task_id, {"status": "acknowledged"}
+            )
+        zoho_base = "https://desk.zoho.com/support/vomevolunteer"
+        zoho_url = (
+            f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
+        )
+        _reply(
+            channel, thread_ts,
+            f"✓ Sent to client\nView in Zoho: {zoho_url}",
+        )
+        return
 
-    # NLP fallback: when exact parsing found nothing, ask Claude
-    if not commands and not response_text:
+    # -----------------------------------------------------------------------
+    # SAFETY: explicit send prefix — reply: / send:
+    # -----------------------------------------------------------------------
+
+    explicit_send_match = re.match(
+        r"^(?:reply|send)\s*:\s*(.+)",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if explicit_send_match:
+        client_msg = explicit_send_match.group(1).strip()
+        # Still block if internal keywords slipped in
+        if _has_internal_keyword(client_msg):
+            _reply(
+                channel, thread_ts,
+                "That message contains internal keywords and cannot "
+                "be sent to the client.\n"
+                "Please remove references to team members, ClickUp, "
+                "or internal commands.",
+            )
+            return
+        _store_pending_send(thread_ts, client_msg)
+        preview = (
+            client_msg[:300] + "..."
+            if len(client_msg) > 300
+            else client_msg
+        )
+        _reply(
+            channel, thread_ts,
+            f"Ready to send to client:\n\"{preview}\"\n\n"
+            "Reply `confirm` to send or `cancel` to discard.",
+        )
+        return
+
+    # -----------------------------------------------------------------------
+    # Command parsing (exact keywords first, Claude NLP fallback)
+    # -----------------------------------------------------------------------
+
+    commands, remaining = _parse_commands(text)
+
+    # NLP fallback when no exact commands detected
+    if not commands:
         nl = _parse_with_claude(text)
 
         if nl.get("skip"):
             _add_reaction(channel, thread_ts, "double_vertical_bar")
             _set_thread_status(thread_ts, "parked")
             if clickup_task_id:
-                date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                date_str = datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%d"
+                )
                 _cu_update_task(
                     clickup_task_id,
                     {"description": (
@@ -530,8 +642,7 @@ def handle_reply(event: dict):
                     )},
                 )
             _reply(
-                channel,
-                thread_ts,
+                channel, thread_ts,
                 "✓ Actions taken:\n"
                 "→ Ticket parked — will appear in tonight's digest",
             )
@@ -555,16 +666,15 @@ def handle_reply(event: dict):
                 pass
         if nl.get("note"):
             commands["note"] = nl["note"]
-        if nl.get("client_response"):
-            response_text = nl["client_response"]
+        # NLP client_response is ignored here — Sam must use reply: prefix
 
-    # Nothing at all — show help
-    if not commands and not response_text:
+    # Nothing actionable at all
+    if not commands:
         _reply(channel, thread_ts, _NL_HELP)
         return
 
     # -----------------------------------------------------------------------
-    # Execute commands, collecting action lines for confirmation
+    # Execute commands, collecting action lines
     # -----------------------------------------------------------------------
 
     action_lines: list[str] = []
@@ -578,7 +688,6 @@ def handle_reply(event: dict):
 
     if "assign" in commands and clickup_task_id:
         name_key = commands["assign"].lower()
-        # Also accept "saul" as Sam
         if name_key == "saul":
             name_key = "sam"
         user_id = ASSIGNEE_MAP.get(name_key, "")
@@ -632,26 +741,10 @@ def handle_reply(event: dict):
         action_lines.append("Note added to ClickUp")
 
     # -----------------------------------------------------------------------
-    # Client response — post to Zoho as public reply
+    # Confirmation — always post, never auto-send to client
     # -----------------------------------------------------------------------
 
-    client_sent = False
-    if response_text:
-        _post_public_reply(ticket_id, response_text)
-        _add_reaction(channel, thread_ts, "white_check_mark")
-        _set_thread_status(thread_ts, "handled")
-        if clickup_task_id:
-            _cu_update_task(
-                clickup_task_id, {"status": "acknowledged"}
-            )
-        client_sent = True
-
-    # -----------------------------------------------------------------------
-    # Structured confirmation — always posted
-    # -----------------------------------------------------------------------
-
-    _reply(
-        channel,
-        thread_ts,
-        _build_confirmation(action_lines, client_sent, ticket_id),
-    )
+    if action_lines:
+        _reply(channel, thread_ts, _build_confirmation(action_lines))
+    else:
+        _reply(channel, thread_ts, _NL_HELP)
