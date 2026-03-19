@@ -78,15 +78,22 @@ def send_daily_digest():
     handled: list[dict] = []
     parked: list[dict] = []
     open_tickets: list[dict] = []
+    on_prod_pending: list[dict] = []
 
     for ts, entry in thread_map.items():
+        status = entry.get("status", "open")
+        # on_prod_cancelled can be from any date — always surface
+        if status == "on_prod_cancelled":
+            on_prod_pending.append(entry)
+            continue
         if entry.get("date") != today:
             continue
-        status = entry.get("status", "open")
         if status == "handled":
             handled.append(entry)
         elif status == "parked":
             parked.append(entry)
+        elif status == "on_prod_pending":
+            on_prod_pending.append(entry)
         else:
             open_tickets.append(entry)
 
@@ -112,11 +119,24 @@ def send_daily_digest():
     lines.append(_format_ticket_list(open_tickets))
     lines.append("")
 
-    lines.append("*Engineers:*")
-    lines.append(f"OnlyG — {onlyg_count} task{'s' if onlyg_count != 1 else ''} in progress")
-    lines.append(f"Sanjay — {sanjay_count} task{'s' if sanjay_count != 1 else ''} in progress")
+    if on_prod_pending:
+        lines.append(
+            f"⚠️ *Fixed on prod, client not yet notified:*"
+            f" {len(on_prod_pending)}"
+        )
+        for e in on_prod_pending:
+            num = e.get("ticket_number", e.get("ticket_id", "?"))
+            subj = e.get("subject", "(no subject)")
+            lines.append(f"  • #{num} — {subj}")
+        lines.append("")
 
-    if not parked and not open_tickets:
+    lines.append("*Engineers:*")
+    onlyg_noun = "tasks" if onlyg_count != 1 else "task"
+    sanjay_noun = "tasks" if sanjay_count != 1 else "task"
+    lines.append(f"OnlyG — {onlyg_count} {onlyg_noun} in progress")
+    lines.append(f"Sanjay — {sanjay_count} {sanjay_noun} in progress")
+
+    if not parked and not open_tickets and not on_prod_pending:
         lines.append("\nAll clear — nothing pending 🎉")
 
     message = "\n".join(lines)

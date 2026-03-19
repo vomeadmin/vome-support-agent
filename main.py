@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request, Response
 
 from agent import process_ticket, process_ticket_update
 from field_feedback import handle_field_feedback
+from on_prod_handler import handle_on_prod
 from slack_reply_handler import handle_reply
 from slack_digest import send_daily_digest
 
@@ -219,6 +220,44 @@ async def zoho_update_webhook(request: Request):
     print(f"[{timestamp}] Ticket update #{ticket_number} (ID: {ticket_id})")
 
     process_ticket_update(ticket_id)
+
+    return {"status": "ok"}
+
+
+@app.post("/webhook/clickup-status")
+async def clickup_status_webhook(request: Request):
+    raw_body = await request.body()
+    payload = json.loads(raw_body)
+
+    event = payload.get("event", "")
+    task_id = payload.get("task_id", "")
+
+    if event != "taskStatusUpdated" or not task_id:
+        return {"status": "ok"}
+
+    for item in payload.get("history_items", []):
+        if item.get("field") != "status":
+            continue
+        new_status = (
+            (item.get("after") or {}).get("status") or ""
+        ).lower().strip()
+        if new_status not in ("on prod", "on_prod", "on prod ✅"):
+            continue
+        user = item.get("user") or {}
+        engineer_name = (
+            user.get("username")
+            or user.get("email")
+            or "Engineer"
+        )
+        timestamp = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
+        print(
+            f"[{timestamp}] ON PROD detected — "
+            f"task {task_id} by {engineer_name}"
+        )
+        handle_on_prod(task_id, engineer_name)
+        break
 
     return {"status": "ok"}
 

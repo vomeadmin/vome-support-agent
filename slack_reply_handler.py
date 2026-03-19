@@ -675,7 +675,19 @@ def handle_reply(event: dict):
 
     if text_lower == "cancel":
         _pop_pending_send(thread_ts)
-        _reply(channel, thread_ts, "Cancelled — nothing sent to client.")
+        if thread_data.get("status") == "on_prod_pending":
+            # Mark as on_prod_cancelled so digest flags it
+            data = _load_thread_map()
+            if thread_ts in data:
+                data[thread_ts]["status"] = "on_prod_cancelled"
+                _save_thread_map(data)
+            _reply(
+                channel, thread_ts,
+                "Held — will appear in tonight's digest"
+                " as pending client notification.",
+            )
+        else:
+            _reply(channel, thread_ts, "Cancelled — nothing sent to client.")
         return
 
     if text_lower == "move backlog":
@@ -713,18 +725,34 @@ def handle_reply(event: dict):
         _send_client_reply(ticket_id, pending)
         _add_reaction(channel, thread_ts, "white_check_mark")
         _set_thread_status(thread_ts, "handled")
-        if clickup_task_id:
-            _cu_update_task(
-                clickup_task_id, {"status": "acknowledged"}
-            )
         zoho_base = "https://desk.zoho.com/support/vomevolunteer"
         zoho_url = (
             f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
         )
-        _reply(
-            channel, thread_ts,
-            f"✓ Sent to client\nView in Zoho: {zoho_url}",
+        is_on_prod = (
+            thread_data.get("status") == "on_prod_pending"
         )
+        if clickup_task_id:
+            if is_on_prod:
+                from on_prod_handler import (
+                    update_clickup_status_finished,
+                )
+                update_clickup_status_finished(clickup_task_id)
+            else:
+                _cu_update_task(
+                    clickup_task_id, {"status": "acknowledged"}
+                )
+        if is_on_prod:
+            _reply(
+                channel, thread_ts,
+                "✓ Sent to client\n"
+                "✓ ClickUp marked FINISHED",
+            )
+        else:
+            _reply(
+                channel, thread_ts,
+                f"✓ Sent to client\nView in Zoho: {zoho_url}",
+            )
         return
 
     # -----------------------------------------------------------------------
