@@ -44,12 +44,42 @@ CLICKUP_ACCEPTED_BACKLOG_LIST = "901113389889"
 
 PRIORITY_MAP = {"p1": 1, "p2": 2, "p3": 3}
 
-ASSIGNEE_MAP = {
-    "onlyg": os.environ.get("CLICKUP_USER_ONLYG", ""),
+# Canonical key → ClickUp user ID
+_ASSIGNEE_IDS = {
+    "sam":    os.environ.get("CLICKUP_USER_SAM", ""),
+    "onlyg":  os.environ.get("CLICKUP_USER_ONLYG", ""),
     "sanjay": os.environ.get("CLICKUP_USER_SANJAY", ""),
-    "sam": os.environ.get("CLICKUP_USER_SAM", ""),
-    "ron": os.environ.get("CLICKUP_USER_RON", ""),
+    "ron":    os.environ.get("CLICKUP_USER_RON", ""),
 }
+
+# Display name for each canonical key
+_ASSIGNEE_DISPLAY = {
+    "sam":    "Sam",
+    "onlyg":  "OnlyG",
+    "sanjay": "Sanjay",
+    "ron":    "Ron",
+}
+
+# All accepted aliases → canonical key (case-insensitive after .lower())
+_ASSIGNEE_ALIASES: dict[str, str] = {
+    # Sam
+    "sam":      "sam",
+    "saul":     "sam",
+    "me":       "sam",
+    "myself":   "sam",
+    # OnlyG
+    "onlyg":    "onlyg",
+    "only g":   "onlyg",
+    "backend":  "onlyg",
+    # Sanjay
+    "sanjay":   "sanjay",
+    "frontend": "sanjay",
+    # Ron
+    "ron":      "ron",
+}
+
+# Keep for any legacy references (field_feedback.py imports this name)
+ASSIGNEE_MAP = _ASSIGNEE_IDS
 
 # Custom field IDs (from context.md)
 FIELD_HIGHEST_TIER = "be348a1d-6a63-4da8-83bb-9038b24264ff"
@@ -353,7 +383,10 @@ def _format_conversation_for_slack(
     lines.append(_CONV_SEP)
 
     # Unwrap and reverse to chronological order (Zoho returns newest first)
-    data = _unwrap_mcp_result(conversations_result) if conversations_result else None
+    data = (
+        _unwrap_mcp_result(conversations_result)
+        if conversations_result else None
+    )
     if isinstance(data, dict):
         data = data.get("data", [])
     if not isinstance(data, list):
@@ -896,21 +929,25 @@ def handle_reply(event: dict):
             action_lines.append(f"Priority set: {p.upper()}")
 
     if "assign" in commands and clickup_task_id:
-        name_key = commands["assign"].lower()
-        if name_key == "saul":
-            name_key = "sam"
-        user_id = ASSIGNEE_MAP.get(name_key, "")
-        if user_id:
-            _cu_update_task(
-                clickup_task_id,
-                {"assignees": {"add": [int(user_id)]}},
-            )
-            action_lines.append(
-                f"Assigned to: {name_key.capitalize()}"
-            )
+        raw_name = commands["assign"].lower().strip()
+        canonical = _ASSIGNEE_ALIASES.get(raw_name)
+        if canonical:
+            user_id = _ASSIGNEE_IDS.get(canonical, "")
+            display = _ASSIGNEE_DISPLAY[canonical]
+            if user_id:
+                _cu_update_task(
+                    clickup_task_id,
+                    {"assignees": {"add": [int(user_id)]}},
+                )
+                action_lines.append(f"Assigned to: {display}")
+            else:
+                action_lines.append(
+                    f"Assign failed: {display} user ID not configured"
+                )
         else:
             action_lines.append(
-                f"Assign failed: '{commands['assign']}' not recognised"
+                "Name not recognised — who did you mean?"
+                " Options: Sam, OnlyG, Sanjay, Ron"
             )
 
     if "tier" in commands and clickup_task_id:
