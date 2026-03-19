@@ -6,6 +6,8 @@ import anthropic
 import httpx
 from pathlib import Path
 
+from slack_ticket_brief import send_ticket_brief
+
 # Fix Windows console encoding for emoji in system_prompt.md
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
@@ -21,7 +23,13 @@ ZOHO_ORG_ID = os.environ.get("ZOHO_ORG_ID", "")
 
 NOTE_HEADER = "\U0001f916 AGENT ANALYSIS \u2014 DO NOT SEND \u2014 FOR REVIEW ONLY"
 UPDATE_HEADER = "\U0001f504 AGENT UPDATE \u2014 CLIENT REPLIED"
-AGENT_EMAILS = {"admin@vomevolunteer.com", "s.fagen@vomevolunteer.com", "r.segev@vomevolunteer.com"}
+TEAM_EMAILS = {
+    "admin@vomevolunteer.com",
+    "sam@vomevolunteer.com",
+    "s.fagen@vomevolunteer.com",
+    "r.segev@vomevolunteer.com",
+}
+ZOHO_FROM_ADDRESS = os.environ.get("ZOHO_FROM_ADDRESS", "admin@vomevolunteer.com")
 
 
 def _zoho_mcp_call(tool_name: str, arguments: dict) -> dict | None:
@@ -360,6 +368,51 @@ def fetch_crm_account(contact_email: str) -> dict:
         return _fetch_desk_fallback(contact_email)
 
 
+def _detect_language(text: str) -> str | None:
+    """Detect non-English content by checking for common French patterns.
+
+    Returns the language name if non-English detected, else None.
+    """
+    if not text:
+        return None
+    lower = text.lower()
+    # Common French words/patterns unlikely in English
+    french_markers = [
+        " je ", " nous ", " vous ", " les ", " des ", " une ", " est ",
+        " sont ", " dans ", " pour ", " avec ", " sur ", " pas ",
+        " mais ", " aussi ", " cette ", " notre ", " votre ",
+        "bonjour", "merci", "s'il vous", "bénévol",
+    ]
+    hits = sum(1 for m in french_markers if m in f" {lower} ")
+    if hits >= 3:
+        return "French"
+    return None
+
+
+def post_draft_reply(ticket_id: str, content: str, to_email: str = "") -> bool:
+    """Post an email draft reply on the Zoho Desk ticket (saved, not sent)."""
+    body = {
+        "channel": "EMAIL",
+        "fromEmailAddress": ZOHO_FROM_ADDRESS,
+        "content": content,
+        "contentType": "plainText",
+    }
+    if to_email:
+        body["to"] = to_email
+
+    result = _zoho_mcp_call("ZohoDesk_draftsReply", {
+        "body": body,
+        "path_variables": {"ticketId": str(ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+
+    if result:
+        print(f"Draft reply saved on Zoho ticket {ticket_id} -- success")
+        return True
+    print(f"Failed to save draft reply on Zoho ticket {ticket_id}")
+    return False
+
+
 def post_to_zoho(ticket_id: str, agent_response: str) -> bool:
     """Post the agent's analysis as an internal note on the Zoho Desk ticket."""
     note_content = f"{NOTE_HEADER}\n\n{agent_response}"
@@ -436,6 +489,16 @@ def process_ticket(ticket_data: dict) -> str | None:
             "Not found in CRM — treat as volunteer"
         )
 
+    # Language detection
+    lang_note = ""
+    detected_lang = _detect_language(body) or _detect_language(thread_text)
+    if detected_lang:
+        lang_note = (
+            f"\nNote: ticket content appears to be in {detected_lang} "
+            f"-- draft response in {detected_lang}\n"
+        )
+        print(f"Language detected: {detected_lang} (ticket {ticket_id})")
+
     user_message = (
         "\u26a0\ufe0f MANDATORY PROCESSING RULE \u2014 READ FIRST:\n"
         "This input arrived via Zoho Desk webhook.\n"
@@ -451,6 +514,7 @@ def process_ticket(ticket_data: dict) -> str | None:
         f"Ticket ID: {ticket_id}\n"
         f"Client contact: {contact_name} ({contact_email})\n"
         f"Subject: {subject}\n"
+        f"{lang_note}"
     )
     if extra_context:
         user_message += f"\n{extra_context}\n"
@@ -474,46 +538,78 @@ def process_ticket(ticket_data: dict) -> str | None:
 
         post_to_zoho(ticket_id, result)
 
+        # Send Slack brief to #vome-tickets — primary interface for Sam
+        zoho_url = (
+            f"https://desk.zoho.com/support/vomevolunteer"
+            f"/ShowHomePage.do#Cases/dv/{ticket_id}"
+        )
+        attachment_count = 0
+        if zoho_ticket:
+            raw = _unwrap_mcp_result(zoho_ticket)
+            if isinstance(raw, dict):
+                try:
+                    attachment_count = int(raw.get("attachmentCount") or 0)
+                except (ValueError, TypeError):
+                    attachment_count = 0
+
+        send_ticket_brief(
+            ticket_id=ticket_id,
+            ticket_number=ticket_data.get("ticket_number", ticket_id),
+            subject=subject,
+            crm=crm,
+            agent_response=result,
+            clickup_task_url=None,
+            zoho_ticket_url=zoho_url,
+            attachment_count=attachment_count,
+        )
+
         return result
     except Exception as e:
         print(f"Agent error processing ticket {ticket_id}: {e}")
         return None
 
 
-def _is_client_reply(conversations_result: dict | None) -> bool:
-    """Check if the most recent conversation entry is a client reply, not an internal action."""
+def _is_client_reply(conversations_result: dict | None, ticket_id: str = "unknown") -> tuple[bool, dict]:
+    """Check if the most recent conversation entry is a client reply.
+
+    Returns (is_client_reply, latest_entry) so callers can inspect the author.
+    """
+    empty = (False, {})
     if not conversations_result:
-        return False
+        return empty
 
     data = _unwrap_mcp_result(conversations_result)
     if isinstance(data, dict):
         data = data.get("data", [])
     if not isinstance(data, list) or not data:
-        return False
+        return empty
 
     latest = data[0]
 
-    # Check for agent's own output
+    # Skip agent's own output
     content = latest.get("content", "") or ""
     if NOTE_HEADER in content or UPDATE_HEADER in content:
-        return False
+        print(f"Ticket update ignored -- agent's own note (ticket {ticket_id})")
+        return (False, latest)
 
-    # Check if it's an internal note (not a client reply)
-    if not latest.get("isPublic", True):
-        return False
-
-    # Check if author is a team member
     author = latest.get("author", {}) or {}
     author_email = (author.get("email") or "").lower()
-    if author_email in AGENT_EMAILS:
-        return False
+    author_type = (author.get("type") or "").upper()
+    visibility = "public" if latest.get("isPublic", True) else "private"
 
-    # Check direction — client replies come inbound
-    direction = (latest.get("direction") or "").lower()
-    if direction == "out":
-        return False
+    # A reply is from a client when:
+    #   1. author.type is END_USER, OR
+    #   2. visibility is public AND author is not a known team member
+    is_end_user = author_type == "END_USER"
+    is_public_non_team = visibility == "public" and author_email not in TEAM_EMAILS
 
-    return True
+    if is_end_user or is_public_non_team:
+        print(f"Client reply detected from {author_email} on ticket {ticket_id} -- processing")
+        return (True, latest)
+
+    reason = f"author.type={author_type}, visibility={visibility}, email={author_email}"
+    print(f"Ticket update ignored -- not a client reply ({reason}) (ticket {ticket_id})")
+    return (False, latest)
 
 
 def process_ticket_update(ticket_id: str) -> str | None:
@@ -521,11 +617,9 @@ def process_ticket_update(ticket_id: str) -> str | None:
     try:
         conversations_result = fetch_ticket_conversations(ticket_id)
 
-        if not _is_client_reply(conversations_result):
-            print(f"Ticket update ignored -- not a client reply (ticket {ticket_id})")
+        is_reply, latest = _is_client_reply(conversations_result, ticket_id)
+        if not is_reply:
             return None
-
-        print(f"Client reply detected on ticket {ticket_id} -- reprocessing")
 
         zoho_ticket = fetch_ticket_from_zoho(ticket_id)
         if zoho_ticket:
@@ -558,21 +652,35 @@ def process_ticket_update(ticket_id: str) -> str | None:
             enrichment_block = (
                 "ACCOUNT ENRICHMENT:\n"
                 "Contact type: Volunteer\n"
-                "Not found in CRM — treat as volunteer"
+                "Not found in CRM -- treat as volunteer"
             )
 
+        # Language detection
+        lang_note = ""
+        detected_lang = _detect_language(body) or _detect_language(thread_text)
+        if detected_lang:
+            lang_note = (
+                f"\nNote: ticket content appears to be in {detected_lang} "
+                f"-- draft response in {detected_lang}\n"
+            )
+            print(f"Language detected: {detected_lang} (ticket {ticket_id})")
+
         user_message = (
-            "\u26a0\ufe0f MANDATORY PROCESSING RULE \u2014 READ FIRST:\n"
+            "\u26a0\ufe0f MANDATORY PROCESSING RULE -- READ FIRST:\n"
             "This is a REPROCESSING of an existing ticket.\n"
             "The CLIENT HAS REPLIED with new information.\n"
             "Review the full thread including the new reply.\n"
             "Update your classification and draft if needed.\n"
-            "Do NOT treat this as a new ticket.\n\n"
+            "Do NOT treat this as a new ticket.\n"
+            "IMPORTANT: Structure your response with two clearly separated sections:\n"
+            "1. DRAFT RESPONSE (the client-facing reply, ready to review and send)\n"
+            "2. AGENT ANALYSIS (enrichment, classification, notes for the reviewer)\n\n"
             f"{enrichment_block}\n\n"
-            f"SOURCE: Zoho Desk (ticket update — client replied)\n"
+            f"SOURCE: Zoho Desk (ticket update -- client replied)\n"
             f"Ticket ID: {ticket_id}\n"
             f"Client contact: {contact_name} ({contact_email})\n"
             f"Subject: {subject}\n"
+            f"{lang_note}"
             f"\n{extra_context}\n"
             f"\nOriginal ticket body:\n{body}\n\n"
             f"Full conversation thread (newest first):\n{thread_text}"
@@ -590,6 +698,10 @@ def process_ticket_update(ticket_id: str) -> str | None:
         print(f"{'='*60}")
         print(f"Agent reprocessed ticket {ticket_id} -- response length: {len(result)} chars\n")
 
+        # Post draft reply via Zoho Desk draftsReply API
+        post_draft_reply(ticket_id, result, to_email=contact_email)
+
+        # Also post as internal note for audit trail
         note_content = f"{UPDATE_HEADER}\n\n{result}"
         _zoho_mcp_call("ZohoDesk_createTicketComment", {
             "body": {

@@ -4,13 +4,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import hashlib
+import hmac
 import json
 import re
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Request
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from fastapi import FastAPI, Request, Response
 
 from agent import process_ticket, process_ticket_update
+from slack_reply_handler import handle_reply
+from slack_digest import send_daily_digest
 
 REQUIRED_ENV = [
     "ANTHROPIC_API_KEY",
@@ -76,6 +82,105 @@ def _build_ticket_data(ticket: dict) -> dict:
 _check_env()
 
 app = FastAPI(title="Vome Support Agent")
+
+# ---------------------------------------------------------------------------
+# APScheduler — daily digest at 18:00 America/Montreal
+# ---------------------------------------------------------------------------
+
+_scheduler = BackgroundScheduler(timezone="America/Montreal")
+_scheduler.add_job(send_daily_digest, CronTrigger(hour=18, minute=0))
+_scheduler.start()
+
+
+# ---------------------------------------------------------------------------
+# Slack signature verification
+# ---------------------------------------------------------------------------
+
+def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool:
+    secret = os.environ.get("SLACK_SIGNING_SECRET", "")
+    if not secret:
+        return True  # Skip verification if not configured (dev only)
+    base = f"v0:{timestamp}:{body.decode('utf-8', errors='replace')}"
+    expected = "v0=" + hmac.new(secret.encode(), base.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+# ---------------------------------------------------------------------------
+# Slack events webhook
+# ---------------------------------------------------------------------------
+
+SLACK_TICKETS_CHANNEL = os.environ.get("SLACK_TICKETS_CHANNEL", "")
+SLACK_FIELD_FEEDBACK_CHANNEL = os.environ.get("SLACK_CHANNEL_FIELD_FEEDBACK", "")
+
+
+@app.post("/webhook/slack-events")
+async def slack_events_webhook(request: Request):
+    raw_body = await request.body()
+
+    # Verify Slack request signature
+    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
+    signature = request.headers.get("X-Slack-Signature", "")
+    if not _verify_slack_signature(raw_body, timestamp, signature):
+        return Response(content="Invalid signature", status_code=403)
+
+    payload = json.loads(raw_body)
+
+    # Slack URL verification challenge (sent once when configuring Event Subscriptions)
+    if payload.get("type") == "url_verification":
+        return {"challenge": payload["challenge"]}
+
+    event = payload.get("event", {})
+    event_type = event.get("type", "")
+    channel = event.get("channel", "")
+
+    # Ignore bot messages and non-message events we don't handle
+    if event.get("bot_id") or event.get("subtype"):
+        return {"status": "ok"}
+
+    # file_shared — attach file data to event and route as a reply
+    if event_type == "file_shared":
+        file_id = event.get("file_id")
+        if file_id and channel == SLACK_TICKETS_CHANNEL:
+            try:
+                file_info = __import__("slack_sdk", fromlist=["WebClient"])
+                # Fetch file metadata from Slack
+                from slack_sdk import WebClient as _WC
+                _wc = _WC(token=os.environ.get("SLACK_BOT_TOKEN", ""))
+                fdata = _wc.files_info(file=file_id).get("file", {})
+                handle_reply({
+                    "user": event.get("user_id"),
+                    "text": "",
+                    "thread_ts": fdata.get("shares", {}).get("public", {}).get(channel, [{}])[0].get("ts"),
+                    "channel": channel,
+                    "files": [fdata],
+                })
+            except Exception as e:
+                print(f"file_shared handling failed: {e}")
+        return {"status": "ok"}
+
+    # message event — route by channel
+    if event_type == "message":
+        thread_ts = event.get("thread_ts")
+        user = event.get("user")
+        text = event.get("text", "")
+        files = event.get("files", [])
+
+        if channel == SLACK_TICKETS_CHANNEL and thread_ts:
+            # Only process replies in threads (not new top-level messages)
+            if thread_ts != event.get("ts"):
+                handle_reply({
+                    "user": user,
+                    "text": text,
+                    "thread_ts": thread_ts,
+                    "channel": channel,
+                    "files": files,
+                })
+
+        # Field feedback channel — existing handler (future: route to field feedback agent)
+        # elif channel == SLACK_FIELD_FEEDBACK_CHANNEL:
+        #     handle_field_feedback(event)
+
+    return {"status": "ok"}
 
 
 @app.post("/webhook/zoho-ticket")

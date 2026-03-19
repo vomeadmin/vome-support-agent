@@ -1,0 +1,517 @@
+"""
+slack_reply_handler.py
+
+Handles all of Sam's replies in #vome-tickets threads.
+"""
+
+import os
+import re
+import time
+from datetime import datetime, timezone
+
+import anthropic
+import httpx
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+
+from agent import (
+    SYSTEM_PROMPT,
+    ZOHO_ORG_ID,
+    _detect_language,
+    _extract_ticket_fields,
+    _format_conversations,
+    _zoho_mcp_call,
+    fetch_crm_account,
+    fetch_ticket_conversations,
+    fetch_ticket_from_zoho,
+)
+from slack_ticket_brief import _load_thread_map, _save_thread_map
+
+# ---------------------------------------------------------------------------
+# Clients & config
+# ---------------------------------------------------------------------------
+
+_slack = WebClient(token=os.environ.get("SLACK_BOT_TOKEN", ""))
+_anthropic = anthropic.Anthropic()
+
+CLICKUP_API_TOKEN = os.environ.get("CLICKUP_API_TOKEN", "")
+CLICKUP_BASE = "https://api.clickup.com/api/v2"
+CLICKUP_ACCEPTED_BACKLOG_LIST = "901113389889"
+
+PRIORITY_MAP = {"p1": 1, "p2": 2, "p3": 3}
+
+ASSIGNEE_MAP = {
+    "onlyg": os.environ.get("CLICKUP_USER_ONLYG", ""),
+    "sanjay": os.environ.get("CLICKUP_USER_SANJAY", ""),
+    "sam": os.environ.get("CLICKUP_USER_SAM", ""),
+    "ron": os.environ.get("CLICKUP_USER_RON", ""),
+}
+
+# Custom field IDs (from context.md)
+FIELD_HIGHEST_TIER = "be348a1d-6a63-4da8-83bb-9038b24264ff"
+FIELD_COMBINED_ARR = "29c41859-f24b-4143-9af4-a34202205641"
+FIELD_AUTO_SCORE = "fd77f978-eca8-499e-bc3c-dc1bf4b8181e"
+
+
+# ---------------------------------------------------------------------------
+# ClickUp REST helpers
+# ---------------------------------------------------------------------------
+
+def _cu_headers() -> dict:
+    return {
+        "Authorization": CLICKUP_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+
+def _cu_update_task(task_id: str, payload: dict) -> bool:
+    try:
+        r = httpx.put(
+            f"{CLICKUP_BASE}/task/{task_id}",
+            json=payload,
+            headers=_cu_headers(),
+            timeout=15,
+        )
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"ClickUp update task failed ({task_id}): {e}")
+        return False
+
+
+def _cu_set_field(task_id: str, field_id: str, value) -> bool:
+    try:
+        r = httpx.post(
+            f"{CLICKUP_BASE}/task/{task_id}/field/{field_id}",
+            json={"value": value},
+            headers=_cu_headers(),
+            timeout=15,
+        )
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"ClickUp set field failed ({task_id}/{field_id}): {e}")
+        return False
+
+
+def _cu_move_to_list(task_id: str, list_id: str) -> bool:
+    try:
+        r = httpx.post(
+            f"{CLICKUP_BASE}/list/{list_id}/task/{task_id}",
+            headers=_cu_headers(),
+            timeout=15,
+        )
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"ClickUp move task failed ({task_id} -> {list_id}): {e}")
+        return False
+
+
+def _cu_upload_attachment(
+    task_id: str, filename: str, file_content: bytes
+) -> bool:
+    try:
+        r = httpx.post(
+            f"{CLICKUP_BASE}/task/{task_id}/attachment",
+            headers={"Authorization": CLICKUP_API_TOKEN},
+            files={"attachment": (filename, file_content)},
+            timeout=30,
+        )
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"ClickUp attachment upload failed ({task_id}): {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Slack helpers
+# ---------------------------------------------------------------------------
+
+def _add_reaction(channel: str, ts: str, emoji: str):
+    try:
+        _slack.reactions_add(channel=channel, timestamp=ts, name=emoji)
+    except SlackApiError as e:
+        if e.response["error"] != "already_reacted":
+            print(f"reactions_add failed ({emoji}): {e.response['error']}")
+
+
+def _reply(channel: str, thread_ts: str, text: str):
+    try:
+        _slack.chat_postMessage(
+            channel=channel, thread_ts=thread_ts, text=text
+        )
+    except SlackApiError as e:
+        print(f"chat_postMessage failed: {e.response['error']}")
+
+
+# ---------------------------------------------------------------------------
+# Thread map status
+# ---------------------------------------------------------------------------
+
+def _set_thread_status(thread_ts: str, status: str):
+    data = _load_thread_map()
+    if thread_ts in data:
+        data[thread_ts]["status"] = status
+        _save_thread_map(data)
+
+
+# ---------------------------------------------------------------------------
+# Zoho public reply
+# ---------------------------------------------------------------------------
+
+def _post_public_reply(ticket_id: str, content: str) -> bool:
+    result = _zoho_mcp_call("ZohoDesk_createTicketComment", {
+        "body": {
+            "content": content,
+            "contentType": "plainText",
+            "isPublic": True,
+        },
+        "path_variables": {"ticketId": str(ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+    if result:
+        print(f"Public reply posted to Zoho ticket {ticket_id}")
+        return True
+    print(f"Failed to post public reply to Zoho ticket {ticket_id}")
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Draft generation
+# ---------------------------------------------------------------------------
+
+def _generate_draft(ticket_id: str) -> str:
+    """Call Claude to generate a fresh draft response for this ticket."""
+    zoho_ticket = fetch_ticket_from_zoho(ticket_id)
+    conversations_result = fetch_ticket_conversations(ticket_id)
+
+    if not zoho_ticket:
+        return "(Could not fetch ticket data to generate draft)"
+
+    fields = _extract_ticket_fields(zoho_ticket)
+    contact_email = fields["contact_email"]
+    body = fields["description"]
+    subject = fields["subject"]
+    contact_name = fields["contact_name"]
+    thread_text = _format_conversations(conversations_result)
+
+    crm = (
+        fetch_crm_account(contact_email)
+        if contact_email
+        else {"found": False}
+    )
+    if crm["found"]:
+        enrichment_block = (
+            f"Account: {crm['account_name']}\n"
+            f"Tier: {crm['tier']}\n"
+            f"ARR: {crm['arr']}"
+        )
+    else:
+        enrichment_block = "Contact type: Volunteer"
+
+    lang_note = ""
+    detected = _detect_language(body) or _detect_language(thread_text)
+    if detected:
+        lang_note = f"\nRespond in {detected}.\n"
+
+    user_message = (
+        "Generate a client-facing draft response for this ticket.\n"
+        "Follow all voice guidelines from the system prompt.\n"
+        "Output the draft response only — no analysis, no labels.\n\n"
+        f"{enrichment_block}\n{lang_note}"
+        f"Subject: {subject}\n"
+        f"Client: {contact_name}\n"
+        f"Ticket body:\n{body}\n\n"
+        f"Full thread:\n{thread_text}"
+    )
+
+    response = _anthropic.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1000,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_message}],
+    )
+    return response.content[0].text
+
+
+# ---------------------------------------------------------------------------
+# File attachment handling
+# ---------------------------------------------------------------------------
+
+def _download_slack_file(url: str) -> bytes | None:
+    try:
+        token = os.environ.get("SLACK_BOT_TOKEN", "")
+        r = httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+            follow_redirects=True,
+        )
+        r.raise_for_status()
+        return r.content
+    except Exception as e:
+        print(f"Slack file download failed: {e}")
+        return None
+
+
+def _handle_attachments(
+    files: list,
+    clickup_task_id: str | None,
+    channel: str,
+    thread_ts: str,
+):
+    if not files or not clickup_task_id:
+        return
+    uploaded = 0
+    for f in files:
+        url = f.get("url_private_download") or f.get("url_private")
+        if not url:
+            continue
+        filename = f.get("name") or f"attachment_{int(time.time())}"
+        content = _download_slack_file(url)
+        if content and _cu_upload_attachment(
+            clickup_task_id, filename, content
+        ):
+            uploaded += 1
+    if uploaded:
+        noun = "screenshot" if uploaded == 1 else "screenshots"
+        _reply(channel, thread_ts, f"📎 {uploaded} {noun} added to ClickUp")
+
+
+# ---------------------------------------------------------------------------
+# Command parser
+# ---------------------------------------------------------------------------
+
+def _parse_commands(text: str) -> tuple[dict, str]:
+    """
+    Extract recognized commands from text.
+    Returns (commands_dict, remaining_text).
+    remaining_text is everything left after stripping command tokens.
+    Command order matters: note is parsed last and consumes trailing text.
+    """
+    remaining = text
+    commands: dict[str, str] = {}
+
+    # p1 / p2 / p3
+    m = re.search(r"\b(p[123])\b", remaining, re.IGNORECASE)
+    if m:
+        commands["priority"] = m.group(1).lower()
+        remaining = remaining[:m.start()] + remaining[m.end():]
+
+    # assign [name]
+    m = re.search(r"\bassign\s+(\w+)", remaining, re.IGNORECASE)
+    if m:
+        commands["assign"] = m.group(1)
+        remaining = remaining[:m.start()] + remaining[m.end():]
+
+    # tier [value]
+    m = re.search(r"\btier\s+(\S+)", remaining, re.IGNORECASE)
+    if m:
+        commands["tier"] = m.group(1)
+        remaining = remaining[:m.start()] + remaining[m.end():]
+
+    # arr [number]
+    m = re.search(r"\barr\s+([\d,]+)", remaining, re.IGNORECASE)
+    if m:
+        commands["arr"] = m.group(1).replace(",", "")
+        remaining = remaining[:m.start()] + remaining[m.end():]
+
+    # score [number]
+    m = re.search(r"\bscore\s+(\d+)", remaining, re.IGNORECASE)
+    if m:
+        commands["score"] = m.group(1)
+        remaining = remaining[:m.start()] + remaining[m.end():]
+
+    # note [text] — consumes everything after "note" to end of string
+    m = re.search(r"\bnote\s+(.+)", remaining, re.IGNORECASE | re.DOTALL)
+    if m:
+        commands["note"] = m.group(1).strip()
+        remaining = remaining[:m.start()] + remaining[m.end():]
+
+    # Clean up separators left behind after command extraction
+    response = re.sub(r"^[\s\-\u2014|]+", "", remaining).strip()
+    response = re.sub(r"[\s\-\u2014|]+$", "", response).strip()
+
+    return commands, response
+
+
+# ---------------------------------------------------------------------------
+# Main handler
+# ---------------------------------------------------------------------------
+
+def handle_reply(event: dict):
+    """
+    Process a Slack message event from a #vome-tickets thread.
+
+    event keys: user, text, thread_ts, channel, files (optional list)
+    """
+    thread_ts = event.get("thread_ts")
+    channel = event.get("channel")
+    text = (event.get("text") or "").strip()
+    files = event.get("files", [])
+
+    if not thread_ts or not channel:
+        return
+
+    thread_data = _load_thread_map().get(thread_ts)
+    if not thread_data:
+        return  # Not a known ticket brief thread — ignore
+
+    ticket_id = thread_data["ticket_id"]
+    clickup_task_id = thread_data.get("clickup_task_id")
+
+    # Handle file attachments (independent of text commands)
+    if files:
+        _handle_attachments(files, clickup_task_id, channel, thread_ts)
+
+    if not text:
+        return
+
+    text_lower = text.lower().strip()
+
+    # -----------------------------------------------------------------------
+    # Single-word commands that short-circuit all other parsing
+    # -----------------------------------------------------------------------
+
+    if text_lower == "skip":
+        _add_reaction(channel, thread_ts, "double_vertical_bar")
+        _reply(channel, thread_ts, "Parked — will appear in tonight's digest")
+        if clickup_task_id:
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            _cu_update_task(
+                clickup_task_id,
+                {"description": (
+                    f"Sam parked this on {date_str} — pending follow-up"
+                )},
+            )
+        _set_thread_status(thread_ts, "parked")
+        return
+
+    if text_lower == "draft":
+        try:
+            draft = _generate_draft(ticket_id)
+            _reply(
+                channel,
+                thread_ts,
+                f"*Draft:*\n\n{draft}\n\n"
+                "_Edit the above and reply with the final version to send._",
+            )
+        except Exception as e:
+            _reply(channel, thread_ts, f"Draft generation failed: {e}")
+        return
+
+    if text_lower == "move backlog":
+        if clickup_task_id:
+            if _cu_move_to_list(
+                clickup_task_id, CLICKUP_ACCEPTED_BACKLOG_LIST
+            ):
+                _reply(channel, thread_ts, "✓ Moved to Accepted Backlog")
+            else:
+                _reply(
+                    channel,
+                    thread_ts,
+                    "Could not move task — check ClickUp manually",
+                )
+        else:
+            _reply(
+                channel, thread_ts,
+                "No ClickUp task ID on record for this ticket",
+            )
+        return
+
+    # -----------------------------------------------------------------------
+    # Multi-command + optional client response parsing
+    # -----------------------------------------------------------------------
+
+    commands, response_text = _parse_commands(text)
+    confirmations: list[str] = []
+
+    if "priority" in commands and clickup_task_id:
+        p = commands["priority"]
+        _cu_update_task(clickup_task_id, {"priority": PRIORITY_MAP[p]})
+        confirmations.append(f"P{p[1]}")
+
+    if "assign" in commands and clickup_task_id:
+        name_key = commands["assign"].lower()
+        user_id = ASSIGNEE_MAP.get(name_key, "")
+        if user_id:
+            _cu_update_task(
+                clickup_task_id,
+                {"assignees": {"add": [int(user_id)]}},
+            )
+            confirmations.append(
+                f"Assigned {commands['assign'].capitalize()}"
+            )
+        else:
+            confirmations.append(
+                f"'{commands['assign']}' — user ID not configured"
+            )
+
+    if "tier" in commands and clickup_task_id:
+        _cu_set_field(clickup_task_id, FIELD_HIGHEST_TIER, commands["tier"])
+        confirmations.append(f"Tier {commands['tier']}")
+
+    if "arr" in commands and clickup_task_id:
+        try:
+            arr_val = int(commands["arr"])
+            _cu_set_field(clickup_task_id, FIELD_COMBINED_ARR, arr_val)
+            confirmations.append(f"ARR ${arr_val:,}")
+        except ValueError:
+            confirmations.append("ARR — invalid number")
+
+    if "score" in commands and clickup_task_id:
+        try:
+            score_val = int(commands["score"])
+            _cu_set_field(clickup_task_id, FIELD_AUTO_SCORE, score_val)
+            confirmations.append(f"Score {score_val}")
+        except ValueError:
+            pass
+
+    if "note" in commands and clickup_task_id:
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _cu_update_task(
+            clickup_task_id,
+            {"description": (
+                f"[Note from Sam — {date_str}]: {commands['note']}"
+            )},
+        )
+        confirmations.append("Note added to ClickUp")
+
+    has_response = bool(response_text)
+
+    # Commands only (no client response to send)
+    if commands and not has_response:
+        if confirmations:
+            _reply(channel, thread_ts, "✓ " + " | ".join(confirmations))
+        return
+
+    # Nothing actionable
+    if not has_response:
+        return
+
+    # -----------------------------------------------------------------------
+    # Client response — post to Zoho as public reply
+    # -----------------------------------------------------------------------
+
+    _post_public_reply(ticket_id, response_text)
+
+    _add_reaction(channel, thread_ts, "white_check_mark")
+    _set_thread_status(thread_ts, "handled")
+
+    if clickup_task_id:
+        _cu_update_task(clickup_task_id, {"status": "acknowledged"})
+
+    zoho_base = "https://desk.zoho.com/support/vomevolunteer"
+    zoho_url = f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
+    sent_line = f"✓ Sent to client\nView in Zoho: {zoho_url}"
+
+    if commands and confirmations:
+        _reply(
+            channel,
+            thread_ts,
+            f"✓ {' | '.join(confirmations)}\n{sent_line}",
+        )
+    else:
+        _reply(channel, thread_ts, sent_line)

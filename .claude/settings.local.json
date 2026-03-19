@@ -9,7 +9,16 @@
       "Bash(cmd.exe /c \"choco install ngrok -y\")",
       "Bash(curl -s -o /tmp/ngrok.zip https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip)",
       "Read(//tmp/**)",
-      "Bash(~/bin/ngrok.exe version:*)"
+      "Bash(~/bin/ngrok.exe version:*)",
+      "mcp__clickup__clickup_search",
+      "mcp__clickup__clickup_get_task",
+      "mcp__clickup__clickup_get_list",
+      "mcp__clickup__clickup_create_task",
+      "mcp__clickup__clickup_update_task",
+      "mcp__zoho__ZohoDesk_getTicket",
+      "mcp__zoho__ZohoDesk_getTicketConversations",
+      "mcp__zoho__ZohoCRM_Search_Records",
+      "mcp__zoho__ZohoCRM_Get_Records"
     ]
   }
 }
