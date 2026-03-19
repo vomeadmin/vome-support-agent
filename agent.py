@@ -1,11 +1,13 @@
 import json
 import os
+import re
 import sys
 
 import anthropic
 import httpx
 from pathlib import Path
 
+from clickup_tasks import create_clickup_task
 from slack_ticket_brief import send_ticket_brief
 
 # Fix Windows console encoding for emoji in system_prompt.md
@@ -438,6 +440,51 @@ def post_to_zoho(ticket_id: str, agent_response: str) -> bool:
     return False
 
 
+def _get_latest_client_reply(conversations_result, contact_email: str) -> str:
+    """Return the most recent client message text (HTML stripped, max 200 chars).
+
+    Returns empty string if there is only one conversation entry or no client
+    reply is found — caller should only display this when non-empty.
+    """
+    if not conversations_result:
+        return ""
+
+    data = _unwrap_mcp_result(conversations_result)
+    if isinstance(data, dict):
+        data = data.get("data", [])
+    if not isinstance(data, list) or len(data) < 2:
+        return ""
+
+    contact_email_lower = contact_email.lower()
+
+    for entry in data:
+        if not entry.get("isPublic", True):
+            continue
+        content = entry.get("content", "") or ""
+        if NOTE_HEADER in content or UPDATE_HEADER in content:
+            continue
+
+        author = entry.get("author", {}) or {}
+        author_email = (author.get("email") or "").lower()
+        author_type = (author.get("type") or "").upper()
+
+        is_client = (
+            author_type == "END_USER"
+            or (author_email and author_email == contact_email_lower)
+            or (author_email and author_email not in TEAM_EMAILS and author_type != "AGENT")
+        )
+        if not is_client:
+            continue
+
+        clean = re.sub(r"<[^>]+>", "", content).strip()
+        if not clean:
+            continue
+
+        return clean[:200] + ("..." if len(clean) > 200 else "")
+
+    return ""
+
+
 def process_ticket(ticket_data: dict) -> str | None:
     """Process a Zoho Desk ticket through the support agent."""
     ticket_id = ticket_data.get("ticket_id", "unknown")
@@ -509,6 +556,12 @@ def process_ticket(ticket_data: dict) -> str | None:
         "The ticket submitter is the CLIENT, not Ron.\n"
         "Ron's replies in the thread are INTERNAL RESPONSES.\n"
         "Process as a client ticket with full enrichment.\n\n"
+        "REQUIRED ADDITIONS TO YOUR AGENT ANALYSIS BLOCK:\n"
+        "Include these two fields before CLASSIFICATION:\n"
+        "ISSUE SUMMARY: [one line — 2-3 sentences plain English:"
+        " what the person said, what they tried, any relevant"
+        " context. Written as if briefing a colleague verbally.]\n"
+        "SUGGESTED OWNER: [Sanjay / OnlyG / Sam / Either]\n\n"
         f"{enrichment_block}\n\n"
         f"SOURCE: Zoho Desk (webhook trigger)\n"
         f"Ticket ID: {ticket_id}\n"
@@ -538,11 +591,25 @@ def process_ticket(ticket_data: dict) -> str | None:
 
         post_to_zoho(ticket_id, result)
 
-        # Send Slack brief to #vome-tickets — primary interface for Sam
         zoho_url = (
             f"https://desk.zoho.com/support/vomevolunteer"
             f"/ShowHomePage.do#Cases/dv/{ticket_id}"
         )
+
+        # Create ClickUp task
+        clickup_result = create_clickup_task(
+            ticket_data=ticket_data,
+            agent_response=result,
+            crm=crm,
+            zoho_url=zoho_url,
+        )
+        clickup_task_url = (
+            clickup_result["task_url"] if clickup_result else None
+        )
+        clickup_task_id = (
+            clickup_result["task_id"] if clickup_result else None
+        )
+
         attachment_count = 0
         if zoho_ticket:
             raw = _unwrap_mcp_result(zoho_ticket)
@@ -552,15 +619,37 @@ def process_ticket(ticket_data: dict) -> str | None:
                 except (ValueError, TypeError):
                     attachment_count = 0
 
+        # Extract structured fields from Claude's response for the Slack brief
+        def _extract_field(field: str) -> str:
+            m = re.search(
+                rf"^{re.escape(field)}:\s*(.+)",
+                result,
+                re.IGNORECASE | re.MULTILINE,
+            )
+            return m.group(1).strip() if m else ""
+
+        latest_reply = _get_latest_client_reply(
+            conversations_result, contact_email
+        )
+
+        # Send Slack brief — primary interface for Sam
         send_ticket_brief(
             ticket_id=ticket_id,
             ticket_number=ticket_data.get("ticket_number", ticket_id),
             subject=subject,
             crm=crm,
             agent_response=result,
-            clickup_task_url=None,
+            clickup_task_url=clickup_task_url,
+            clickup_task_id=clickup_task_id,
             zoho_ticket_url=zoho_url,
             attachment_count=attachment_count,
+            contact_name=contact_name,
+            contact_email=contact_email,
+            issue_summary=_extract_field("ISSUE SUMMARY"),
+            latest_reply=latest_reply,
+            timing=_extract_field("TIMING"),
+            priority=_extract_field("PRIORITY"),
+            suggested_owner=_extract_field("SUGGESTED OWNER"),
         )
 
         return result

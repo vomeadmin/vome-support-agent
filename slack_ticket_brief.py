@@ -49,7 +49,11 @@ def save_thread_mapping(
 
 def _extract_from_response(agent_response: str, field: str) -> str:
     """Extract a labelled field from the agent's structured analysis text."""
-    match = re.search(rf"^{field}:\s*(.+)", agent_response, re.IGNORECASE | re.MULTILINE)
+    match = re.search(
+        rf"^{field}:\s*(.+)",
+        agent_response,
+        re.IGNORECASE | re.MULTILINE,
+    )
     return match.group(1).strip() if match else ""
 
 
@@ -67,8 +71,16 @@ def send_ticket_brief(
     agent_response: str,
     clickup_task_url: str | None,
     zoho_ticket_url: str,
+    clickup_task_id: str | None = None,
     attachment_count: int = 0,
     open_ticket_count: int | None = None,
+    contact_name: str = "",
+    contact_email: str = "",
+    issue_summary: str = "",
+    latest_reply: str = "",
+    timing: str = "",
+    priority: str = "",
+    suggested_owner: str = "",
 ) -> str | None:
     """
     Post a structured ticket brief to #vome-tickets.
@@ -79,13 +91,32 @@ def send_ticket_brief(
     Also persists the thread_ts → ticket mapping to thread_map.json.
     """
     if not CHANNEL_TICKETS:
-        print("send_ticket_brief: SLACK_TICKETS_CHANNEL not configured — skipping")
+        print(
+            "send_ticket_brief: SLACK_TICKETS_CHANNEL not configured"
+            " — skipping"
+        )
         return None
 
     # --- Extract classification data from agent response ---
-    classification = _extract_from_response(agent_response, "CLASSIFICATION") or "Unknown"
-    module = _extract_from_response(agent_response, "MODULE") or "Unknown"
-    pattern_note = _extract_from_response(agent_response, "PATTERN")
+    classification = (
+        _extract_from_response(agent_response, "CLASSIFICATION") or "Unknown"
+    )
+    module = (
+        _extract_from_response(agent_response, "MODULE") or "Unknown"
+    )
+
+    if not priority:
+        priority = (
+            _extract_from_response(agent_response, "PRIORITY") or ""
+        )
+    if not timing:
+        timing = (
+            _extract_from_response(agent_response, "TIMING") or ""
+        )
+    if not suggested_owner:
+        suggested_owner = (
+            _extract_from_response(agent_response, "SUGGESTED OWNER") or ""
+        )
 
     # --- WHO block ---
     account = crm.get("account_name") or "Unknown account"
@@ -99,53 +130,96 @@ def send_ticket_brief(
     else:
         arr_display = "ARR unknown"
 
-    contact_type = "Admin" if crm.get("found") else "Volunteer"
-    prior_str = ""
+    who_line2_parts = []
+    if contact_name or contact_email:
+        if contact_name and contact_email:
+            name_email = f"{contact_name} ({contact_email})"
+        else:
+            name_email = contact_name or contact_email
+        who_line2_parts.append(name_email)
+    else:
+        contact_type = "Admin" if crm.get("found") else "Volunteer"
+        who_line2_parts.append(contact_type)
     if open_ticket_count is not None:
-        prior_str = f" | {open_ticket_count} prior ticket{'s' if open_ticket_count != 1 else ''}"
-
-    # --- WHAT block ---
-    attach_line = ""
-    if attachment_count > 0:
-        attach_line = f"\n📎 {attachment_count} attachment{'s' if attachment_count != 1 else ''} — view in Zoho"
+        n = open_ticket_count
+        who_line2_parts.append(f"{n} prior ticket{'s' if n != 1 else ''}")
+    who_line2 = " | ".join(who_line2_parts)
 
     # --- Links ---
-    cu_link = clickup_task_url or _extract_clickup_url(agent_response) or "(pending)"
-
-    # --- Assemble brief ---
-    brief = (
-        f"🎫 *#{ticket_number} — {subject}*\n\n"
-        f"*WHO:* {account} | {tier} | {arr_display}\n"
-        f"{contact_type}{prior_str}\n\n"
-        f"*WHAT:* {classification} | {module}{attach_line}\n"
+    cu_link = (
+        clickup_task_url
+        or _extract_clickup_url(agent_response)
+        or "(pending)"
     )
 
-    if pattern_note:
-        brief += f"\n*SIGNAL:* {pattern_note}\n"
+    # --- Assemble brief ---
+    divider = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    brief = (
+        f"{divider}\n"
+        f"🎫 *#{ticket_number} — {subject}*\n\n"
+        f"*WHO:* {account} | {tier} | {arr_display}\n"
+        f"{who_line2}\n"
+    )
+
+    if issue_summary:
+        brief += f"\n*ISSUE:*\n{issue_summary}\n"
+
+    if latest_reply:
+        brief += f"\n*LATEST:* \"{latest_reply}\"\n"
+
+    if attachment_count > 0:
+        n = attachment_count
+        brief += f"\n📎 {n} attachment{'s' if n != 1 else ''} — view in Zoho\n"
+
+    # Priority display: "P2 | Same day" or "P2 | Not same day"
+    timing_clean = timing.strip().capitalize() if timing else ""
+    priority_line = priority if priority else ""
+    if timing_clean:
+        if priority_line:
+            priority_line = f"{priority_line} | {timing_clean}"
+        else:
+            priority_line = timing_clean
+
+    brief += f"\n*TYPE:* {classification} | {module}\n"
+    if priority_line:
+        brief += f"*PRIORITY:* {priority_line}\n"
+    if suggested_owner:
+        brief += f"*SUGGESTED:* {suggested_owner}\n"
 
     brief += (
         f"\n*ClickUp:* {cu_link}  |  *Zoho:* {zoho_ticket_url}\n"
-        "───────────────────────────────────────\n"
+        f"{divider}\n"
         "Reply with your response and I'll send it to the client. Or use:\n"
         "`draft` `assign [name]` `p1/p2/p3`\n"
-        "`skip` `note [text]` `tier [X]` `arr [X]`"
+        "`skip` `note [text]` `tier [X]` `arr [X]`\n"
+        f"{divider}"
     )
 
     try:
-        resp = _slack.chat_postMessage(channel=CHANNEL_TICKETS, text=brief)
+        resp = _slack.chat_postMessage(
+            channel=CHANNEL_TICKETS, text=brief
+        )
         thread_ts = resp["ts"]
-        print(f"Ticket brief posted — ticket {ticket_id}, thread_ts={thread_ts}")
+        print(
+            f"Ticket brief posted — ticket {ticket_id},"
+            f" thread_ts={thread_ts}"
+        )
 
         save_thread_mapping(
             thread_ts=thread_ts,
             ticket_id=ticket_id,
             ticket_number=ticket_number,
             subject=subject,
+            clickup_task_id=clickup_task_id,
         )
         return thread_ts
 
     except SlackApiError as e:
-        print(f"send_ticket_brief: Slack error for ticket {ticket_id}: {e.response['error']}")
+        err = e.response["error"]
+        print(
+            f"send_ticket_brief: Slack error for ticket"
+            f" {ticket_id}: {err}"
+        )
         return None
     except Exception as e:
         print(f"send_ticket_brief: error for ticket {ticket_id}: {e}")

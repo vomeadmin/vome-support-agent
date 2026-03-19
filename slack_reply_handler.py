@@ -4,6 +4,7 @@ slack_reply_handler.py
 Handles all of Sam's replies in #vome-tickets threads.
 """
 
+import json
 import os
 import re
 import time
@@ -338,6 +339,91 @@ def _parse_commands(text: str) -> tuple[dict, str]:
 
 
 # ---------------------------------------------------------------------------
+# Natural language parsing (Claude fallback)
+# ---------------------------------------------------------------------------
+
+_NL_HELP = (
+    "I didn't detect any commands or a client response in that message.\n\n"
+    "To send to client: reply with just the message text\n"
+    "To assign: `assign Sam`\n"
+    "To set priority: `p1` `p2` `p3`\n"
+    "To set score: `score [number]`\n"
+    "To skip: `skip`"
+)
+
+
+def _parse_with_claude(text: str) -> dict:
+    """
+    Call Claude to parse natural language intent from Sam's message.
+    Returns a dict with the same keys as the JSON schema, or {} on failure.
+    """
+    prompt = (
+        f"Sam sent this reply about a support ticket:\n'{text}'\n\n"
+        "Extract any instructions intended for the system"
+        " (not for the client).\n"
+        "Return valid JSON only — no prose, no code block markers.\n"
+        "{\n"
+        '  "assign_to": null or "Sam/OnlyG/Sanjay/Ron",\n'
+        '  "priority": null or "p1/p2/p3",\n'
+        '  "score": null or number,\n'
+        '  "tier": null or string,\n'
+        '  "arr": null or number,\n'
+        '  "note": null or string,\n'
+        '  "client_response": null or string,\n'
+        '  "skip": false or true\n'
+        "}\n\n"
+        "Rules:\n"
+        "- client_response: only text clearly intended to be sent to "
+        "the client. If the message is entirely internal instructions, "
+        "client_response must be null.\n"
+        "- assign_to: look for names Sam, Saul (=Sam), OnlyG, Sanjay, Ron\n"
+        "- score: any number mentioned in context of priority/importance"
+    )
+    try:
+        response = _anthropic.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        parsed = json.loads(raw)
+        print(f"Claude NLP parse result: {parsed}")
+        return parsed
+    except Exception as e:
+        print(f"Claude NLP parse failed: {e}")
+        return {}
+
+
+def _build_confirmation(
+    action_lines: list[str],
+    client_sent: bool,
+    ticket_id: str | None,
+) -> str:
+    """Build the structured ✓ Actions taken confirmation message."""
+    lines = ["✓ Actions taken:"]
+    for al in action_lines:
+        lines.append(f"→ {al}")
+
+    if client_sent and ticket_id:
+        zoho_base = "https://desk.zoho.com/support/vomevolunteer"
+        zoho_url = f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
+        lines.append(f"→ Sent to client — view in Zoho: {zoho_url}")
+    else:
+        lines.append(
+            "→ No client response sent (no message detected)"
+        )
+        lines.append("")
+        lines.append(
+            "To send a response to the client, reply with just the "
+            "message text."
+        )
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Main handler
 # ---------------------------------------------------------------------------
 
@@ -426,46 +512,112 @@ def handle_reply(event: dict):
     # -----------------------------------------------------------------------
 
     commands, response_text = _parse_commands(text)
-    confirmations: list[str] = []
+
+    # NLP fallback: when exact parsing found nothing, ask Claude
+    if not commands and not response_text:
+        nl = _parse_with_claude(text)
+
+        if nl.get("skip"):
+            _add_reaction(channel, thread_ts, "double_vertical_bar")
+            _set_thread_status(thread_ts, "parked")
+            if clickup_task_id:
+                date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                _cu_update_task(
+                    clickup_task_id,
+                    {"description": (
+                        f"Sam parked this on {date_str} — "
+                        "pending follow-up"
+                    )},
+                )
+            _reply(
+                channel,
+                thread_ts,
+                "✓ Actions taken:\n"
+                "→ Ticket parked — will appear in tonight's digest",
+            )
+            return
+
+        if nl.get("assign_to"):
+            commands["assign"] = nl["assign_to"]
+        if nl.get("priority"):
+            commands["priority"] = nl["priority"].lower()
+        if nl.get("score") is not None:
+            try:
+                commands["score"] = str(int(nl["score"]))
+            except (ValueError, TypeError):
+                pass
+        if nl.get("tier"):
+            commands["tier"] = nl["tier"]
+        if nl.get("arr") is not None:
+            try:
+                commands["arr"] = str(int(nl["arr"]))
+            except (ValueError, TypeError):
+                pass
+        if nl.get("note"):
+            commands["note"] = nl["note"]
+        if nl.get("client_response"):
+            response_text = nl["client_response"]
+
+    # Nothing at all — show help
+    if not commands and not response_text:
+        _reply(channel, thread_ts, _NL_HELP)
+        return
+
+    # -----------------------------------------------------------------------
+    # Execute commands, collecting action lines for confirmation
+    # -----------------------------------------------------------------------
+
+    action_lines: list[str] = []
 
     if "priority" in commands and clickup_task_id:
         p = commands["priority"]
-        _cu_update_task(clickup_task_id, {"priority": PRIORITY_MAP[p]})
-        confirmations.append(f"P{p[1]}")
+        cu_p = PRIORITY_MAP.get(p)
+        if cu_p:
+            _cu_update_task(clickup_task_id, {"priority": cu_p})
+            action_lines.append(f"Priority set: {p.upper()}")
 
     if "assign" in commands and clickup_task_id:
         name_key = commands["assign"].lower()
+        # Also accept "saul" as Sam
+        if name_key == "saul":
+            name_key = "sam"
         user_id = ASSIGNEE_MAP.get(name_key, "")
         if user_id:
             _cu_update_task(
                 clickup_task_id,
                 {"assignees": {"add": [int(user_id)]}},
             )
-            confirmations.append(
-                f"Assigned {commands['assign'].capitalize()}"
+            action_lines.append(
+                f"Assigned to: {name_key.capitalize()}"
             )
         else:
-            confirmations.append(
-                f"'{commands['assign']}' — user ID not configured"
+            action_lines.append(
+                f"Assign failed: '{commands['assign']}' not recognised"
             )
 
     if "tier" in commands and clickup_task_id:
-        _cu_set_field(clickup_task_id, FIELD_HIGHEST_TIER, commands["tier"])
-        confirmations.append(f"Tier {commands['tier']}")
+        _cu_set_field(
+            clickup_task_id, FIELD_HIGHEST_TIER, commands["tier"]
+        )
+        action_lines.append(f"Tier updated: {commands['tier']}")
 
     if "arr" in commands and clickup_task_id:
         try:
             arr_val = int(commands["arr"])
-            _cu_set_field(clickup_task_id, FIELD_COMBINED_ARR, arr_val)
-            confirmations.append(f"ARR ${arr_val:,}")
+            _cu_set_field(
+                clickup_task_id, FIELD_COMBINED_ARR, arr_val
+            )
+            action_lines.append(f"ARR set: ${arr_val:,}")
         except ValueError:
-            confirmations.append("ARR — invalid number")
+            action_lines.append("ARR — invalid number")
 
     if "score" in commands and clickup_task_id:
         try:
             score_val = int(commands["score"])
-            _cu_set_field(clickup_task_id, FIELD_AUTO_SCORE, score_val)
-            confirmations.append(f"Score {score_val}")
+            _cu_set_field(
+                clickup_task_id, FIELD_AUTO_SCORE, score_val
+            )
+            action_lines.append(f"Auto Score updated: {score_val}")
         except ValueError:
             pass
 
@@ -477,41 +629,29 @@ def handle_reply(event: dict):
                 f"[Note from Sam — {date_str}]: {commands['note']}"
             )},
         )
-        confirmations.append("Note added to ClickUp")
-
-    has_response = bool(response_text)
-
-    # Commands only (no client response to send)
-    if commands and not has_response:
-        if confirmations:
-            _reply(channel, thread_ts, "✓ " + " | ".join(confirmations))
-        return
-
-    # Nothing actionable
-    if not has_response:
-        return
+        action_lines.append("Note added to ClickUp")
 
     # -----------------------------------------------------------------------
     # Client response — post to Zoho as public reply
     # -----------------------------------------------------------------------
 
-    _post_public_reply(ticket_id, response_text)
+    client_sent = False
+    if response_text:
+        _post_public_reply(ticket_id, response_text)
+        _add_reaction(channel, thread_ts, "white_check_mark")
+        _set_thread_status(thread_ts, "handled")
+        if clickup_task_id:
+            _cu_update_task(
+                clickup_task_id, {"status": "acknowledged"}
+            )
+        client_sent = True
 
-    _add_reaction(channel, thread_ts, "white_check_mark")
-    _set_thread_status(thread_ts, "handled")
+    # -----------------------------------------------------------------------
+    # Structured confirmation — always posted
+    # -----------------------------------------------------------------------
 
-    if clickup_task_id:
-        _cu_update_task(clickup_task_id, {"status": "acknowledged"})
-
-    zoho_base = "https://desk.zoho.com/support/vomevolunteer"
-    zoho_url = f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
-    sent_line = f"✓ Sent to client\nView in Zoho: {zoho_url}"
-
-    if commands and confirmations:
-        _reply(
-            channel,
-            thread_ts,
-            f"✓ {' | '.join(confirmations)}\n{sent_line}",
-        )
-    else:
-        _reply(channel, thread_ts, sent_line)
+    _reply(
+        channel,
+        thread_ts,
+        _build_confirmation(action_lines, client_sent, ticket_id),
+    )

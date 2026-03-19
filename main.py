@@ -15,6 +15,7 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request, Response
 
 from agent import process_ticket, process_ticket_update
+from field_feedback import handle_field_feedback
 from slack_reply_handler import handle_reply
 from slack_digest import send_daily_digest
 
@@ -176,9 +177,14 @@ async def slack_events_webhook(request: Request):
                     "files": files,
                 })
 
-        # Field feedback channel — existing handler (future: route to field feedback agent)
-        # elif channel == SLACK_FIELD_FEEDBACK_CHANNEL:
-        #     handle_field_feedback(event)
+        elif channel == SLACK_FIELD_FEEDBACK_CHANNEL:
+            handle_field_feedback({
+                "user": user,
+                "text": text,
+                "ts": event.get("ts", ""),
+                "thread_ts": thread_ts,
+                "files": files,
+            })
 
     return {"status": "ok"}
 

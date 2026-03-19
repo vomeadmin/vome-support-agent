@@ -18,7 +18,9 @@
       "mcp__zoho__ZohoDesk_getTicket",
       "mcp__zoho__ZohoDesk_getTicketConversations",
       "mcp__zoho__ZohoCRM_Search_Records",
-      "mcp__zoho__ZohoCRM_Get_Records"
+      "mcp__zoho__ZohoCRM_Get_Records",
+      "Bash(py -c \":*)",
+      "Bash(py -m flake8 slack_ticket_brief.py agent.py --max-line-length=79 --select=E,W --ignore=E402,W503)"
     ]
   }
 }
