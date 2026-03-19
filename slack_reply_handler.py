@@ -64,6 +64,14 @@ _INTERNAL_KEYWORDS = {
     "route", "fix",
 }
 
+# Patterns that signal Sam is proposing a re-draft inline.
+# Captures everything after the colon as the client-facing text.
+_REPHRASE_RE = re.compile(
+    r"\b(?:saying something like|something like|"
+    r"try this|try something like|how about|use this)\s*:\s*(.+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 # ---------------------------------------------------------------------------
 # ClickUp REST helpers
@@ -767,6 +775,35 @@ def handle_reply(event: dict):
     if explicit_send_match:
         client_msg = explicit_send_match.group(1).strip()
         # Still block if internal keywords slipped in
+        if _has_internal_keyword(client_msg):
+            _reply(
+                channel, thread_ts,
+                "That message contains internal keywords and cannot "
+                "be sent to the client.\n"
+                "Please remove references to team members, ClickUp, "
+                "or internal commands.",
+            )
+            return
+        _store_pending_send(thread_ts, client_msg)
+        preview = (
+            client_msg[:300] + "..."
+            if len(client_msg) > 300
+            else client_msg
+        )
+        _reply(
+            channel, thread_ts,
+            f"Ready to send to client:\n\"{preview}\"\n\n"
+            "Reply `confirm` to send or `cancel` to discard.",
+        )
+        return
+
+    # -----------------------------------------------------------------------
+    # Inline re-draft: "saying something like: [client text]"
+    # -----------------------------------------------------------------------
+
+    rephrase_m = _REPHRASE_RE.search(text)
+    if rephrase_m:
+        client_msg = rephrase_m.group(1).strip()
         if _has_internal_keyword(client_msg):
             _reply(
                 channel, thread_ts,
