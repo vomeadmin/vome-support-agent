@@ -16,11 +16,14 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from agent import (
+    NOTE_HEADER,
     SYSTEM_PROMPT,
+    UPDATE_HEADER,
     ZOHO_ORG_ID,
     _detect_language,
     _extract_ticket_fields,
     _format_conversations,
+    _unwrap_mcp_result,
     _zoho_mcp_call,
     fetch_crm_account,
     fetch_ticket_conversations,
@@ -298,6 +301,110 @@ def _generate_draft(ticket_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Conversation formatter (for thread/history and draft commands)
+# ---------------------------------------------------------------------------
+
+_CONV_SEP = "─────────────────────────────────────"
+
+
+def _format_conversation_for_slack(
+    ticket_id: str, thread_data: dict
+) -> str:
+    """Fetch fresh ticket + conversations from Zoho and format for Slack.
+
+    Always fetches live data — never uses cached values.
+    Returns a formatted multi-line string ready to post.
+    """
+    zoho_ticket = fetch_ticket_from_zoho(ticket_id)
+    conversations_result = fetch_ticket_conversations(ticket_id)
+
+    fields = _extract_ticket_fields(zoho_ticket) if zoho_ticket else {}
+    subject = fields.get("subject") or thread_data.get("subject", "")
+    contact_name = fields.get("contact_name", "")
+    contact_email = fields.get("contact_email", "")
+    created_time = fields.get("created_time", "")
+
+    ticket_number = thread_data.get("ticket_number", ticket_id)
+    zoho_url = (
+        f"https://desk.zoho.com/support/vomevolunteer"
+        f"/ShowHomePage.do#Cases/dv/{ticket_id}"
+    )
+
+    if contact_name and contact_email:
+        contact_line = f"{contact_name} ({contact_email})"
+    else:
+        contact_line = contact_name or contact_email or "Unknown"
+
+    lines = [
+        f"📋 *Full Conversation — #{ticket_number}*",
+        f"*Subject:* {subject}",
+        f"*Contact:* {contact_line}",
+    ]
+    if created_time:
+        lines.append(f"*Opened:* {created_time}")
+    lines.append(_CONV_SEP)
+
+    # Unwrap and reverse to chronological order (Zoho returns newest first)
+    data = _unwrap_mcp_result(conversations_result) if conversations_result else None
+    if isinstance(data, dict):
+        data = data.get("data", [])
+    if not isinstance(data, list):
+        data = []
+
+    msg_count = 0
+    last_timestamp = ""
+
+    for entry in reversed(data):
+        content = entry.get("content") or entry.get("summary", "")
+        # Skip agent's own analysis notes
+        if content and (NOTE_HEADER in content or UPDATE_HEADER in content):
+            continue
+
+        author = entry.get("author", {}) or {}
+        author_name = author.get("name") or "Unknown"
+        timestamp = entry.get("createdTime") or entry.get("sendDateTime", "")
+        is_public = entry.get("isPublic", True)
+
+        msg_count += 1
+        if timestamp:
+            last_timestamp = timestamp
+
+        clean = re.sub(r"<[^>]+>", "", content or "").strip()
+        visibility = "" if is_public else " [internal]"
+
+        lines.append(f"*{author_name}*{visibility} — {timestamp}")
+        lines.append(clean if clean else "(no content)")
+
+        # Attachment count per message
+        attachments = entry.get("attachments")
+        if isinstance(attachments, list):
+            attach_count = len(attachments)
+        else:
+            try:
+                attach_count = int(entry.get("attachmentCount") or 0)
+            except (ValueError, TypeError):
+                attach_count = 0
+        if attach_count > 0:
+            noun = "attachment" if attach_count == 1 else "attachments"
+            lines.append(f"📎 {attach_count} {noun}")
+
+        lines.append(_CONV_SEP)
+
+    if msg_count == 0:
+        lines.append("(No messages found)")
+        lines.append(_CONV_SEP)
+
+    noun = "message" if msg_count == 1 else "messages"
+    lines.append(f"{msg_count} {noun} total")
+    if last_timestamp:
+        lines.append(f"Last activity: {last_timestamp}")
+    lines.append(f"View in Zoho: {zoho_url}")
+    lines.append(_CONV_SEP)
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # File attachment handling
 # ---------------------------------------------------------------------------
 
@@ -532,18 +639,36 @@ def handle_reply(event: dict):
         _set_thread_status(thread_ts, "parked")
         return
 
+    if text_lower in ("thread", "history"):
+        try:
+            convo = _format_conversation_for_slack(ticket_id, thread_data)
+            footer = (
+                "Reply `draft` for a suggested response\n"
+                "Reply `send: [message]` to respond directly"
+            )
+            _reply(channel, thread_ts, f"{convo}\n{footer}")
+        except Exception as e:
+            _reply(
+                channel, thread_ts,
+                f"Could not fetch conversation: {e}",
+            )
+        return
+
     if text_lower == "draft":
         try:
+            convo = _format_conversation_for_slack(ticket_id, thread_data)
             draft = _generate_draft(ticket_id)
             _store_pending_send(thread_ts, draft)
-            _reply(
-                channel,
-                thread_ts,
-                f"DRAFT — not sent yet:\n\"{draft}\"\n\n"
-                "Reply `confirm` to send this, "
-                "or `send: [edited version]` to send a different version, "
-                "or `cancel` to discard.",
+            draft_block = (
+                f"{_CONV_SEP}\n"
+                f"💬 *SUGGESTED RESPONSE — not sent yet*\n"
+                f"{draft}\n"
+                f"{_CONV_SEP}\n"
+                f"Reply `confirm` to send this\n"
+                f"Reply `send: [your version]` to send your own\n"
+                f"Reply `cancel` to do nothing"
             )
+            _reply(channel, thread_ts, f"{convo}\n{draft_block}")
         except Exception as e:
             _reply(channel, thread_ts, f"Draft generation failed: {e}")
         return
