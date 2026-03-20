@@ -62,9 +62,19 @@ def _get_engine():
 
 def init_db():
     """Create the ticket_threads table if it doesn't exist."""
-    engine = _get_engine()
-    _metadata.create_all(engine)
-    print("Database initialized — ticket_threads table ready")
+    if not DATABASE_URL:
+        print(
+            "WARNING: DATABASE_URL not set — database features disabled. "
+            "Set DATABASE_URL to enable thread persistence."
+        )
+        return
+    try:
+        engine = _get_engine()
+        _metadata.create_all(engine)
+        print("Database initialized — ticket_threads table ready")
+    except Exception as e:
+        print(f"WARNING: Database connection failed — {e}")
+        print("Thread persistence will not work until database is available.")
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +92,9 @@ def save_thread(
     crm: dict | None = None,
 ):
     """Insert or update a thread mapping."""
+    if not DATABASE_URL:
+        print("[DB] save_thread: DATABASE_URL not set — skipping")
+        return
     engine = _get_engine()
     now = datetime.now(timezone.utc)
     row = {
@@ -99,54 +112,69 @@ def save_thread(
         "created_at": now,
         "updated_at": now,
     }
-    with engine.begin() as conn:
-        # Upsert: try insert, on conflict update
-        conn.execute(
-            text("""
-                INSERT INTO ticket_threads
-                    (thread_ts, ticket_id, ticket_number, subject,
-                     channel, status, clickup_task_id,
-                     classification, crm, pending_send,
-                     close_after_send, created_at, updated_at)
-                VALUES
-                    (:thread_ts, :ticket_id, :ticket_number, :subject,
-                     :channel, :status, :clickup_task_id,
-                     :classification::jsonb, :crm::jsonb, :pending_send,
-                     :close_after_send, :created_at, :updated_at)
-                ON CONFLICT (thread_ts) DO UPDATE SET
-                    ticket_id = EXCLUDED.ticket_id,
-                    ticket_number = EXCLUDED.ticket_number,
-                    subject = EXCLUDED.subject,
-                    channel = EXCLUDED.channel,
-                    clickup_task_id = EXCLUDED.clickup_task_id,
-                    classification = EXCLUDED.classification,
-                    crm = EXCLUDED.crm,
-                    updated_at = EXCLUDED.updated_at
-            """),
-            row,
-        )
-    print(
-        f"Thread saved: {thread_ts} → ticket {ticket_id}"
-    )
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO ticket_threads
+                        (thread_ts, ticket_id, ticket_number, subject,
+                         channel, status, clickup_task_id,
+                         classification, crm, pending_send,
+                         close_after_send, created_at, updated_at)
+                    VALUES
+                        (:thread_ts, :ticket_id, :ticket_number,
+                         :subject, :channel, :status,
+                         :clickup_task_id,
+                         CAST(:classification AS jsonb),
+                         CAST(:crm AS jsonb),
+                         :pending_send, :close_after_send,
+                         :created_at, :updated_at)
+                    ON CONFLICT (thread_ts) DO UPDATE SET
+                        ticket_id = EXCLUDED.ticket_id,
+                        ticket_number = EXCLUDED.ticket_number,
+                        subject = EXCLUDED.subject,
+                        channel = EXCLUDED.channel,
+                        clickup_task_id = EXCLUDED.clickup_task_id,
+                        classification = EXCLUDED.classification,
+                        crm = EXCLUDED.crm,
+                        updated_at = EXCLUDED.updated_at
+                """),
+                row,
+            )
+        print(f"[DB] Thread saved: {thread_ts} → ticket {ticket_id}")
+    except Exception as e:
+        print(f"[DB ERROR] Failed to save thread {thread_ts}: {e}")
+        raise
 
 
 def get_thread(thread_ts: str) -> dict | None:
     """Fetch a single thread by its Slack thread_ts. Returns dict or None."""
-    engine = _get_engine()
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("SELECT * FROM ticket_threads WHERE thread_ts = :ts"),
-            {"ts": thread_ts},
-        )
-        row = result.mappings().first()
-        if not row:
-            return None
-        return _row_to_dict(row)
+    if not DATABASE_URL:
+        return None
+    try:
+        engine = _get_engine()
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(
+                    "SELECT * FROM ticket_threads WHERE thread_ts = :ts"
+                ),
+                {"ts": thread_ts},
+            )
+            row = result.mappings().first()
+            if not row:
+                return None
+            return _row_to_dict(row)
+    except Exception as e:
+        print(f"get_thread failed: {e}")
+        return None
 
 
 def update_thread(thread_ts: str, **kwargs):
     """Update specific fields on a thread entry."""
     if not kwargs:
+        return
+    if not DATABASE_URL:
+        print("[DB] update_thread: DATABASE_URL not set — skipping")
         return
     engine = _get_engine()
 
@@ -157,21 +185,35 @@ def update_thread(thread_ts: str, **kwargs):
 
     kwargs["updated_at"] = datetime.now(timezone.utc)
 
-    set_clauses = ", ".join(f"{k} = :{k}" for k in kwargs)
+    # Use CAST for JSONB columns to avoid :: conflict with SQLAlchemy
+    set_parts = []
+    for k in kwargs:
+        if k in ("classification", "crm"):
+            set_parts.append(f"{k} = CAST(:{k} AS jsonb)")
+        else:
+            set_parts.append(f"{k} = :{k}")
+    set_clauses = ", ".join(set_parts)
     kwargs["ts"] = thread_ts
 
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                f"UPDATE ticket_threads SET {set_clauses} "
-                f"WHERE thread_ts = :ts"
-            ),
-            kwargs,
-        )
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"UPDATE ticket_threads SET {set_clauses} "
+                    f"WHERE thread_ts = :ts"
+                ),
+                kwargs,
+            )
+        print(f"[DB] Thread updated: {thread_ts}")
+    except Exception as e:
+        print(f"[DB ERROR] Failed to update thread {thread_ts}: {e}")
+        raise
 
 
 def get_thread_by_ticket_id(ticket_id: str) -> tuple[str, dict] | None:
     """Find a thread by Zoho ticket ID. Returns (thread_ts, data) or None."""
+    if not DATABASE_URL:
+        return None
     engine = _get_engine()
     with engine.connect() as conn:
         result = conn.execute(
@@ -191,6 +233,8 @@ def get_thread_by_ticket_id(ticket_id: str) -> tuple[str, dict] | None:
 
 def get_open_threads() -> dict:
     """Return all non-closed threads as {thread_ts: data}."""
+    if not DATABASE_URL:
+        return {}
     engine = _get_engine()
     with engine.connect() as conn:
         result = conn.execute(
@@ -207,6 +251,8 @@ def get_open_threads() -> dict:
 
 def get_threads_by_date(date_str: str) -> dict:
     """Return all threads created on a specific date (YYYY-MM-DD)."""
+    if not DATABASE_URL:
+        return {}
     engine = _get_engine()
     with engine.connect() as conn:
         result = conn.execute(
@@ -224,6 +270,8 @@ def get_threads_by_date(date_str: str) -> dict:
 
 def get_all_threads() -> dict:
     """Return entire thread map as {thread_ts: data}."""
+    if not DATABASE_URL:
+        return {}
     engine = _get_engine()
     with engine.connect() as conn:
         result = conn.execute(
