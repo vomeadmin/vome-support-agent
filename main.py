@@ -178,6 +178,8 @@ async def slack_events_webhook(request: Request):
                     "thread_ts": thread_ts,
                     "channel": channel,
                     "files": files,
+                    "client_msg_id": event.get("client_msg_id"),
+                    "event_ts": event.get("event_ts") or event.get("ts"),
                 })
 
         elif channel == SLACK_FIELD_FEEDBACK_CHANNEL:

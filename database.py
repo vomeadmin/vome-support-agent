@@ -26,6 +26,16 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 _engine = None
 _metadata = MetaData()
 
+processed_events = Table(
+    "processed_events",
+    _metadata,
+    Column("event_id", String, primary_key=True),
+    Column(
+        "processed_at", DateTime,
+        default=datetime.now(timezone.utc),
+    ),
+)
+
 ticket_threads = Table(
     "ticket_threads",
     _metadata,
@@ -258,7 +268,7 @@ def get_threads_by_date(date_str: str) -> dict:
         result = conn.execute(
             text(
                 "SELECT * FROM ticket_threads "
-                "WHERE created_at::date = :d"
+                "WHERE CAST(created_at AS date) = :d"
             ),
             {"d": date_str},
         )
@@ -281,6 +291,57 @@ def get_all_threads() -> dict:
             row["thread_ts"]: _row_to_dict(row)
             for row in result.mappings()
         }
+
+
+# ---------------------------------------------------------------------------
+# Event deduplication
+# ---------------------------------------------------------------------------
+
+def is_event_processed(event_id: str) -> bool:
+    """Check if a Slack event was already processed. Returns True if duplicate."""
+    if not DATABASE_URL or not event_id:
+        return False
+    try:
+        engine = _get_engine()
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(
+                    "SELECT 1 FROM processed_events "
+                    "WHERE event_id = :eid"
+                ),
+                {"eid": event_id},
+            )
+            return result.first() is not None
+    except Exception as e:
+        print(f"[DB] is_event_processed check failed: {e}")
+        return False
+
+
+def mark_event_processed(event_id: str):
+    """Record that a Slack event has been processed."""
+    if not DATABASE_URL or not event_id:
+        return
+    try:
+        engine = _get_engine()
+        now = datetime.now(timezone.utc)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO processed_events (event_id, processed_at) "
+                    "VALUES (:eid, :ts) "
+                    "ON CONFLICT (event_id) DO NOTHING"
+                ),
+                {"eid": event_id, "ts": now},
+            )
+            # Clean up events older than 24 hours
+            conn.execute(
+                text(
+                    "DELETE FROM processed_events "
+                    "WHERE processed_at < NOW() - INTERVAL '24 hours'"
+                )
+            )
+    except Exception as e:
+        print(f"[DB] mark_event_processed failed: {e}")
 
 
 # ---------------------------------------------------------------------------

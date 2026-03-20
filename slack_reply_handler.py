@@ -44,7 +44,12 @@ from clickup_tasks import (
     FIELD_ZOHO_TICKET_LINK,
     SOURCE_ZOHO_TICKET,
 )
-from database import get_thread, update_thread
+from database import (
+    get_thread,
+    is_event_processed,
+    mark_event_processed,
+    update_thread,
+)
 
 # ---------------------------------------------------------------------------
 # Clients & config
@@ -111,6 +116,7 @@ _ZOHO_AGENT_LABEL = {
 }
 
 # All accepted aliases → canonical key (case-insensitive after .lower())
+# Used for exact dict lookup first, then substring matching as fallback.
 _ASSIGNEE_ALIASES: dict[str, str] = {
     # Sam
     "sam":      "sam",
@@ -120,13 +126,54 @@ _ASSIGNEE_ALIASES: dict[str, str] = {
     # OnlyG
     "onlyg":    "onlyg",
     "only g":   "onlyg",
+    "only-g":   "onlyg",
     "backend":  "onlyg",
+    "back end": "onlyg",
+    "back-end": "onlyg",
+    "g":        "onlyg",
     # Sanjay
     "sanjay":   "sanjay",
+    "san":      "sanjay",
     "frontend": "sanjay",
+    "front end": "sanjay",
+    "front-end": "sanjay",
     # Ron
     "ron":      "ron",
+    "sales":    "ron",
 }
+
+# Phrase patterns that map to Sam (checked via substring)
+_SAM_PHRASES = [
+    "i'll take it", "i will take it",
+    "i'll handle it", "i will handle it",
+    "assign to me", "take it myself",
+]
+
+
+def _resolve_assignee(raw: str) -> str | None:
+    """Resolve a raw name/phrase to a canonical assignee key.
+
+    Tries exact match first, then substring matching against aliases
+    and Sam phrases.
+    """
+    low = raw.lower().strip()
+
+    # 1. Exact match
+    if low in _ASSIGNEE_ALIASES:
+        return _ASSIGNEE_ALIASES[low]
+
+    # 2. Sam phrase match
+    for phrase in _SAM_PHRASES:
+        if phrase in low:
+            return "sam"
+
+    # 3. Substring match — check if any alias appears in the input
+    # Sort by length descending so longer matches win (e.g. "only g" before "g")
+    for alias in sorted(_ASSIGNEE_ALIASES, key=len, reverse=True):
+        if alias in low:
+            return _ASSIGNEE_ALIASES[alias]
+
+    return None
 
 # Keep for any legacy references
 ASSIGNEE_MAP = _ASSIGNEE_IDS
@@ -1062,8 +1109,21 @@ def handle_reply(event: dict):
     """
     Process a Slack message event from a #vome-tickets thread.
 
-    event keys: user, text, thread_ts, channel, files (optional list)
+    event keys: user, text, thread_ts, channel, files (optional list),
+                client_msg_id (optional — used for dedup)
     """
+    # Deduplicate — Slack can deliver the same event multiple times
+    event_id = (
+        event.get("client_msg_id")
+        or event.get("event_ts")
+        or ""
+    )
+    if event_id and is_event_processed(event_id):
+        print(f"[DEDUP] Skipping duplicate event: {event_id}")
+        return
+    if event_id:
+        mark_event_processed(event_id)
+
     thread_ts = event.get("thread_ts")
     channel = event.get("channel")
     text = (event.get("text") or "").strip()
@@ -1558,7 +1618,7 @@ def handle_reply(event: dict):
         assignee_cu_id = None
         if "assign" in commands:
             raw_name = commands["assign"].lower().strip()
-            canonical = _ASSIGNEE_ALIASES.get(raw_name)
+            canonical = _resolve_assignee(raw_name)
             if canonical:
                 assignee_cu_id = _ASSIGNEE_IDS.get(canonical) or None
 
@@ -1577,14 +1637,14 @@ def handle_reply(event: dict):
                 "_", " "
             ).title()
             action_lines.append(
-                f"ClickUp task created in {list_label}: "
-                f"{result['task_url']}"
+                f"ClickUp task created in {list_label}:\n"
+                f"  {result['task_url']}"
             )
 
     # 2. Assign engineer if needed
     if "assign" in commands:
         raw_name = commands["assign"].lower().strip()
-        canonical = _ASSIGNEE_ALIASES.get(raw_name)
+        canonical = _resolve_assignee(raw_name)
         if canonical:
             cu_user_id = _ASSIGNEE_IDS.get(canonical, "")
             zoho_agent_id = _ZOHO_AGENT_IDS.get(canonical, "")
@@ -1648,6 +1708,8 @@ def handle_reply(event: dict):
 
             if cu_user_id or zoho_agent_id:
                 action_lines.append(f"Assigned to: {cu_display}")
+                if canonical in ("onlyg", "sanjay") and task_url:
+                    action_lines.append("Engineering channel notified")
             else:
                 action_lines.append(
                     f"Assign failed: {cu_display} IDs not configured"
