@@ -1189,8 +1189,9 @@ def _parse_with_claude(text: str, thread_data: dict) -> dict:
         "-> extract priority (map high=p1, medium=p2, low=p3)\n"
         "- If message is ambiguous and you cannot determine intent "
         "-> needs_clarification: true, ask ONE specific question\n"
-        "- create_task: true whenever assign_to is set OR task_list "
-        "is specified OR priority is set standalone\n"
+        "- create_task: true ONLY when assign_to is set OR task_list "
+        "is specified OR priority is set standalone. "
+        "Do NOT set create_task to true for draft-only or close-only requests.\n"
         "- client_response: only if Sam provides exact text to send "
         "verbatim (e.g. after 'send:' or 'reply:'). Otherwise null.\n"
         "- close_ticket: true only if Sam explicitly says to close "
@@ -1928,6 +1929,12 @@ def handle_reply(event: dict):
     if commands.get("assign") or task_list_key or commands.get("priority"):
         wants_task = True
 
+    # Do NOT create a task when the only intent is drafting or closing
+    if wants_task and not (
+        commands.get("assign") or task_list_key or commands.get("priority")
+    ):
+        wants_task = False
+
     # Nothing actionable at all
     if (
         not commands
@@ -2132,8 +2139,31 @@ def handle_reply(event: dict):
                 action_lines, draft=draft_text, close_after=close_after
             ),
         )
+    elif close_after and not wants_draft:
+        # Close-only with no draft requested — close ticket directly
+        zoho_base = "https://desk.zoho.com/support/vomevolunteer"
+        zoho_url = f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
+        status_ok = _zoho_set_status(ticket_id, "Closed")
+        if clickup_task_id:
+            _cu_update_task(clickup_task_id, {"status": "FINISHED"})
+        _set_thread_status(thread_ts, "handled")
+        if status_ok:
+            cu_line = (
+                "\n✓ ClickUp marked FINISHED"
+                if clickup_task_id else ""
+            )
+            _reply(
+                channel, thread_ts,
+                f"✓ Zoho ticket closed{cu_line}\n"
+                f"View in Zoho: {zoho_url}",
+            )
+        else:
+            _reply(
+                channel, thread_ts,
+                f"⚠ Zoho status update failed — close manually:\n{zoho_url}",
+            )
     elif close_after:
-        # Close-only with no other actions — generate a draft
+        # Close with draft — generate a closing message first
         try:
             draft_text = _generate_draft_from_instruction(
                 ticket_id, "close the ticket with a brief confirmation"
