@@ -329,7 +329,7 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
         draft = (
             f"Hi {first_name}, the issue you reported has been resolved "
             "and the fix is now live. Let us know if anything else comes up.\n"
-            "Best, Sam | Vome team"
+            "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
         )
 
     # Step 5 — find existing Slack thread or create new one

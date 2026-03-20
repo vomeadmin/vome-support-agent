@@ -170,7 +170,11 @@ def _resolve_assignee(raw: str) -> str | None:
     # 3. Substring match — check if any alias appears in the input
     # Sort by length descending so longer matches win (e.g. "only g" before "g")
     for alias in sorted(_ASSIGNEE_ALIASES, key=len, reverse=True):
-        if alias in low:
+        # For single-char aliases like "g", require word boundary
+        if len(alias) <= 2:
+            if re.search(rf"\b{re.escape(alias)}\b", low):
+                return _ASSIGNEE_ALIASES[alias]
+        elif alias in low:
             return _ASSIGNEE_ALIASES[alias]
 
     return None
@@ -763,7 +767,7 @@ def _generate_draft_from_instruction(
         "Write a clean client-facing response following the voice guidelines "
         "in the system prompt. Keep it short and warm. "
         "Do not use em-dash. "
-        "Sign off: Best, Sam | Vome team"
+        "Sign off: Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
     )
 
     response = _anthropic.messages.create(
@@ -946,8 +950,10 @@ def _parse_commands(text: str) -> tuple[dict, str]:
         commands["priority"] = m.group(1).lower()
         remaining = remaining[:m.start()] + remaining[m.end():]
 
-    # assign [name]
-    m = re.search(r"\bassign\s+(\w+)", remaining, re.IGNORECASE)
+    # assign [name] — capture one or two words to handle "Only G"
+    m = re.search(
+        r"\bassign\s+(?:to\s+)?(\w+(?:\s+\w)?)", remaining, re.IGNORECASE
+    )
     if m:
         commands["assign"] = m.group(1)
         remaining = remaining[:m.start()] + remaining[m.end():]
@@ -1606,6 +1612,7 @@ def handle_reply(event: dict):
     # -----------------------------------------------------------------------
 
     action_lines: list[str] = []
+    task_just_created = False
 
     # 1. Create ClickUp task if needed
     target_list = (
@@ -1632,6 +1639,7 @@ def handle_reply(event: dict):
         )
         if result:
             clickup_task_id = result["task_id"]
+            task_just_created = True
             _update_thread_clickup_id(thread_ts, clickup_task_id)
             list_label = (task_list_key or "priority_queue").replace(
                 "_", " "
@@ -1645,6 +1653,10 @@ def handle_reply(event: dict):
     if "assign" in commands:
         raw_name = commands["assign"].lower().strip()
         canonical = _resolve_assignee(raw_name)
+        print(
+            f"[ASSIGN] raw='{commands['assign']}' "
+            f"lower='{raw_name}' canonical={canonical}"
+        )
         if canonical:
             cu_user_id = _ASSIGNEE_IDS.get(canonical, "")
             zoho_agent_id = _ZOHO_AGENT_IDS.get(canonical, "")
@@ -1654,9 +1666,9 @@ def handle_reply(event: dict):
             task_url = None
 
             if clickup_task_id and cu_user_id:
-                # Task already exists (or was just created above)
-                # — just add assignee if not already done during creation
-                if not wants_task:
+                # Only skip update if task was just created with
+                # this assignee already set during creation
+                if not task_just_created:
                     _cu_update_task(
                         clickup_task_id,
                         {"assignees": {"add": [int(cu_user_id)]}},
