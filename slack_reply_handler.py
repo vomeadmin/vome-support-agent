@@ -219,6 +219,39 @@ _INTERNAL_KEYWORDS = {
     "route", "fix",
 }
 
+# Phrases that indicate a test / placeholder / garbage message that should
+# never be emailed to a real client.
+_JUNK_SEND_PATTERNS = [
+    r"\btest\s*(reply|email|message|response)\b",
+    r"\bplease\s+ignore\b",
+    r"\bignore\s+this\b",
+    r"\btest\s*$",                    # message that is just "test"
+    r"^\s*test\s*$",                  # standalone "test"
+    r"\bdo\s+not\s+send\b",
+    r"\bdon'?t\s+send\b",
+    r"\blorem\s+ipsum\b",
+    r"\basdf\b",
+    r"\bplaceholder\b",
+    r"\btesting\s+1\s*2\s*3\b",
+    r"\bfoo\s*bar\b",
+    r"\bhello\s+world\b",
+]
+_JUNK_SEND_RE = re.compile(
+    "|".join(_JUNK_SEND_PATTERNS), re.IGNORECASE
+)
+
+
+def _is_junk_content(text: str) -> str | None:
+    """Return a reason string if *text* looks like test/junk, else None."""
+    stripped = text.strip()
+    # Very short messages are suspicious
+    if len(stripped) < 10:
+        return "Message is too short to be a real client reply"
+    m = _JUNK_SEND_RE.search(stripped)
+    if m:
+        return f"Message matches blocked pattern: '{m.group()}'"
+    return None
+
 # Patterns that signal Sam is proposing a re-draft inline.
 # Captures everything after the colon as the client-facing text.
 _REPHRASE_RE = re.compile(
@@ -442,6 +475,14 @@ def _send_client_reply(
     This actually emails the client — do NOT use for internal notes.
     Internal notes use ZohoDesk_createTicketComment with isPublic=False.
     """
+    # Last-resort guard: never send junk/test content to a client
+    junk_reason = _is_junk_content(content)
+    if junk_reason:
+        print(
+            f"[SEND] BLOCKED — Zoho ticket {ticket_id}: {junk_reason}"
+        )
+        return False
+
     body: dict = {
         "channel": "EMAIL",
         "fromEmailAddress": ZOHO_FROM_ADDRESS,
@@ -462,15 +503,23 @@ def _send_client_reply(
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
     })
 
-    if result:
-        print(
-            f"[SEND] Success — Zoho ticket {ticket_id}: {result}"
-        )
-        return True
-    print(
-        f"[SEND] FAILED — Zoho ticket {ticket_id}, result was: {result}"
-    )
-    return False
+    if not result:
+        print(f"[SEND] FAILED — Zoho ticket {ticket_id}, no result")
+        return False
+
+    # Check for MCP-level isError flag (Zoho returns errors as content)
+    if isinstance(result, dict) and result.get("isError"):
+        print(f"[SEND] FAILED — Zoho ticket {ticket_id}: {result}")
+        return False
+
+    # Also check unwrapped content for Zoho error codes
+    data = _unwrap_mcp_result(result)
+    if isinstance(data, dict) and data.get("errorCode"):
+        print(f"[SEND] FAILED — Zoho ticket {ticket_id}: {data}")
+        return False
+
+    print(f"[SEND] Success — Zoho ticket {ticket_id}")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1415,12 +1464,30 @@ def handle_reply(event: dict):
     # -----------------------------------------------------------------------
 
     if text_lower == "confirm":
-        pending = _pop_pending_send(thread_ts)
+        # Always read the latest pending_send from the DB — not a stale
+        # local copy — so we always send the most recent draft.
+        _fresh = get_thread(thread_ts) or {}
+        pending = _fresh.get("pending_send")
         if not pending:
             _reply(
                 channel, thread_ts,
                 "Nothing pending to confirm.\n"
                 "Reply in plain English to take action.",
+            )
+            return
+        # Clear it now (same as _pop_pending_send, but we already fetched)
+        update_thread(thread_ts, pending_send=None)
+
+        # --- Content validation: block junk / test messages ---
+        junk_reason = _is_junk_content(pending)
+        if junk_reason:
+            # Re-store so Sam can fix and retry
+            update_thread(thread_ts, pending_send=pending)
+            _reply(
+                channel, thread_ts,
+                f"Blocked — this doesn't look like a real client reply.\n"
+                f"Reason: {junk_reason}\n\n"
+                "Please write a proper response and try again.",
             )
             return
 
@@ -1432,7 +1499,12 @@ def handle_reply(event: dict):
             f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
         )
 
-        sent_ok = _send_client_reply(ticket_id, pending)
+        # Fetch contact email so Zoho sendReply has a recipient
+        _ticket_raw = fetch_ticket_from_zoho(ticket_id)
+        _fields = _extract_ticket_fields(_ticket_raw) if _ticket_raw else {}
+        _to = _fields.get("contact_email", "")
+
+        sent_ok = _send_client_reply(ticket_id, pending, to_email=_to)
         if not sent_ok:
             # Re-store the pending message so Sam can retry
             _store_pending_send(thread_ts, pending, close_after=close_after)

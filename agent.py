@@ -469,11 +469,21 @@ def post_draft_reply(ticket_id: str, content: str, to_email: str = "") -> bool:
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
     })
 
-    if result:
-        print(f"Draft reply saved on Zoho ticket {ticket_id} -- success")
-        return True
-    print(f"Failed to save draft reply on Zoho ticket {ticket_id}")
-    return False
+    if not result:
+        print(f"Failed to save draft reply on Zoho ticket {ticket_id}")
+        return False
+
+    if isinstance(result, dict) and result.get("isError"):
+        print(f"Failed to save draft reply on Zoho ticket {ticket_id}: {result}")
+        return False
+
+    data = _unwrap_mcp_result(result)
+    if isinstance(data, dict) and data.get("errorCode"):
+        print(f"Failed to save draft reply on Zoho ticket {ticket_id}: {data}")
+        return False
+
+    print(f"Draft reply saved on Zoho ticket {ticket_id} -- success")
+    return True
 
 
 def post_to_zoho(ticket_id: str, agent_response: str) -> bool:
@@ -495,10 +505,20 @@ def post_to_zoho(ticket_id: str, agent_response: str) -> bool:
         },
     })
 
-    if result:
-        print(f"Internal note posted to Zoho ticket {ticket_id} -- success")
-        return True
-    return False
+    if not result:
+        return False
+
+    if isinstance(result, dict) and result.get("isError"):
+        print(f"Internal note FAILED on Zoho ticket {ticket_id}: {result}")
+        return False
+
+    data = _unwrap_mcp_result(result)
+    if isinstance(data, dict) and data.get("errorCode"):
+        print(f"Internal note FAILED on Zoho ticket {ticket_id}: {data}")
+        return False
+
+    print(f"Internal note posted to Zoho ticket {ticket_id} -- success")
+    return True
 
 
 def _get_latest_client_reply(conversations_result, contact_email: str) -> str:
