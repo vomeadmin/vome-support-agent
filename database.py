@@ -49,6 +49,7 @@ ticket_threads = Table(
     Column("classification", JSONB, default={}),
     Column("crm", JSONB, default={}),
     Column("pending_send", Text, nullable=True),
+    Column("pending_draft", Text, nullable=True),
     Column("close_after_send", String, default="false"),
     Column("created_at", DateTime, default=datetime.now(timezone.utc)),
     Column("updated_at", DateTime, default=datetime.now(timezone.utc)),
@@ -81,6 +82,15 @@ def init_db():
     try:
         engine = _get_engine()
         _metadata.create_all(engine)
+        # Migrate: add pending_draft column if missing
+        with engine.begin() as conn:
+            try:
+                conn.execute(text(
+                    "ALTER TABLE ticket_threads "
+                    "ADD COLUMN IF NOT EXISTS pending_draft TEXT"
+                ))
+            except Exception:
+                pass  # Column already exists or DB doesn't support IF NOT EXISTS
         print("Database initialized — ticket_threads table ready")
     except Exception as e:
         print(f"WARNING: Database connection failed — {e}")
@@ -369,6 +379,7 @@ def _row_to_dict(row) -> dict:
         "classification": classification or {},
         "crm": crm or {},
         "pending_send": row["pending_send"],
+        "pending_draft": row.get("pending_draft"),
         "close_after_send": row["close_after_send"] == "true",
         "date": (
             row["created_at"].strftime("%Y-%m-%d")

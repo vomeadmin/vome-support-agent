@@ -185,6 +185,32 @@ ASSIGNEE_MAP = _ASSIGNEE_IDS
 # Custom field IDs imported from clickup_tasks:
 # FIELD_HIGHEST_TIER, FIELD_COMBINED_ARR, FIELD_AUTO_SCORE
 
+# Standard signature block
+_SIGNATURE = "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+
+# Patterns that mean Sam wants the previous draft back
+_RESTORE_DRAFT_RE = re.compile(
+    r"\b(?:"
+    r"you had it before|go back to that|use that one"
+    r"|the previous version|previous draft|restore"
+    r"|that was better|go back|the one before"
+    r"|last draft|original draft|earlier draft"
+    r"|what did you have|what was the draft"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Patterns that mean Sam wants greeting + signature wrapped around text
+_WRAP_RE = re.compile(
+    r"\b(?:"
+    r"keep hi|add hi|add greeting|add signature|add sig"
+    r"|wrap it|add the greeting|keep the greeting"
+    r"|just add hi|add hi \w+ \+ sig"
+    r"|keep .+ \+ signature|add .+ \+ sig"
+    r")\b",
+    re.IGNORECASE,
+)
+
 # Words that signal an internal instruction — never send to client
 _INTERNAL_KEYWORDS = {
     "assign", "clickup", "priority", "score",
@@ -351,6 +377,7 @@ def _store_pending_send(
     update_thread(
         thread_ts,
         pending_send=message,
+        pending_draft=message,  # Always keep a copy for recall
         close_after_send="true" if close_after else "false",
     )
 
@@ -364,6 +391,25 @@ def _pop_pending_send(thread_ts: str) -> str | None:
     if msg is not None:
         update_thread(thread_ts, pending_send=None)
     return msg
+
+
+def _get_pending_draft(thread_ts: str) -> str | None:
+    """Retrieve the last draft shown to Sam (never cleared)."""
+    entry = get_thread(thread_ts)
+    if not entry:
+        return None
+    return entry.get("pending_draft")
+
+
+def _wrap_with_greeting_sig(
+    body: str, contact_name: str = ""
+) -> str:
+    """Wrap Sam's exact text with Hi [name] greeting and signature.
+
+    Does NOT rewrite or change any of Sam's words.
+    """
+    first_name = contact_name.split()[0] if contact_name else "there"
+    return f"Hi {first_name},\n\n{body}\n\n{_SIGNATURE}"
 
 
 def _has_internal_keyword(text: str) -> bool:
@@ -1040,6 +1086,9 @@ def _parse_with_claude(text: str, thread_data: dict) -> dict:
         '  "close_ticket": false or true,\n'
         '  "skip": false or true,\n'
         '  "client_response": null or string,\n'
+        '  "verbatim_text": null or string,\n'
+        '  "wrap_with_greeting": false or true,\n'
+        '  "restore_draft": false or true,\n'
         '  "needs_clarification": false or true,\n'
         '  "clarification_question": null or string\n'
         "}\n\n"
@@ -1047,6 +1096,14 @@ def _parse_with_claude(text: str, thread_data: dict) -> dict:
         "- If message mentions drafting, writing, sending, "
         "responding to client -> generate_draft: true, and put "
         "the gist of what Sam wants to say in draft_instruction\n"
+        "- If Sam provides EXACT text he wants sent to the client "
+        "(e.g. 'for the email say...' or 'tell them:' followed by "
+        "the response body), put that exact text in verbatim_text. "
+        "Do NOT put it in client_response or draft_instruction.\n"
+        "- If Sam says to add greeting, add Hi, add signature, "
+        "wrap it, keep Hi + sig -> wrap_with_greeting: true\n"
+        "- If Sam says go back, previous draft, restore, "
+        "use that one, you had it before -> restore_draft: true\n"
         "- If message mentions assigning, routing, OnlyG, Sanjay, "
         "backend, frontend -> extract assign_to\n"
         "- If message mentions a number in context of score/"
@@ -1501,6 +1558,80 @@ def handle_reply(event: dict):
         return
 
     # -----------------------------------------------------------------------
+    # Restore previous draft — Sam wants the last draft back
+    # -----------------------------------------------------------------------
+
+    if _RESTORE_DRAFT_RE.search(text):
+        prev = _get_pending_draft(thread_ts)
+        if prev:
+            _store_pending_send(thread_ts, prev)
+            _reply(
+                channel, thread_ts,
+                "Here's the previous draft:\n"
+                "─────────────────────────────────────\n"
+                f"{prev}\n"
+                "─────────────────────────────────────\n"
+                "Reply `confirm` to send\n"
+                "Reply `cancel` to hold",
+            )
+        else:
+            _reply(
+                channel, thread_ts,
+                "No previous draft found for this ticket.",
+            )
+        return
+
+    # -----------------------------------------------------------------------
+    # Wrap — Sam wants greeting + signature added to previous text
+    # -----------------------------------------------------------------------
+
+    if _WRAP_RE.search(text):
+        prev = _get_pending_draft(thread_ts)
+        if prev:
+            # Strip existing greeting/signature if present
+            body = prev
+            # Remove leading "Hi [name]," if present
+            body = re.sub(
+                r"^Hi\s+\w+,?\s*\n*", "", body, flags=re.IGNORECASE
+            ).strip()
+            # Remove trailing signature if present
+            body = re.sub(
+                r"\n*Best,?\s*\n.*$", "", body,
+                flags=re.IGNORECASE | re.DOTALL,
+            ).strip()
+            # Get contact name from thread data
+            contact_name = ""
+            crm_data = thread_data.get("crm", {})
+            if crm_data.get("account_name"):
+                contact_name = crm_data["account_name"]
+            # Also try classification for contact info
+            cls = thread_data.get("classification", {})
+            summary = cls.get("issue_summary", "")
+            # Try to extract first name from summary
+            name_m = re.match(r"(\w+)\s+from\s+", summary)
+            if name_m:
+                contact_name = name_m.group(1)
+
+            wrapped = _wrap_with_greeting_sig(body, contact_name)
+            _store_pending_send(thread_ts, wrapped)
+            _reply(
+                channel, thread_ts,
+                "Wrapped with greeting + signature:\n"
+                "─────────────────────────────────────\n"
+                f"{wrapped}\n"
+                "─────────────────────────────────────\n"
+                "Reply `confirm` to send\n"
+                "Reply `cancel` to hold",
+            )
+        else:
+            _reply(
+                channel, thread_ts,
+                "No previous text to wrap. "
+                "Send the response text first, then ask me to wrap it.",
+            )
+        return
+
+    # -----------------------------------------------------------------------
     # Explicit note: / add note: — ONLY these add to ClickUp notes.
     # -----------------------------------------------------------------------
 
@@ -1526,6 +1657,87 @@ def handle_reply(event: dict):
 
     # Always run Claude NLP to catch natural language intent
     nl = _parse_with_claude(text, thread_data)
+
+    # Handle NLP-detected restore/wrap before other processing
+    if nl.get("restore_draft") and not commands:
+        prev = _get_pending_draft(thread_ts)
+        if prev:
+            _store_pending_send(thread_ts, prev)
+            _reply(
+                channel, thread_ts,
+                "Here's the previous draft:\n"
+                "─────────────────────────────────────\n"
+                f"{prev}\n"
+                "─────────────────────────────────────\n"
+                "Reply `confirm` to send\n"
+                "Reply `cancel` to hold",
+            )
+        else:
+            _reply(
+                channel, thread_ts,
+                "No previous draft found for this ticket.",
+            )
+        return
+
+    if nl.get("wrap_with_greeting") and not commands:
+        prev = _get_pending_draft(thread_ts)
+        if prev:
+            body = prev
+            body = re.sub(
+                r"^Hi\s+\w+,?\s*\n*", "", body, flags=re.IGNORECASE
+            ).strip()
+            body = re.sub(
+                r"\n*Best,?\s*\n.*$", "", body,
+                flags=re.IGNORECASE | re.DOTALL,
+            ).strip()
+            # Extract contact first name from thread data
+            contact_name = ""
+            cls = thread_data.get("classification", {})
+            summary = cls.get("issue_summary", "")
+            name_m = re.match(r"(\w+)\s+from\s+", summary)
+            if name_m:
+                contact_name = name_m.group(1)
+            wrapped = _wrap_with_greeting_sig(body, contact_name)
+            _store_pending_send(thread_ts, wrapped)
+            _reply(
+                channel, thread_ts,
+                "Wrapped with greeting + signature:\n"
+                "─────────────────────────────────────\n"
+                f"{wrapped}\n"
+                "─────────────────────────────────────\n"
+                "Reply `confirm` to send\n"
+                "Reply `cancel` to hold",
+            )
+        else:
+            _reply(
+                channel, thread_ts,
+                "No previous text to wrap. "
+                "Send the response text first.",
+            )
+        return
+
+    # Handle verbatim text — Sam provided exact response body
+    if nl.get("verbatim_text") and not commands:
+        verbatim = nl["verbatim_text"]
+        # Extract contact first name
+        contact_name = ""
+        cls = thread_data.get("classification", {})
+        summary = cls.get("issue_summary", "")
+        name_m = re.match(r"(\w+)\s+from\s+", summary)
+        if name_m:
+            contact_name = name_m.group(1)
+        wrapped = _wrap_with_greeting_sig(verbatim, contact_name)
+        _store_pending_send(thread_ts, wrapped)
+        _reply(
+            channel, thread_ts,
+            "Draft ready — not sent yet:\n"
+            "─────────────────────────────────────\n"
+            f"{wrapped}\n"
+            "─────────────────────────────────────\n"
+            "Reply `confirm` to send\n"
+            "Reply `cancel` to hold",
+        )
+        return
 
     # Merge: Claude results fill in anything exact parsing missed
     if nl.get("needs_clarification") and not commands and not nl.get("skip"):
