@@ -18,6 +18,24 @@ client = anthropic.Anthropic()
 
 SYSTEM_PROMPT = (Path(__file__).parent / "system_prompt.md").read_text(encoding="utf-8")
 
+# Load response templates so Claude can reference them when drafting replies
+_templates_path = Path(__file__).parent / "response_templates.md"
+if _templates_path.exists():
+    _templates_content = _templates_path.read_text(encoding="utf-8")
+    SYSTEM_PROMPT += (
+        "\n\n---\n\n"
+        "## RESPONSE TEMPLATES\n\n"
+        "The following are proven response templates for common support "
+        "scenarios. When drafting a reply, check if a template fits the "
+        "situation. If one does, use it as the base and personalize with "
+        "the client's name and specific details from the ticket. You may "
+        "adapt the wording to fit context, but preserve key links and "
+        "instructions from the template. If Sam references a template by "
+        "name (e.g. 'use the ForgotPassword template'), use that template "
+        "as the foundation for the draft.\n\n"
+        f"{_templates_content}"
+    )
+
 ZOHO_MCP_URL = os.environ.get("ZOHO_MCP_URL", "")
 ZOHO_MCP_TOKEN = os.environ.get("ZOHO_MCP_TOKEN", "")
 ZOHO_ORG_ID = os.environ.get("ZOHO_ORG_ID", "")
