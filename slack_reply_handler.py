@@ -94,8 +94,8 @@ _ZOHO_AGENT_IDS = {
 # Canonical key → Zoho ticket status after assignment
 _ZOHO_STATUS = {
     "sam":    "Processing",
-    "onlyg":  "Pending Dev Fix",
-    "sanjay": "Pending Dev Fix",
+    "onlyg":  "Pending Developer Fix",
+    "sanjay": "Pending Developer Fix",
     "ron":    "Processing",
 }
 
@@ -1584,9 +1584,9 @@ def handle_reply(event: dict):
                 )
         else:
             # No ClickUp task — just send and update Zoho status
-            status_ok = _zoho_set_status(ticket_id, "Awaiting Reply")
+            status_ok = _zoho_set_status(ticket_id, "Awaiting Client Response")
             status_line = (
-                "✓ Zoho status → Awaiting Reply"
+                "✓ Zoho status → Awaiting Client Response"
                 if status_ok
                 else "⚠ Zoho status update failed — update manually"
             )
