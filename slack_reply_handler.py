@@ -156,6 +156,21 @@ _EXPLICIT_NOTE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Patterns that mean Sam wants to see the ticket content.
+_SHOW_TICKET_RE = re.compile(
+    r"\b(?:"
+    r"what\s+did\s+(?:she|he|they)\s+say"
+    r"|what\s+(?:was|is)\s+the\s+(?:message|issue|ticket|problem|request)"
+    r"|what\s+exactly\s+did\s+they\s+(?:write|say|send)"
+    r"|show\s+me\s+the\s+ticket"
+    r"|can\s+you\s+(?:show|provide)"
+    r"|(?:she|he|they|the\s+client)\s+said"
+    r"|more\s+details"
+    r"|tell\s+me\s+more"
+    r")",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # ClickUp REST helpers
@@ -1026,6 +1041,25 @@ def handle_reply(event: dict):
             f"Ready to send to client:\n\"{preview}\"\n\n"
             "Reply `confirm` to send or `cancel` to discard.",
         )
+        return
+
+    # -----------------------------------------------------------------------
+    # Show ticket — Sam asking to see ticket content.
+    # -----------------------------------------------------------------------
+
+    if _SHOW_TICKET_RE.search(text):
+        try:
+            convo = _format_conversation_for_slack(ticket_id, thread_data)
+            footer = (
+                "Reply `draft` for a suggested response\n"
+                "or `send: [your message]` to respond directly"
+            )
+            _reply(channel, thread_ts, f"{convo}\n{footer}")
+        except Exception as e:
+            _reply(
+                channel, thread_ts,
+                f"Could not fetch conversation: {e}",
+            )
         return
 
     # -----------------------------------------------------------------------
