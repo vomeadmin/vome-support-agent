@@ -12,7 +12,8 @@ import httpx
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-from slack_ticket_brief import _load_thread_map, CHANNEL_TICKETS
+from slack_ticket_brief import CHANNEL_TICKETS
+from database import get_all_threads
 
 _slack = WebClient(token=os.environ.get("SLACK_BOT_TOKEN", ""))
 
@@ -72,7 +73,7 @@ def send_daily_digest():
         return
 
     today = _today_str()
-    thread_map = _load_thread_map()
+    thread_map = get_all_threads()
 
     # Partition today's tickets by status
     handled: list[dict] = []

@@ -1,54 +1,13 @@
-import json
 import os
 import re
-from datetime import datetime, timezone
-from pathlib import Path
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
+from database import save_thread, get_thread
+
 _slack = WebClient(token=os.environ.get("SLACK_BOT_TOKEN", ""))
 CHANNEL_TICKETS = os.environ.get("SLACK_TICKETS_CHANNEL", "")
-
-THREAD_MAP_PATH = Path(__file__).parent / "thread_map.json"
-
-
-def _load_thread_map() -> dict:
-    if THREAD_MAP_PATH.exists():
-        try:
-            return json.loads(THREAD_MAP_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {}
-
-
-def _save_thread_map(data: dict):
-    THREAD_MAP_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
-def save_thread_mapping(
-    thread_ts: str,
-    ticket_id: str,
-    ticket_number: str,
-    subject: str,
-    clickup_task_id: str | None = None,
-    classification: dict | None = None,
-    crm: dict | None = None,
-):
-    """Persist thread_ts → ticket metadata in thread_map.json."""
-    data = _load_thread_map()
-    data[thread_ts] = {
-        "ticket_id": ticket_id,
-        "ticket_number": ticket_number,
-        "clickup_task_id": clickup_task_id,
-        "subject": subject,
-        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "channel": CHANNEL_TICKETS,
-        "status": "open",
-        "classification": classification or {},
-        "crm": crm or {},
-    }
-    _save_thread_map(data)
 
 
 def _extract_from_response(agent_response: str, field: str) -> str:
@@ -229,11 +188,12 @@ def send_ticket_brief(
             f" thread_ts={thread_ts}"
         )
 
-        save_thread_mapping(
+        save_thread(
             thread_ts=thread_ts,
             ticket_id=ticket_id,
             ticket_number=ticket_number,
             subject=subject,
+            channel=CHANNEL_TICKETS,
             clickup_task_id=clickup_task_id,
             classification={
                 "type": classification,

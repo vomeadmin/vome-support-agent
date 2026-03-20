@@ -6,3 +6,5 @@ httpx
 chromadb
 slack-sdk
 apscheduler
+psycopg2-binary
+sqlalchemy

@@ -44,7 +44,7 @@ from clickup_tasks import (
     FIELD_ZOHO_TICKET_LINK,
     SOURCE_ZOHO_TICKET,
 )
-from slack_ticket_brief import _load_thread_map, _save_thread_map
+from database import get_thread, update_thread
 
 # ---------------------------------------------------------------------------
 # Clients & config
@@ -290,32 +290,28 @@ def _reply(channel: str, thread_ts: str, text: str):
 # ---------------------------------------------------------------------------
 
 def _set_thread_status(thread_ts: str, status: str):
-    data = _load_thread_map()
-    if thread_ts in data:
-        data[thread_ts]["status"] = status
-        _save_thread_map(data)
+    update_thread(thread_ts, status=status)
 
 
 def _store_pending_send(
     thread_ts: str, message: str, close_after: bool = False
 ):
     """Save a client message that needs Sam's `confirm` before sending."""
-    data = _load_thread_map()
-    if thread_ts in data:
-        data[thread_ts]["pending_send"] = message
-        data[thread_ts]["close_after_send"] = close_after
-        _save_thread_map(data)
+    update_thread(
+        thread_ts,
+        pending_send=message,
+        close_after_send="true" if close_after else "false",
+    )
 
 
 def _pop_pending_send(thread_ts: str) -> str | None:
     """Return and clear the pending client message, or None if absent."""
-    data = _load_thread_map()
-    entry = data.get(thread_ts)
+    entry = get_thread(thread_ts)
     if not entry:
         return None
-    msg = entry.pop("pending_send", None)
+    msg = entry.get("pending_send")
     if msg is not None:
-        _save_thread_map(data)
+        update_thread(thread_ts, pending_send=None)
     return msg
 
 
@@ -413,11 +409,8 @@ def _zoho_set_status(ticket_id: str, status: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _update_thread_clickup_id(thread_ts: str, task_id: str):
-    """Persist a newly created ClickUp task ID into thread_map.json."""
-    data = _load_thread_map()
-    if thread_ts in data:
-        data[thread_ts]["clickup_task_id"] = task_id
-        _save_thread_map(data)
+    """Persist a newly created ClickUp task ID into the database."""
+    update_thread(thread_ts, clickup_task_id=task_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1079,7 +1072,7 @@ def handle_reply(event: dict):
     if not thread_ts or not channel:
         return
 
-    thread_data = _load_thread_map().get(thread_ts)
+    thread_data = get_thread(thread_ts)
     if not thread_data:
         return  # Not a known ticket brief thread — ignore
 
@@ -1151,10 +1144,7 @@ def handle_reply(event: dict):
         _pop_pending_send(thread_ts)
         if thread_data.get("status") == "on_prod_pending":
             # Mark as on_prod_cancelled so digest flags it
-            data = _load_thread_map()
-            if thread_ts in data:
-                data[thread_ts]["status"] = "on_prod_cancelled"
-                _save_thread_map(data)
+            update_thread(thread_ts, status="on_prod_cancelled")
             _reply(
                 channel, thread_ts,
                 "Held — will appear in tonight's digest"
@@ -1312,10 +1302,7 @@ def handle_reply(event: dict):
 
         # Clear close_after_send flag
         if close_after:
-            data = _load_thread_map()
-            if thread_ts in data:
-                data[thread_ts]["close_after_send"] = False
-                _save_thread_map(data)
+            update_thread(thread_ts, close_after_send="false")
 
         zoho_base = "https://desk.zoho.com/support/vomevolunteer"
         zoho_url = (

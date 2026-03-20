@@ -26,11 +26,12 @@ from agent import (
     fetch_ticket_conversations,
     fetch_ticket_from_zoho,
 )
-from slack_ticket_brief import (
-    CHANNEL_TICKETS,
-    _load_thread_map,
-    _save_thread_map,
-    save_thread_mapping,
+from slack_ticket_brief import CHANNEL_TICKETS
+from database import (
+    get_thread,
+    get_thread_by_ticket_id,
+    save_thread,
+    update_thread,
 )
 
 _anthropic = anthropic.Anthropic()
@@ -106,27 +107,20 @@ def update_clickup_status_finished(task_id: str) -> bool:
 
 def _find_thread_ts(zoho_ticket_id: str) -> str | None:
     """Return the Slack thread_ts for this Zoho ticket, or None."""
-    thread_map = _load_thread_map()
-    for ts, entry in thread_map.items():
-        if str(entry.get("ticket_id", "")) == str(zoho_ticket_id):
-            return ts
+    result = get_thread_by_ticket_id(zoho_ticket_id)
+    if result:
+        return result[0]
     return None
 
 
 def set_thread_on_prod_pending(thread_ts: str):
     """Mark a thread as awaiting client notification after ON PROD."""
-    data = _load_thread_map()
-    if thread_ts in data:
-        data[thread_ts]["status"] = "on_prod_pending"
-        _save_thread_map(data)
+    update_thread(thread_ts, status="on_prod_pending")
 
 
 def _store_pending_send(thread_ts: str, message: str):
-    """Persist the resolution draft as pending_send in thread_map."""
-    data = _load_thread_map()
-    if thread_ts in data:
-        data[thread_ts]["pending_send"] = message
-        _save_thread_map(data)
+    """Persist the resolution draft as pending_send in the database."""
+    update_thread(thread_ts, pending_send=message)
 
 
 # ---------------------------------------------------------------------------
@@ -257,11 +251,12 @@ def _create_new_thread(
     try:
         resp = _slack.chat_postMessage(channel=CHANNEL_TICKETS, text=text)
         thread_ts = resp["ts"]
-        save_thread_mapping(
+        save_thread(
             thread_ts=thread_ts,
             ticket_id=zoho_ticket_id,
             ticket_number=zoho_ticket_id,
             subject=subject,
+            channel=CHANNEL_TICKETS,
             clickup_task_id=clickup_task_id,
         )
         return thread_ts
@@ -341,7 +336,7 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
     thread_ts = _find_thread_ts(zoho_ticket_id)
 
     if thread_ts:
-        thread_entry = _load_thread_map().get(thread_ts, {})
+        thread_entry = get_thread(thread_ts) or {}
         ticket_number = thread_entry.get("ticket_number") or zoho_ticket_id
         posted = _post_to_existing_thread(
             thread_ts=thread_ts,

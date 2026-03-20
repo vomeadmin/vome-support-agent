@@ -69,5 +69,27 @@
       "found": false,
       "contact_type": "volunteer"
     }
+  },
+  "1773969268.320269": {
+    "ticket_id": "569440000036858536",
+    "ticket_number": "6680",
+    "clickup_task_id": null,
+    "subject": "Data File not uploading",
+    "date": "2026-03-20",
+    "channel": "C0AMTJA2UTE",
+    "status": "open",
+    "classification": {
+      "type": "Bug \u2014 Backend / Data",
+      "module": "Data and Reporting",
+      "platform": "Web",
+      "priority": "P3",
+      "auto_score": "5",
+      "suggested_owner": "OnlyG",
+      "issue_summary": "Doris from Cedar Chest Thrift Store is having trouble uploading a data file to the database but isn't sure what needs to be changed. [Attachment included \u2014 likely contains important context]"
+    },
+    "crm": {
+      "found": false,
+      "contact_type": "volunteer"
+    }
   }
 }

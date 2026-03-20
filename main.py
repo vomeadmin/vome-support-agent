@@ -15,6 +15,7 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request, Response
 
 from agent import process_ticket, process_ticket_update
+from database import init_db
 from field_feedback import handle_field_feedback
 from on_prod_handler import handle_on_prod
 from slack_reply_handler import handle_reply
@@ -82,6 +83,7 @@ def _build_ticket_data(ticket: dict) -> dict:
     }
 
 _check_env()
+init_db()
 
 app = FastAPI(title="Vome Support Agent")
 
