@@ -169,52 +169,27 @@ def send_ticket_brief(
         or "(pending)"
     )
 
-    # --- Assemble brief ---
-    divider = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    brief = (
-        f"{divider}\n"
-        f"🎫 *#{ticket_number} — {subject}*\n\n"
-        f"*WHO:* {account} | {tier} | {arr_display}\n"
-        f"{who_line2}\n"
+    # --- Assemble brief (mobile-first, no separators) ---
+
+    # Contact display name for first line
+    display_name = contact_name or (
+        "Admin" if crm.get("found") else "Volunteer"
     )
 
+    brief = f"🎫 *#{ticket_number} — {subject}*\n"
+    brief += f"{display_name} | {account} | {tier}\n"
+
     if issue_summary:
-        brief += f"\n*ISSUE:*\n{issue_summary}\n"
+        brief += f"\n{issue_summary}\n"
 
     if latest_reply:
-        brief += f"\n*LATEST:* \"{latest_reply}\"\n"
+        brief += f"\n_\"{latest_reply}\"_\n"
 
-    # Attachment block — must be impossible to miss
+    # Attachment block
     if has_attachments:
         n = attachment_count
-        noun = "ATTACHMENT" if n == 1 else "ATTACHMENTS"
-        brief += (
-            f"\n📎 *{n} {noun} — CHECK BEFORE RESPONDING*\n"
-            "Files attached to this ticket contain important"
-            " context (screenshots, imports, videos, etc.)\n"
-            f"*View in Zoho:* {zoho_ticket_url}\n"
-        )
-
-    # FIX 4 — Unclear classification guidance
-    is_unclear = "unclear" in classification.lower()
-    if is_unclear and has_attachments:
-        brief += (
-            "\n⚠️ *Ticket is vague but attachment may contain"
-            " the details.*\n"
-            "Review the attachment in Zoho before deciding"
-            " next step.\n"
-            "*Suggested:* Check attachment first, then reply"
-            " `draft` once you've reviewed.\n"
-        )
-    elif is_unclear and not has_attachments:
-        draft = _extract_draft_response(agent_response)
-        if draft:
-            brief += (
-                "\n*SUGGESTED CLARIFYING QUESTION:*\n"
-                f"_{draft}_\n"
-                "Reply `confirm` to send,"
-                " or `draft` to regenerate.\n"
-            )
+        noun = "attachment" if n == 1 else "attachments"
+        brief += f"\n📎 {n} {noun} — check Zoho first\n"
 
     # Priority display: "P2 | Same day" or "P2 | Not same day"
     timing_clean = timing.strip().capitalize() if timing else ""
@@ -225,21 +200,24 @@ def send_ticket_brief(
         else:
             priority_line = timing_clean
 
-    brief += f"\n*TYPE:* {classification} | {module}\n"
+    type_parts = [classification, module]
     if priority_line:
-        brief += f"*PRIORITY:* {priority_line}\n"
-    if suggested_owner:
-        brief += f"*SUGGESTED:* {suggested_owner}\n"
+        type_parts.append(priority_line)
+    brief += f"\n{' | '.join(type_parts)}\n"
 
-    brief += (
-        f"\n*ClickUp:* {cu_link}  |  *Zoho:* {zoho_ticket_url}\n"
-        f"{divider}\n"
-        "No ClickUp task created yet — waiting for your instructions.\n"
-        "To respond: type your reply or use `draft`\n"
-        "To create task: `assign [name]` `p1/p2/p3` `move backlog`\n"
-        "`skip` `note [text]` `tier [X]` `arr [X]`\n"
-        f"{divider}"
-    )
+    if suggested_owner:
+        brief += f"Suggested: {suggested_owner}\n"
+
+    brief += f"{cu_link} | {zoho_ticket_url}\n"
+
+    # Unclear classification guidance
+    is_unclear = "unclear" in classification.lower()
+    if is_unclear and has_attachments:
+        pass  # Attachment note above is sufficient
+    elif is_unclear and not has_attachments:
+        brief += "\n💬 Suggested: ask for more details\n"
+
+    brief += "\nReply in plain English to take action."
 
     try:
         resp = _slack.chat_postMessage(

@@ -131,10 +131,8 @@ _ASSIGNEE_ALIASES: dict[str, str] = {
 # Keep for any legacy references
 ASSIGNEE_MAP = _ASSIGNEE_IDS
 
-# Custom field IDs (from context.md)
-FIELD_HIGHEST_TIER = "be348a1d-6a63-4da8-83bb-9038b24264ff"
-FIELD_COMBINED_ARR = "29c41859-f24b-4143-9af4-a34202205641"
-FIELD_AUTO_SCORE = "fd77f978-eca8-499e-bc3c-dc1bf4b8181e"
+# Custom field IDs imported from clickup_tasks:
+# FIELD_HIGHEST_TIER, FIELD_COMBINED_ARR, FIELD_AUTO_SCORE
 
 # Words that signal an internal instruction — never send to client
 _INTERNAL_KEYWORDS = {
@@ -946,50 +944,83 @@ def _parse_commands(text: str) -> tuple[dict, str]:
 _NL_HELP = (
     "Got it — no actions taken.\n\n"
     "Nothing sent to client.\n"
-    "To send a response use:\n"
-    "`send: [your message]`\n"
-    "Or reply `draft` for a suggested response.\n\n"
-    "Other commands: `assign Sam` `p1` `p2` `p3` "
-    "`score [n]` `skip` `move backlog`"
+    "Reply in plain English to take action."
 )
 
 
-def _parse_with_claude(text: str) -> dict:
+# Map task_list values to ClickUp list IDs
+_TASK_LIST_MAP = {
+    "priority_queue": CLICKUP_LIST_PRIORITY_QUEUE,
+    "raw_intake": CLICKUP_LIST_RAW_INTAKE,
+    "accepted_backlog": CLICKUP_ACCEPTED_BACKLOG_LIST,
+    "sleeping": CLICKUP_LIST_SLEEPING,
+}
+
+
+def _parse_with_claude(text: str, thread_data: dict) -> dict:
     """
-    Call Claude to parse natural language intent from Sam's message.
-    Returns a dict with the same keys as the JSON schema, or {} on failure.
+    Call Claude to interpret Sam's full natural-language reply.
+    Returns a rich dict of ALL intended actions, or {} on failure.
     """
+    ticket_number = thread_data.get("ticket_number", "?")
+    classification = thread_data.get("classification", {})
+    crm = thread_data.get("crm", {})
+
+    context_block = (
+        f"Classification: {classification.get('type', 'Unknown')}\n"
+        f"Module: {classification.get('module', 'Unknown')}\n"
+        f"Contact: {crm.get('account_name', 'Unknown')}\n"
+        f"Issue: {classification.get('issue_summary', 'Unknown')}"
+    )
+
     prompt = (
-        f"Sam sent this reply about a support ticket:\n'{text}'\n\n"
-        "Extract any instructions intended for the system"
-        " (not for the client).\n"
+        f"Sam sent this reply about ticket #{ticket_number}:\n"
+        f"'{text}'\n\n"
+        f"The ticket context is:\n{context_block}\n\n"
+        "Extract ALL intended actions. "
         "Return valid JSON only — no prose, no code block markers.\n"
         "{\n"
+        '  "generate_draft": true/false,\n'
+        '  "draft_instruction": "what to say to client '
+        'if generate_draft is true",\n'
         '  "assign_to": null or "Sam/OnlyG/Sanjay/Ron",\n'
         '  "priority": null or "p1/p2/p3",\n'
-        '  "score": null or number,\n'
+        '  "auto_score": null or number,\n'
         '  "tier": null or string,\n'
         '  "arr": null or number,\n'
-        '  "note": null or string,\n'
+        '  "create_task": true/false,\n'
+        '  "task_list": "priority_queue" or "raw_intake" '
+        'or "accepted_backlog" or "sleeping",\n'
+        '  "close_ticket": false or true,\n'
+        '  "skip": false or true,\n'
         '  "client_response": null or string,\n'
-        '  "skip": false or true\n'
+        '  "needs_clarification": false or true,\n'
+        '  "clarification_question": null or string\n'
         "}\n\n"
-        "Rules:\n"
-        "- client_response: only text clearly written TO the client "
-        "(e.g. starts with Hi/Hello/Thanks, or is a direct answer to "
-        "their question). If the message contains internal instructions "
-        "(assign, clickup, priority, score, tier, arr, sam, onlyg, "
-        "sanjay, skip, move, backlog, draft) set client_response to "
-        "null — never mix client text with internal instructions.\n"
-        "- assign_to: look for names Sam, Saul (=Sam), OnlyG, "
-        "Sanjay, Ron\n"
-        "- score: any number mentioned in context of "
-        "priority/importance"
+        "Rules for extraction:\n"
+        "- If message mentions drafting, writing, sending, "
+        "responding to client -> generate_draft: true, and put "
+        "the gist of what Sam wants to say in draft_instruction\n"
+        "- If message mentions assigning, routing, OnlyG, Sanjay, "
+        "backend, frontend -> extract assign_to\n"
+        "- If message mentions a number in context of score/"
+        "priority -> extract auto_score\n"
+        "- If message says p1/p2/p3 or high/medium/low priority "
+        "-> extract priority (map high=p1, medium=p2, low=p3)\n"
+        "- If message is ambiguous and you cannot determine intent "
+        "-> needs_clarification: true, ask ONE specific question\n"
+        "- create_task: true whenever assign_to is set OR task_list "
+        "is specified OR priority is set standalone\n"
+        "- client_response: only if Sam provides exact text to send "
+        "verbatim (e.g. after 'send:' or 'reply:'). Otherwise null.\n"
+        "- close_ticket: true only if Sam explicitly says to close "
+        "the ticket\n"
+        "- skip: true only if Sam explicitly says to skip/park this"
     )
     try:
         response = _anthropic.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=300,
+            max_tokens=500,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = response.content[0].text.strip()
@@ -1003,18 +1034,30 @@ def _parse_with_claude(text: str) -> dict:
         return {}
 
 
-def _build_confirmation(action_lines: list[str]) -> str:
-    """Build the structured confirmation message after commands run."""
-    lines = ["Got it — actions taken:"]
+def _build_confirmation(
+    action_lines: list[str],
+    draft: str | None = None,
+    close_after: bool = False,
+) -> str:
+    """Build the combined confirmation message after commands run."""
+    lines = ["✓ Actions taken:"]
     for al in action_lines:
         lines.append(f"→ {al}")
-    lines.append("")
-    lines.append(
-        "Nothing sent to client.\n"
-        "To send a response use:\n"
-        "`send: [your message]`\n"
-        "Or reply `draft` for a suggested response."
-    )
+
+    if draft:
+        lines.append("")
+        lines.append("Draft ready — not sent yet:")
+        lines.append("─────────────────────────────────────")
+        lines.append(draft)
+        lines.append("─────────────────────────────────────")
+        if close_after:
+            lines.append("Ticket will be closed after sending.")
+        lines.append("Reply `confirm` to send")
+        lines.append("Reply `cancel` to hold")
+    else:
+        lines.append("")
+        lines.append("Reply in plain English to take action.")
+
     return "\n".join(lines)
 
 
@@ -1076,10 +1119,7 @@ def handle_reply(event: dict):
     if text_lower in ("thread", "history"):
         try:
             convo = _format_conversation_for_slack(ticket_id, thread_data)
-            footer = (
-                "Reply `draft` for a suggested response\n"
-                "Reply `send: [message]` to respond directly"
-            )
+            footer = "Reply in plain English to take action."
             _reply(channel, thread_ts, f"{convo}\n{footer}")
         except Exception as e:
             _reply(
@@ -1259,8 +1299,7 @@ def handle_reply(event: dict):
             _reply(
                 channel, thread_ts,
                 "Nothing pending to confirm.\n"
-                "To compose a client response: "
-                "`reply: [your message]`",
+                "Reply in plain English to take action.",
             )
             return
 
@@ -1399,45 +1438,13 @@ def handle_reply(event: dict):
     if _SHOW_TICKET_RE.search(text):
         try:
             convo = _format_conversation_for_slack(ticket_id, thread_data)
-            footer = (
-                "Reply `draft` for a suggested response\n"
-                "or `send: [your message]` to respond directly"
-            )
+            footer = "Reply in plain English to take action."
             _reply(channel, thread_ts, f"{convo}\n{footer}")
         except Exception as e:
             _reply(
                 channel, thread_ts,
                 f"Could not fetch conversation: {e}",
             )
-        return
-
-    # -----------------------------------------------------------------------
-    # Draft instruction — Sam describing what to tell the client.
-    # This MUST come before command parsing so it never falls through
-    # to "note added" behaviour.
-    # -----------------------------------------------------------------------
-
-    if _is_client_response_instruction(text):
-        close_after = _has_close_instruction(text)
-        try:
-            draft = _generate_draft_from_instruction(ticket_id, text)
-            _store_pending_send(thread_ts, draft, close_after=close_after)
-            close_note = (
-                "\nTicket will be closed after sending."
-                if close_after else ""
-            )
-            _reply(
-                channel, thread_ts,
-                f"Here's a draft — not sent yet:{close_note}\n"
-                f"{_CONV_SEP}\n"
-                f"{draft}\n"
-                f"{_CONV_SEP}\n"
-                "Reply `confirm` to send\n"
-                "Reply `send: [your version]` to edit\n"
-                "Reply `cancel` to do nothing",
-            )
-        except Exception as e:
-            _reply(channel, thread_ts, f"Draft generation failed: {e}")
         return
 
     # -----------------------------------------------------------------------
@@ -1458,92 +1465,136 @@ def handle_reply(event: dict):
         return
 
     # -----------------------------------------------------------------------
-    # Command parsing (exact keywords first, Claude NLP fallback)
+    # Unified natural language parsing — pass everything through Claude
     # -----------------------------------------------------------------------
 
+    # Try exact command parsing first for speed
     commands, remaining = _parse_commands(text)
 
-    # NLP fallback when no exact commands detected
-    if not commands:
-        nl = _parse_with_claude(text)
+    # Always run Claude NLP to catch natural language intent
+    nl = _parse_with_claude(text, thread_data)
 
-        if nl.get("skip"):
-            _add_reaction(channel, thread_ts, "double_vertical_bar")
-            _set_thread_status(thread_ts, "parked")
-            if clickup_task_id:
-                date_str = datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%d"
-                )
-                _cu_update_task(
-                    clickup_task_id,
-                    {"description": (
-                        f"Sam parked this on {date_str} — "
-                        "pending follow-up"
-                    )},
-                )
-            _reply(
-                channel, thread_ts,
-                "✓ Actions taken:\n"
-                "→ Ticket parked — will appear in tonight's digest",
+    # Merge: Claude results fill in anything exact parsing missed
+    if nl.get("needs_clarification") and not commands and not nl.get("skip"):
+        question = (
+            nl.get("clarification_question")
+            or "Could you clarify what you'd like me to do?"
+        )
+        _reply(
+            channel, thread_ts,
+            f"I want to make sure I do the right thing here — {question}",
+        )
+        return
+
+    if nl.get("skip"):
+        _add_reaction(channel, thread_ts, "double_vertical_bar")
+        _set_thread_status(thread_ts, "parked")
+        if clickup_task_id:
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            _cu_update_task(
+                clickup_task_id,
+                {"description": (
+                    f"Sam parked this on {date_str} — "
+                    "pending follow-up"
+                )},
             )
-            return
+        _reply(
+            channel, thread_ts,
+            "✓ Actions taken:\n"
+            "→ Ticket parked — will appear in tonight's digest",
+        )
+        return
 
-        if nl.get("assign_to"):
-            commands["assign"] = nl["assign_to"]
-        if nl.get("priority"):
-            commands["priority"] = nl["priority"].lower()
-        if nl.get("score") is not None:
-            try:
-                commands["score"] = str(int(nl["score"]))
-            except (ValueError, TypeError):
-                pass
-        if nl.get("tier"):
-            commands["tier"] = nl["tier"]
-        if nl.get("arr") is not None:
-            try:
-                commands["arr"] = str(int(nl["arr"]))
-            except (ValueError, TypeError):
-                pass
-        # NLP note and client_response are ignored — Sam must use
-        # explicit "note [text]" syntax or the draft instruction flow.
+    # Merge NLP results into commands dict
+    if nl.get("assign_to") and "assign" not in commands:
+        commands["assign"] = nl["assign_to"]
+    if nl.get("priority") and "priority" not in commands:
+        commands["priority"] = nl["priority"].lower()
+    if nl.get("auto_score") is not None and "score" not in commands:
+        try:
+            commands["score"] = str(int(nl["auto_score"]))
+        except (ValueError, TypeError):
+            pass
+    if nl.get("tier") and "tier" not in commands:
+        commands["tier"] = nl["tier"]
+    if nl.get("arr") is not None and "arr" not in commands:
+        try:
+            commands["arr"] = str(int(nl["arr"]))
+        except (ValueError, TypeError):
+            pass
+
+    # Determine if we need a draft
+    wants_draft = nl.get("generate_draft", False)
+    draft_instruction = nl.get("draft_instruction") or ""
+    close_after = nl.get("close_ticket", False)
+
+    # Also detect draft intent via regex for speed/reliability
+    if _is_client_response_instruction(text) and not wants_draft:
+        wants_draft = True
+        draft_instruction = text
+    if _has_close_instruction(text):
+        close_after = True
+
+    # Determine task list
+    task_list_key = nl.get("task_list")
+    wants_task = nl.get("create_task", False)
+
+    # create_task is true whenever assign_to or task_list or priority
+    if commands.get("assign") or task_list_key or commands.get("priority"):
+        wants_task = True
 
     # Nothing actionable at all
-    if not commands:
+    if (
+        not commands
+        and not wants_draft
+        and not wants_task
+        and not close_after
+        and not nl.get("client_response")
+    ):
         _reply(channel, thread_ts, _NL_HELP)
         return
 
     # -----------------------------------------------------------------------
-    # Execute commands, collecting action lines
+    # Execute ALL extracted actions in sequence
     # -----------------------------------------------------------------------
 
     action_lines: list[str] = []
 
-    if "priority" in commands:
-        p = commands["priority"]
-        cu_p = PRIORITY_MAP.get(p)
-        if cu_p:
-            if not clickup_task_id:
-                # Create task with this priority
-                result = _create_task_from_thread(
-                    thread_data,
-                    CLICKUP_LIST_PRIORITY_QUEUE,
-                    priority_override=p.upper(),
-                )
-                if result:
-                    clickup_task_id = result["task_id"]
-                    _update_thread_clickup_id(
-                        thread_ts, clickup_task_id
-                    )
-                    action_lines.append(
-                        f"ClickUp task created ({p.upper()}):"
-                        f" {result['task_url']}"
-                    )
-            else:
-                _cu_update_task(
-                    clickup_task_id, {"priority": cu_p}
-                )
-                action_lines.append(f"Priority set: {p.upper()}")
+    # 1. Create ClickUp task if needed
+    target_list = (
+        _TASK_LIST_MAP.get(task_list_key, CLICKUP_LIST_PRIORITY_QUEUE)
+        if task_list_key
+        else CLICKUP_LIST_PRIORITY_QUEUE
+    )
 
+    if wants_task and not clickup_task_id:
+        assignee_cu_id = None
+        if "assign" in commands:
+            raw_name = commands["assign"].lower().strip()
+            canonical = _ASSIGNEE_ALIASES.get(raw_name)
+            if canonical:
+                assignee_cu_id = _ASSIGNEE_IDS.get(canonical) or None
+
+        result = _create_task_from_thread(
+            thread_data,
+            target_list,
+            assignee_cu_id=assignee_cu_id,
+            priority_override=(
+                commands.get("priority", "").upper() or None
+            ),
+        )
+        if result:
+            clickup_task_id = result["task_id"]
+            _update_thread_clickup_id(thread_ts, clickup_task_id)
+            list_label = (task_list_key or "priority_queue").replace(
+                "_", " "
+            ).title()
+            action_lines.append(
+                f"ClickUp task created in {list_label}: "
+                f"{result['task_url']}"
+            )
+
+    # 2. Assign engineer if needed
     if "assign" in commands:
         raw_name = commands["assign"].lower().strip()
         canonical = _ASSIGNEE_ALIASES.get(raw_name)
@@ -1551,32 +1602,18 @@ def handle_reply(event: dict):
             cu_user_id = _ASSIGNEE_IDS.get(canonical, "")
             zoho_agent_id = _ZOHO_AGENT_IDS.get(canonical, "")
             zoho_status = _ZOHO_STATUS[canonical]
-            zoho_label = _ZOHO_AGENT_LABEL[canonical]
             cu_display = _ASSIGNEE_DISPLAY[canonical]
 
             task_url = None
 
-            if not clickup_task_id:
-                # Create task in Priority Queue, assign to person
-                result = _create_task_from_thread(
-                    thread_data,
-                    CLICKUP_LIST_PRIORITY_QUEUE,
-                    assignee_cu_id=cu_user_id or None,
-                )
-                if result:
-                    clickup_task_id = result["task_id"]
-                    task_url = result["task_url"]
-                    _update_thread_clickup_id(
-                        thread_ts, clickup_task_id
+            if clickup_task_id and cu_user_id:
+                # Task already exists (or was just created above)
+                # — just add assignee if not already done during creation
+                if not wants_task:
+                    _cu_update_task(
+                        clickup_task_id,
+                        {"assignees": {"add": [int(cu_user_id)]}},
                     )
-                    action_lines.append(
-                        f"ClickUp task created: {task_url}"
-                    )
-            elif cu_user_id:
-                _cu_update_task(
-                    clickup_task_id,
-                    {"assignees": {"add": [int(cu_user_id)]}},
-                )
                 task_url = (
                     f"https://app.clickup.com/t/{clickup_task_id}"
                 )
@@ -1586,39 +1623,44 @@ def handle_reply(event: dict):
                 _zoho_set_status(ticket_id, zoho_status)
 
             # Notify engineering channel for OnlyG or Sanjay
-            if canonical in ("onlyg", "sanjay") and task_url:
-                classification = thread_data.get(
-                    "classification", {}
-                )
-                crm = thread_data.get("crm", {})
-                zoho_url = (
-                    "https://desk.zoho.com/support/vomevolunteer"
-                    f"/ShowHomePage.do#Cases/dv/{ticket_id}"
-                )
-                _notify_engineering(
-                    engineer_name=cu_display,
-                    ticket_number=thread_data.get(
-                        "ticket_number", ""
-                    ),
-                    subject=thread_data.get("subject", ""),
-                    account_name=(
-                        crm.get("account_name") or "Unknown"
-                    ),
-                    priority=classification.get("priority", "P3"),
-                    module=classification.get("module", "Unknown"),
-                    issue_summary=classification.get(
-                        "issue_summary", ""
-                    ),
-                    task_url=task_url,
-                    zoho_url=zoho_url,
-                )
+            if canonical in ("onlyg", "sanjay"):
+                if not task_url and clickup_task_id:
+                    task_url = (
+                        f"https://app.clickup.com/t/{clickup_task_id}"
+                    )
+                if task_url:
+                    classification = thread_data.get(
+                        "classification", {}
+                    )
+                    crm = thread_data.get("crm", {})
+                    zoho_url = (
+                        "https://desk.zoho.com/support/vomevolunteer"
+                        f"/ShowHomePage.do#Cases/dv/{ticket_id}"
+                    )
+                    _notify_engineering(
+                        engineer_name=cu_display,
+                        ticket_number=thread_data.get(
+                            "ticket_number", ""
+                        ),
+                        subject=thread_data.get("subject", ""),
+                        account_name=(
+                            crm.get("account_name") or "Unknown"
+                        ),
+                        priority=classification.get(
+                            "priority", "P3"
+                        ),
+                        module=classification.get(
+                            "module", "Unknown"
+                        ),
+                        issue_summary=classification.get(
+                            "issue_summary", ""
+                        ),
+                        task_url=task_url,
+                        zoho_url=zoho_url,
+                    )
 
             if cu_user_id or zoho_agent_id:
-                action_lines.append(
-                    f"Assigned to: {zoho_label}\n"
-                    f"  Zoho status: {zoho_status}\n"
-                    f"  ClickUp assignee: {cu_display}"
-                )
+                action_lines.append(f"Assigned to: {cu_display}")
             else:
                 action_lines.append(
                     f"Assign failed: {cu_display} IDs not configured"
@@ -1629,11 +1671,20 @@ def handle_reply(event: dict):
                 " Options: Sam, OnlyG, Sanjay, Ron"
             )
 
+    # 3. Set fields if needed
+    if "priority" in commands:
+        p = commands["priority"]
+        cu_p = PRIORITY_MAP.get(p)
+        if cu_p and clickup_task_id and not wants_task:
+            # Only update priority if we didn't just create with it
+            _cu_update_task(clickup_task_id, {"priority": cu_p})
+            action_lines.append(f"Priority: {p.upper()}")
+
     if "tier" in commands and clickup_task_id:
         _cu_set_field(
             clickup_task_id, FIELD_HIGHEST_TIER, commands["tier"]
         )
-        action_lines.append(f"Tier updated: {commands['tier']}")
+        action_lines.append(f"Tier: {commands['tier']}")
 
     if "arr" in commands and clickup_task_id:
         try:
@@ -1641,7 +1692,7 @@ def handle_reply(event: dict):
             _cu_set_field(
                 clickup_task_id, FIELD_COMBINED_ARR, arr_val
             )
-            action_lines.append(f"ARR set: ${arr_val:,}")
+            action_lines.append(f"ARR: ${arr_val:,}")
         except ValueError:
             action_lines.append("ARR — invalid number")
 
@@ -1651,15 +1702,62 @@ def handle_reply(event: dict):
             _cu_set_field(
                 clickup_task_id, FIELD_AUTO_SCORE, score_val
             )
-            action_lines.append(f"Auto Score updated: {score_val}")
+            action_lines.append(f"Auto Score: {score_val}")
         except ValueError:
             pass
 
+    # 4. Generate draft if needed
+    draft_text = None
+    if wants_draft:
+        try:
+            draft_text = _generate_draft_from_instruction(
+                ticket_id, draft_instruction or text
+            )
+            _store_pending_send(
+                thread_ts, draft_text, close_after=close_after
+            )
+        except Exception as e:
+            action_lines.append(f"Draft generation failed: {e}")
+
+    # Handle explicit client_response from NLP (verbatim send)
+    if not wants_draft and nl.get("client_response"):
+        client_msg = nl["client_response"]
+        if not _has_internal_keyword(client_msg):
+            _store_pending_send(
+                thread_ts, client_msg, close_after=close_after
+            )
+            draft_text = client_msg
+
     # -----------------------------------------------------------------------
-    # Confirmation — always post, never auto-send to client
+    # Post one combined confirmation
     # -----------------------------------------------------------------------
 
-    if action_lines:
-        _reply(channel, thread_ts, _build_confirmation(action_lines))
+    if action_lines or draft_text:
+        _reply(
+            channel, thread_ts,
+            _build_confirmation(
+                action_lines, draft=draft_text, close_after=close_after
+            ),
+        )
+    elif close_after:
+        # Close-only with no other actions — generate a draft
+        try:
+            draft_text = _generate_draft_from_instruction(
+                ticket_id, "close the ticket with a brief confirmation"
+            )
+            _store_pending_send(
+                thread_ts, draft_text, close_after=True
+            )
+            _reply(
+                channel, thread_ts,
+                _build_confirmation(
+                    [], draft=draft_text, close_after=True
+                ),
+            )
+        except Exception as e:
+            _reply(
+                channel, thread_ts,
+                f"Draft generation failed: {e}",
+            )
     else:
         _reply(channel, thread_ts, _NL_HELP)
