@@ -430,7 +430,7 @@ def _has_internal_keyword(text: str) -> bool:
 # ---------------------------------------------------------------------------
 
 ZOHO_FROM_ADDRESS = os.environ.get(
-    "ZOHO_FROM_ADDRESS", "admin@vomevolunteer.com"
+    "ZOHO_FROM_ADDRESS", "support@vomevolunteer.zohodesk.com"
 )
 
 
@@ -451,16 +451,24 @@ def _send_client_reply(
     if to_email:
         body["to"] = to_email
 
+    print(
+        f"[SEND] Calling ZohoDesk_sendReply on ticket {ticket_id} "
+        f"from={ZOHO_FROM_ADDRESS} to={to_email or '(ticket default)'}"
+    )
+
     result = _zoho_mcp_call("ZohoDesk_sendReply", {
         "body": body,
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
     })
+
     if result:
-        print(f"Email reply sent to client — Zoho ticket {ticket_id}")
+        print(
+            f"[SEND] Success — Zoho ticket {ticket_id}: {result}"
+        )
         return True
     print(
-        f"Failed to send email reply — Zoho ticket {ticket_id}"
+        f"[SEND] FAILED — Zoho ticket {ticket_id}, result was: {result}"
     )
     return False
 
@@ -1419,18 +1427,30 @@ def handle_reply(event: dict):
         # Check close_after_send flag before clearing thread state
         close_after = thread_data.get("close_after_send", False)
 
-        _send_client_reply(ticket_id, pending)
+        zoho_base = "https://desk.zoho.com/support/vomevolunteer"
+        zoho_url = (
+            f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
+        )
+
+        sent_ok = _send_client_reply(ticket_id, pending)
+        if not sent_ok:
+            # Re-store the pending message so Sam can retry
+            _store_pending_send(thread_ts, pending, close_after=close_after)
+            _reply(
+                channel, thread_ts,
+                "Failed to send — Zoho API error.\n"
+                f"Please send manually in Zoho: {zoho_url}\n\n"
+                "The draft is still pending. "
+                "Reply `confirm` to retry.",
+            )
+            return
+
         _add_reaction(channel, thread_ts, "white_check_mark")
         _set_thread_status(thread_ts, "handled")
 
         # Clear close_after_send flag
         if close_after:
             update_thread(thread_ts, close_after_send="false")
-
-        zoho_base = "https://desk.zoho.com/support/vomevolunteer"
-        zoho_url = (
-            f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
-        )
         is_on_prod = (
             thread_data.get("status") == "on_prod_pending"
         )
