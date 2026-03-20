@@ -29,6 +29,21 @@ from agent import (
     fetch_ticket_conversations,
     fetch_ticket_from_zoho,
 )
+from clickup_tasks import (
+    _map_type_option,
+    _map_platform_option,
+    _map_module_option,
+    FIELD_TYPE,
+    FIELD_PLATFORM,
+    FIELD_MODULE,
+    FIELD_SOURCE,
+    FIELD_HIGHEST_TIER,
+    FIELD_REQUESTING_CLIENTS,
+    FIELD_COMBINED_ARR,
+    FIELD_AUTO_SCORE,
+    FIELD_ZOHO_TICKET_LINK,
+    SOURCE_ZOHO_TICKET,
+)
 from slack_ticket_brief import _load_thread_map, _save_thread_map
 
 # ---------------------------------------------------------------------------
@@ -40,7 +55,14 @@ _anthropic = anthropic.Anthropic()
 
 CLICKUP_API_TOKEN = os.environ.get("CLICKUP_API_TOKEN", "")
 CLICKUP_BASE = "https://api.clickup.com/api/v2"
+CLICKUP_LIST_PRIORITY_QUEUE = "901113386257"
 CLICKUP_ACCEPTED_BACKLOG_LIST = "901113389889"
+CLICKUP_LIST_RAW_INTAKE = "901113386484"
+CLICKUP_LIST_SLEEPING = "901113389897"
+
+SLACK_CHANNEL_ENGINEERING = os.environ.get(
+    "SLACK_CHANNEL_ENGINEERING", ""
+)
 
 PRIORITY_MAP = {"p1": 1, "p2": 2, "p3": 3}
 
@@ -386,6 +408,222 @@ def _zoho_set_status(ticket_id: str, status: str) -> bool:
         return True
     print(f"Zoho status update failed — ticket {ticket_id}")
     return False
+
+
+# ---------------------------------------------------------------------------
+# Thread map helpers
+# ---------------------------------------------------------------------------
+
+def _update_thread_clickup_id(thread_ts: str, task_id: str):
+    """Persist a newly created ClickUp task ID into thread_map.json."""
+    data = _load_thread_map()
+    if thread_ts in data:
+        data[thread_ts]["clickup_task_id"] = task_id
+        _save_thread_map(data)
+
+
+# ---------------------------------------------------------------------------
+# ClickUp task creation from stored thread classification
+# ---------------------------------------------------------------------------
+
+def _create_task_from_thread(
+    thread_data: dict,
+    list_id: str,
+    assignee_cu_id: str | None = None,
+    priority_override: str | None = None,
+) -> dict | None:
+    """Create a ClickUp task using classification stored in thread_map.
+
+    Returns {"task_id": str, "task_url": str} or None on failure.
+    """
+    if not CLICKUP_API_TOKEN:
+        print("_create_task_from_thread: CLICKUP_API_TOKEN not set")
+        return None
+
+    classification = thread_data.get("classification", {})
+    crm = thread_data.get("crm", {})
+    ticket_id = thread_data.get("ticket_id", "")
+    ticket_number = thread_data.get("ticket_number", "")
+    subject = thread_data.get("subject", "")
+
+    zoho_url = (
+        "https://desk.zoho.com/support/vomevolunteer"
+        f"/ShowHomePage.do#Cases/dv/{ticket_id}"
+    )
+
+    priority_str = (
+        priority_override
+        or classification.get("priority", "P3")
+    ).upper().strip()
+    if not re.match(r"^P[123]$", priority_str):
+        priority_str = "P3"
+    cu_priority = PRIORITY_MAP.get(priority_str.lower(), 3)
+
+    # Title
+    account = (
+        crm.get("account_name")
+        or ("Volunteer" if not crm.get("found") else "Unknown")
+    )
+    subj = subject.strip()
+    if len(subj) > 65:
+        subj = subj[:62] + "..."
+    title = f"{account} — {subj} — {priority_str}"
+
+    # Description
+    tier = crm.get("tier") or "Unknown"
+    arr_raw = crm.get("arr")
+    if arr_raw:
+        try:
+            arr_str = f"${int(float(arr_raw)):,}"
+        except (ValueError, TypeError):
+            arr_str = f"${arr_raw}"
+    else:
+        arr_str = "Unknown"
+
+    desc_lines = [
+        f"Account: {account} | Tier: {tier} | ARR: {arr_str}",
+        f"Zoho ticket: #{ticket_number}",
+        f"Zoho link: {zoho_url}",
+        "",
+    ]
+    issue_summary = classification.get("issue_summary", "")
+    if issue_summary:
+        desc_lines.append(issue_summary)
+        desc_lines.append("")
+    cl_type = classification.get("type", "")
+    cl_module = classification.get("module", "")
+    if cl_type:
+        desc_lines.append(f"Classification: {cl_type}")
+    if cl_module:
+        desc_lines.append(f"Module: {cl_module}")
+    description = "\n".join(desc_lines)
+
+    # Custom fields
+    custom_fields = []
+    if cl_type:
+        custom_fields.append(
+            {"id": FIELD_TYPE, "value": _map_type_option(cl_type)}
+        )
+    platform = classification.get("platform", "")
+    platform_opt = _map_platform_option(platform)
+    if platform_opt:
+        custom_fields.append(
+            {"id": FIELD_PLATFORM, "value": platform_opt}
+        )
+    if cl_module:
+        mod_opt = _map_module_option(cl_module)
+        if mod_opt:
+            custom_fields.append(
+                {"id": FIELD_MODULE, "value": mod_opt}
+            )
+    custom_fields.append(
+        {"id": FIELD_SOURCE, "value": SOURCE_ZOHO_TICKET}
+    )
+    custom_fields.append(
+        {"id": FIELD_ZOHO_TICKET_LINK, "value": zoho_url}
+    )
+    if crm.get("tier") and crm["tier"] != "Unknown":
+        custom_fields.append(
+            {"id": FIELD_HIGHEST_TIER, "value": crm["tier"]}
+        )
+    arr_value = None
+    if arr_raw:
+        try:
+            arr_value = int(float(arr_raw))
+        except (ValueError, TypeError):
+            pass
+    if crm.get("found") and crm.get("account_name"):
+        clients_str = (
+            f"{crm['account_name']} ({tier},"
+            f" ${arr_value:,})" if arr_value
+            else f"{crm['account_name']} ({tier}, unknown ARR)"
+        )
+        custom_fields.append(
+            {"id": FIELD_REQUESTING_CLIENTS, "value": clients_str}
+        )
+    if arr_value is not None:
+        custom_fields.append(
+            {"id": FIELD_COMBINED_ARR, "value": arr_value}
+        )
+    auto_score = classification.get("auto_score")
+    if auto_score:
+        try:
+            custom_fields.append(
+                {"id": FIELD_AUTO_SCORE, "value": int(auto_score)}
+            )
+        except (ValueError, TypeError):
+            pass
+
+    payload: dict = {
+        "name": title,
+        "description": description,
+        "priority": cu_priority,
+        "status": "QUEUED",
+        "custom_fields": custom_fields,
+    }
+    if assignee_cu_id:
+        payload["assignees"] = [int(assignee_cu_id)]
+
+    try:
+        r = httpx.post(
+            f"{CLICKUP_BASE}/list/{list_id}/task",
+            json=payload,
+            headers=_cu_headers(),
+            timeout=20,
+        )
+        r.raise_for_status()
+        task = r.json()
+        task_id = task.get("id", "")
+        task_url = (
+            task.get("url")
+            or f"https://app.clickup.com/t/{task_id}"
+        )
+        print(f"ClickUp task created: {title} (ID: {task_id})")
+        return {"task_id": task_id, "task_url": task_url}
+    except Exception as e:
+        print(f"ClickUp task creation failed: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Engineering channel notification
+# ---------------------------------------------------------------------------
+
+def _notify_engineering(
+    engineer_name: str,
+    ticket_number: str,
+    subject: str,
+    account_name: str,
+    priority: str,
+    module: str,
+    issue_summary: str,
+    task_url: str,
+    zoho_url: str,
+):
+    """Post assignment notification to #vome-support-engineering."""
+    if not SLACK_CHANNEL_ENGINEERING:
+        print(
+            "_notify_engineering: SLACK_CHANNEL_ENGINEERING not set"
+        )
+        return
+    msg = (
+        f"\U0001f527 *New task assigned — {engineer_name}*\n"
+        f"#{ticket_number} — {subject}\n"
+        f"Client: {account_name}\n"
+        f"Priority: {priority} | Module: {module}\n"
+        f"Issue: {issue_summary}\n"
+        f"ClickUp: {task_url}\n"
+        f"Zoho: {zoho_url}"
+    )
+    try:
+        _slack.chat_postMessage(
+            channel=SLACK_CHANNEL_ENGINEERING, text=msg
+        )
+    except SlackApiError as e:
+        print(
+            "Engineering notification failed:"
+            f" {e.response['error']}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -891,17 +1129,124 @@ def handle_reply(event: dict):
             if _cu_move_to_list(
                 clickup_task_id, CLICKUP_ACCEPTED_BACKLOG_LIST
             ):
-                _reply(channel, thread_ts, "✓ Moved to Accepted Backlog")
+                _reply(
+                    channel, thread_ts, "✓ Moved to Accepted Backlog"
+                )
             else:
                 _reply(
                     channel, thread_ts,
                     "Could not move task — check ClickUp manually",
                 )
         else:
-            _reply(
-                channel, thread_ts,
-                "No ClickUp task ID on record for this ticket",
+            result = _create_task_from_thread(
+                thread_data, CLICKUP_ACCEPTED_BACKLOG_LIST
             )
+            if result:
+                _update_thread_clickup_id(thread_ts, result["task_id"])
+                _reply(
+                    channel, thread_ts,
+                    f"✓ ClickUp task created in Accepted Backlog\n"
+                    f"{result['task_url']}",
+                )
+            else:
+                _reply(
+                    channel, thread_ts,
+                    "Could not create ClickUp task — check logs",
+                )
+        return
+
+    if text_lower in ("move feature", "move raw"):
+        if clickup_task_id:
+            if _cu_move_to_list(
+                clickup_task_id, CLICKUP_LIST_RAW_INTAKE
+            ):
+                _reply(channel, thread_ts, "✓ Moved to Raw Intake")
+            else:
+                _reply(
+                    channel, thread_ts,
+                    "Could not move task — check ClickUp manually",
+                )
+        else:
+            result = _create_task_from_thread(
+                thread_data, CLICKUP_LIST_RAW_INTAKE
+            )
+            if result:
+                _update_thread_clickup_id(thread_ts, result["task_id"])
+                _reply(
+                    channel, thread_ts,
+                    f"✓ ClickUp task created in Raw Intake\n"
+                    f"{result['task_url']}",
+                )
+            else:
+                _reply(
+                    channel, thread_ts,
+                    "Could not create ClickUp task — check logs",
+                )
+        return
+
+    if text_lower == "move sleeping":
+        if clickup_task_id:
+            if _cu_move_to_list(
+                clickup_task_id, CLICKUP_LIST_SLEEPING
+            ):
+                _reply(channel, thread_ts, "✓ Moved to Sleeping")
+            else:
+                _reply(
+                    channel, thread_ts,
+                    "Could not move task — check ClickUp manually",
+                )
+        else:
+            result = _create_task_from_thread(
+                thread_data, CLICKUP_LIST_SLEEPING
+            )
+            if result:
+                _update_thread_clickup_id(thread_ts, result["task_id"])
+                _reply(
+                    channel, thread_ts,
+                    f"✓ ClickUp task created in Sleeping\n"
+                    f"{result['task_url']}",
+                )
+            else:
+                _reply(
+                    channel, thread_ts,
+                    "Could not create ClickUp task — check logs",
+                )
+        return
+
+    sleep_m = re.match(r"^sleep\s+(.+)$", text.strip(), re.IGNORECASE)
+    if sleep_m:
+        wake_date_text = sleep_m.group(1).strip()
+        if clickup_task_id:
+            if _cu_move_to_list(
+                clickup_task_id, CLICKUP_LIST_SLEEPING
+            ):
+                _reply(
+                    channel, thread_ts,
+                    f"✓ Moved to Sleeping — wake date: {wake_date_text}\n"
+                    "Set Wake Date in ClickUp to complete.",
+                )
+            else:
+                _reply(
+                    channel, thread_ts,
+                    "Could not move task — check ClickUp manually",
+                )
+        else:
+            result = _create_task_from_thread(
+                thread_data, CLICKUP_LIST_SLEEPING
+            )
+            if result:
+                _update_thread_clickup_id(thread_ts, result["task_id"])
+                _reply(
+                    channel, thread_ts,
+                    f"✓ ClickUp task created in Sleeping\n"
+                    f"Wake date: {wake_date_text}\n"
+                    f"Set Wake Date in ClickUp: {result['task_url']}",
+                )
+            else:
+                _reply(
+                    channel, thread_ts,
+                    "Could not create ClickUp task — check logs",
+                )
         return
 
     # -----------------------------------------------------------------------
@@ -974,9 +1319,13 @@ def handle_reply(event: dict):
                     f"✓ Sent to client\nView in Zoho: {zoho_url}",
                 )
         else:
+            # No ClickUp task — just send and update Zoho status
+            _zoho_set_status(ticket_id, "Awaiting Reply")
             _reply(
                 channel, thread_ts,
-                f"✓ Sent to client\nView in Zoho: {zoho_url}",
+                "✓ Sent to client\n"
+                "✓ Zoho status → Awaiting Reply\n"
+                f"View in Zoho: {zoho_url}",
             )
         return
 
@@ -1169,12 +1518,31 @@ def handle_reply(event: dict):
 
     action_lines: list[str] = []
 
-    if "priority" in commands and clickup_task_id:
+    if "priority" in commands:
         p = commands["priority"]
         cu_p = PRIORITY_MAP.get(p)
         if cu_p:
-            _cu_update_task(clickup_task_id, {"priority": cu_p})
-            action_lines.append(f"Priority set: {p.upper()}")
+            if not clickup_task_id:
+                # Create task with this priority
+                result = _create_task_from_thread(
+                    thread_data,
+                    CLICKUP_LIST_PRIORITY_QUEUE,
+                    priority_override=p.upper(),
+                )
+                if result:
+                    clickup_task_id = result["task_id"]
+                    _update_thread_clickup_id(
+                        thread_ts, clickup_task_id
+                    )
+                    action_lines.append(
+                        f"ClickUp task created ({p.upper()}):"
+                        f" {result['task_url']}"
+                    )
+            else:
+                _cu_update_task(
+                    clickup_task_id, {"priority": cu_p}
+                )
+                action_lines.append(f"Priority set: {p.upper()}")
 
     if "assign" in commands:
         raw_name = commands["assign"].lower().strip()
@@ -1186,15 +1554,64 @@ def handle_reply(event: dict):
             zoho_label = _ZOHO_AGENT_LABEL[canonical]
             cu_display = _ASSIGNEE_DISPLAY[canonical]
 
-            if clickup_task_id and cu_user_id:
+            task_url = None
+
+            if not clickup_task_id:
+                # Create task in Priority Queue, assign to person
+                result = _create_task_from_thread(
+                    thread_data,
+                    CLICKUP_LIST_PRIORITY_QUEUE,
+                    assignee_cu_id=cu_user_id or None,
+                )
+                if result:
+                    clickup_task_id = result["task_id"]
+                    task_url = result["task_url"]
+                    _update_thread_clickup_id(
+                        thread_ts, clickup_task_id
+                    )
+                    action_lines.append(
+                        f"ClickUp task created: {task_url}"
+                    )
+            elif cu_user_id:
                 _cu_update_task(
                     clickup_task_id,
                     {"assignees": {"add": [int(cu_user_id)]}},
+                )
+                task_url = (
+                    f"https://app.clickup.com/t/{clickup_task_id}"
                 )
 
             if zoho_agent_id:
                 _zoho_assign_ticket(ticket_id, zoho_agent_id)
                 _zoho_set_status(ticket_id, zoho_status)
+
+            # Notify engineering channel for OnlyG or Sanjay
+            if canonical in ("onlyg", "sanjay") and task_url:
+                classification = thread_data.get(
+                    "classification", {}
+                )
+                crm = thread_data.get("crm", {})
+                zoho_url = (
+                    "https://desk.zoho.com/support/vomevolunteer"
+                    f"/ShowHomePage.do#Cases/dv/{ticket_id}"
+                )
+                _notify_engineering(
+                    engineer_name=cu_display,
+                    ticket_number=thread_data.get(
+                        "ticket_number", ""
+                    ),
+                    subject=thread_data.get("subject", ""),
+                    account_name=(
+                        crm.get("account_name") or "Unknown"
+                    ),
+                    priority=classification.get("priority", "P3"),
+                    module=classification.get("module", "Unknown"),
+                    issue_summary=classification.get(
+                        "issue_summary", ""
+                    ),
+                    task_url=task_url,
+                    zoho_url=zoho_url,
+                )
 
             if cu_user_id or zoho_agent_id:
                 action_lines.append(

@@ -7,7 +7,6 @@ import anthropic
 import httpx
 from pathlib import Path
 
-from clickup_tasks import create_clickup_task
 from slack_ticket_brief import send_ticket_brief
 
 # Fix Windows console encoding for emoji in system_prompt.md
@@ -136,6 +135,68 @@ def _extract_ticket_fields(raw_result: dict) -> dict:
         "contact_email": contact_email,
         "status": ticket.get("status", ""),
         "created_time": ticket.get("createdTime", ""),
+    }
+
+
+def _detect_attachments(
+    zoho_ticket_raw,
+    conversations_result,
+) -> dict:
+    """Check all attachment sources across ticket and thread.
+
+    Returns:
+        {
+            "has_attachments": bool,
+            "attachment_count": int,
+            "attachment_locations": list[str],
+        }
+    """
+    has_attachments = False
+    total_count = 0
+    locations: list[str] = []
+
+    # --- Ticket-level fields ---
+    ticket = _unwrap_mcp_result(zoho_ticket_raw) or {}
+    if isinstance(ticket, dict):
+        try:
+            count = int(ticket.get("attachmentCount") or 0)
+            if count > 0:
+                has_attachments = True
+                total_count += count
+                locations.append("ticket body")
+        except (ValueError, TypeError):
+            pass
+
+        desc_attach = ticket.get("descAttachments") or []
+        if isinstance(desc_attach, list) and desc_attach:
+            has_attachments = True
+            if "ticket body" not in locations:
+                locations.append("ticket body")
+
+    # --- Thread message-level fields ---
+    if conversations_result:
+        data = _unwrap_mcp_result(conversations_result)
+        if isinstance(data, dict):
+            data = data.get("data", [])
+        if isinstance(data, list):
+            for i, entry in enumerate(data):
+                has_attach = entry.get("hasAttach", False)
+                msg_count = 0
+                try:
+                    msg_count = int(
+                        entry.get("attachmentCount") or 0
+                    )
+                except (ValueError, TypeError):
+                    pass
+                if has_attach or msg_count > 0:
+                    has_attachments = True
+                    total_count += max(msg_count, 1)
+                    locations.append(f"thread message {i + 1}")
+
+    return {
+        "has_attachments": has_attachments,
+        "attachment_count": total_count,
+        "attachment_locations": locations,
     }
 
 
@@ -515,6 +576,18 @@ def process_ticket(ticket_data: dict) -> str | None:
 
     thread_text = _format_conversations(conversations_result)
 
+    # Comprehensive attachment detection across all sources
+    attachment_info = _detect_attachments(
+        zoho_ticket, conversations_result
+    )
+    if attachment_info["has_attachments"]:
+        locs = ", ".join(attachment_info["attachment_locations"])
+        print(
+            f"Attachments detected — ticket {ticket_id}:"
+            f" {attachment_info['attachment_count']} total"
+            f" at {locs}"
+        )
+
     # CRM enrichment
     crm = fetch_crm_account(contact_email)
     if crm["found"]:
@@ -546,6 +619,28 @@ def process_ticket(ticket_data: dict) -> str | None:
         )
         print(f"Language detected: {detected_lang} (ticket {ticket_id})")
 
+    # Build attachment note for Claude prompt
+    if attachment_info["has_attachments"]:
+        locs_str = ", ".join(
+            attachment_info["attachment_locations"]
+        )
+        attachment_note = (
+            f"\nATTACHMENT FLAG: This ticket has"
+            f" {attachment_info['attachment_count']}"
+            f" attachment(s) at: {locs_str}.\n"
+            "CRITICAL ATTACHMENT RULES:\n"
+            "1. NEVER classify as Unclear based on vague text"
+            " alone when attachments are present — classify"
+            " as best you can from available text context.\n"
+            "2. ALWAYS end your ISSUE SUMMARY with:"
+            " [Attachment included — likely contains"
+            " important context]\n"
+            "3. Surface the attachment prominently in"
+            " AGENT NOTES.\n"
+        )
+    else:
+        attachment_note = ""
+
     user_message = (
         "\u26a0\ufe0f MANDATORY PROCESSING RULE \u2014 READ FIRST:\n"
         "This input arrived via Zoho Desk webhook.\n"
@@ -561,7 +656,8 @@ def process_ticket(ticket_data: dict) -> str | None:
         "ISSUE SUMMARY: [one line — 2-3 sentences plain English:"
         " what the person said, what they tried, any relevant"
         " context. Written as if briefing a colleague verbally.]\n"
-        "SUGGESTED OWNER: [Sanjay / OnlyG / Sam / Either]\n\n"
+        "SUGGESTED OWNER: [Sanjay / OnlyG / Sam / Either]\n"
+        f"{attachment_note}\n"
         f"{enrichment_block}\n\n"
         f"SOURCE: Zoho Desk (webhook trigger)\n"
         f"Ticket ID: {ticket_id}\n"
@@ -587,39 +683,17 @@ def process_ticket(ticket_data: dict) -> str | None:
         print(f"\n{'='*60}")
         print(result)
         print(f"{'='*60}")
-        print(f"Agent processed ticket {ticket_id} -- response length: {len(result)} chars\n")
-
-        post_to_zoho(ticket_id, result)
+        print(
+            f"Agent processed ticket {ticket_id}"
+            f" -- response length: {len(result)} chars\n"
+        )
 
         zoho_url = (
             f"https://desk.zoho.com/support/vomevolunteer"
             f"/ShowHomePage.do#Cases/dv/{ticket_id}"
         )
 
-        # Create ClickUp task
-        clickup_result = create_clickup_task(
-            ticket_data=ticket_data,
-            agent_response=result,
-            crm=crm,
-            zoho_url=zoho_url,
-        )
-        clickup_task_url = (
-            clickup_result["task_url"] if clickup_result else None
-        )
-        clickup_task_id = (
-            clickup_result["task_id"] if clickup_result else None
-        )
-
-        attachment_count = 0
-        if zoho_ticket:
-            raw = _unwrap_mcp_result(zoho_ticket)
-            if isinstance(raw, dict):
-                try:
-                    attachment_count = int(raw.get("attachmentCount") or 0)
-                except (ValueError, TypeError):
-                    attachment_count = 0
-
-        # Extract structured fields from Claude's response for the Slack brief
+        # Extract structured fields from Claude's response
         def _extract_field(field: str) -> str:
             m = re.search(
                 rf"^{re.escape(field)}:\s*(.+)",
@@ -632,17 +706,20 @@ def process_ticket(ticket_data: dict) -> str | None:
             conversations_result, contact_email
         )
 
-        # Send Slack brief — primary interface for Sam
+        # Send Slack brief — only output on new ticket arrival
         send_ticket_brief(
             ticket_id=ticket_id,
-            ticket_number=ticket_data.get("ticket_number", ticket_id),
+            ticket_number=ticket_data.get(
+                "ticket_number", ticket_id
+            ),
             subject=subject,
             crm=crm,
             agent_response=result,
-            clickup_task_url=clickup_task_url,
-            clickup_task_id=clickup_task_id,
+            clickup_task_url=None,
+            clickup_task_id=None,
             zoho_ticket_url=zoho_url,
-            attachment_count=attachment_count,
+            has_attachments=attachment_info["has_attachments"],
+            attachment_count=attachment_info["attachment_count"],
             contact_name=contact_name,
             contact_email=contact_email,
             issue_summary=_extract_field("ISSUE SUMMARY"),

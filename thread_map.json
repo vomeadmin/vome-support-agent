@@ -25,5 +25,27 @@
     "date": "2026-03-19",
     "channel": "C0AMTJA2UTE",
     "status": "open"
+  },
+  "1773967054.792869": {
+    "ticket_id": "569440000036858536",
+    "ticket_number": "",
+    "clickup_task_id": null,
+    "subject": "Data File not uploading",
+    "date": "2026-03-20",
+    "channel": "C0AMTJA2UTE",
+    "status": "open",
+    "classification": {
+      "type": "Unclear",
+      "module": "Data and Reporting",
+      "platform": "Web",
+      "priority": "P3",
+      "auto_score": "5",
+      "suggested_owner": "Either",
+      "issue_summary": "Doris from Cedar Chest Thrift Store is having trouble uploading a data file to the database but provided no details about file type, error messages, or what specifically isn't working."
+    },
+    "crm": {
+      "found": false,
+      "contact_type": "volunteer"
+    }
   }
 }

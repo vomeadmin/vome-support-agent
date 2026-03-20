@@ -32,6 +32,8 @@ def save_thread_mapping(
     ticket_number: str,
     subject: str,
     clickup_task_id: str | None = None,
+    classification: dict | None = None,
+    crm: dict | None = None,
 ):
     """Persist thread_ts → ticket metadata in thread_map.json."""
     data = _load_thread_map()
@@ -43,6 +45,8 @@ def save_thread_mapping(
         "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "channel": CHANNEL_TICKETS,
         "status": "open",
+        "classification": classification or {},
+        "crm": crm or {},
     }
     _save_thread_map(data)
 
@@ -63,6 +67,18 @@ def _extract_clickup_url(agent_response: str) -> str | None:
     return match.group(0).rstrip(".,)") if match else None
 
 
+def _extract_draft_response(agent_response: str) -> str:
+    """Extract the DRAFT RESPONSE section from Claude's agent output."""
+    m = re.search(
+        r"DRAFT RESPONSE[^\n]*\n+(.+?)\n+(?:────|AGENT ANALYSIS)",
+        agent_response,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
 def send_ticket_brief(
     ticket_id: str,
     ticket_number: str,
@@ -72,6 +88,7 @@ def send_ticket_brief(
     clickup_task_url: str | None,
     zoho_ticket_url: str,
     clickup_task_id: str | None = None,
+    has_attachments: bool = False,
     attachment_count: int = 0,
     open_ticket_count: int | None = None,
     contact_name: str = "",
@@ -167,9 +184,37 @@ def send_ticket_brief(
     if latest_reply:
         brief += f"\n*LATEST:* \"{latest_reply}\"\n"
 
-    if attachment_count > 0:
+    # Attachment block — must be impossible to miss
+    if has_attachments:
         n = attachment_count
-        brief += f"\n📎 {n} attachment{'s' if n != 1 else ''} — view in Zoho\n"
+        noun = "ATTACHMENT" if n == 1 else "ATTACHMENTS"
+        brief += (
+            f"\n📎 *{n} {noun} — CHECK BEFORE RESPONDING*\n"
+            "Files attached to this ticket contain important"
+            " context (screenshots, imports, videos, etc.)\n"
+            f"*View in Zoho:* {zoho_ticket_url}\n"
+        )
+
+    # FIX 4 — Unclear classification guidance
+    is_unclear = "unclear" in classification.lower()
+    if is_unclear and has_attachments:
+        brief += (
+            "\n⚠️ *Ticket is vague but attachment may contain"
+            " the details.*\n"
+            "Review the attachment in Zoho before deciding"
+            " next step.\n"
+            "*Suggested:* Check attachment first, then reply"
+            " `draft` once you've reviewed.\n"
+        )
+    elif is_unclear and not has_attachments:
+        draft = _extract_draft_response(agent_response)
+        if draft:
+            brief += (
+                "\n*SUGGESTED CLARIFYING QUESTION:*\n"
+                f"_{draft}_\n"
+                "Reply `confirm` to send,"
+                " or `draft` to regenerate.\n"
+            )
 
     # Priority display: "P2 | Same day" or "P2 | Not same day"
     timing_clean = timing.strip().capitalize() if timing else ""
@@ -189,8 +234,9 @@ def send_ticket_brief(
     brief += (
         f"\n*ClickUp:* {cu_link}  |  *Zoho:* {zoho_ticket_url}\n"
         f"{divider}\n"
-        "Reply with your response and I'll send it to the client. Or use:\n"
-        "`draft` `assign [name]` `p1/p2/p3`\n"
+        "No ClickUp task created yet — waiting for your instructions.\n"
+        "To respond: type your reply or use `draft`\n"
+        "To create task: `assign [name]` `p1/p2/p3` `move backlog`\n"
         "`skip` `note [text]` `tier [X]` `arr [X]`\n"
         f"{divider}"
     )
@@ -211,6 +257,20 @@ def send_ticket_brief(
             ticket_number=ticket_number,
             subject=subject,
             clickup_task_id=clickup_task_id,
+            classification={
+                "type": classification,
+                "module": module,
+                "platform": (
+                    _extract_from_response(agent_response, "PLATFORM")
+                ),
+                "priority": priority,
+                "auto_score": (
+                    _extract_from_response(agent_response, "AUTO SCORE")
+                ),
+                "suggested_owner": suggested_owner,
+                "issue_summary": issue_summary,
+            },
+            crm=crm,
         )
         return thread_ts
 
