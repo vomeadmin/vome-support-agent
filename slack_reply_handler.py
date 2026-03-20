@@ -468,7 +468,8 @@ ZOHO_FROM_ADDRESS = os.environ.get(
 
 
 def _send_client_reply(
-    ticket_id: str, content: str, to_email: str = ""
+    ticket_id: str, content: str, to_email: str = "",
+    cc_email: str = "",
 ) -> bool:
     """Send an email reply to the client via ZohoDesk_sendReply.
 
@@ -491,10 +492,13 @@ def _send_client_reply(
     }
     if to_email:
         body["to"] = to_email
+    if cc_email:
+        body["cc"] = cc_email
 
     print(
         f"[SEND] Calling ZohoDesk_sendReply on ticket {ticket_id} "
         f"from={ZOHO_FROM_ADDRESS} to={to_email or '(ticket default)'}"
+        f"{f' cc={cc_email}' if cc_email else ''}"
     )
 
     result = _zoho_mcp_call("ZohoDesk_sendReply", {
@@ -533,15 +537,21 @@ def _zoho_assign_ticket(ticket_id: str, agent_id: str) -> bool:
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
     })
-    if result:
-        print(
-            f"Zoho ticket {ticket_id} assigned to agent {agent_id}"
-        )
-        return True
-    print(
-        f"Zoho assign failed — ticket {ticket_id}, agent {agent_id}"
-    )
-    return False
+    if not result:
+        print(f"Zoho assign failed — ticket {ticket_id}, no result")
+        return False
+
+    if isinstance(result, dict) and result.get("isError"):
+        print(f"Zoho assign failed — ticket {ticket_id}: {result}")
+        return False
+
+    data = _unwrap_mcp_result(result)
+    if isinstance(data, dict) and data.get("errorCode"):
+        print(f"Zoho assign failed — ticket {ticket_id}: {data}")
+        return False
+
+    print(f"Zoho ticket {ticket_id} assigned to agent {agent_id}")
+    return True
 
 
 def _zoho_set_status(ticket_id: str, status: str) -> bool:
@@ -551,11 +561,21 @@ def _zoho_set_status(ticket_id: str, status: str) -> bool:
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
     })
-    if result:
-        print(f"Zoho ticket {ticket_id} status → {status}")
-        return True
-    print(f"Zoho status update failed — ticket {ticket_id}")
-    return False
+    if not result:
+        print(f"Zoho status update failed — ticket {ticket_id}, no result")
+        return False
+
+    if isinstance(result, dict) and result.get("isError"):
+        print(f"Zoho status update failed — ticket {ticket_id}: {result}")
+        return False
+
+    data = _unwrap_mcp_result(result)
+    if isinstance(data, dict) and data.get("errorCode"):
+        print(f"Zoho status update failed — ticket {ticket_id}: {data}")
+        return False
+
+    print(f"Zoho ticket {ticket_id} status → {status}")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1499,12 +1519,15 @@ def handle_reply(event: dict):
             f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
         )
 
-        # Fetch contact email so Zoho sendReply has a recipient
+        # Fetch contact email + CC so Zoho sendReply has recipients
         _ticket_raw = fetch_ticket_from_zoho(ticket_id)
         _fields = _extract_ticket_fields(_ticket_raw) if _ticket_raw else {}
         _to = _fields.get("contact_email", "")
+        _cc = _fields.get("cc_email", "")
 
-        sent_ok = _send_client_reply(ticket_id, pending, to_email=_to)
+        sent_ok = _send_client_reply(
+            ticket_id, pending, to_email=_to, cc_email=_cc
+        )
         if not sent_ok:
             # Re-store the pending message so Sam can retry
             _store_pending_send(thread_ts, pending, close_after=close_after)
@@ -1561,11 +1584,16 @@ def handle_reply(event: dict):
                 )
         else:
             # No ClickUp task — just send and update Zoho status
-            _zoho_set_status(ticket_id, "Awaiting Reply")
+            status_ok = _zoho_set_status(ticket_id, "Awaiting Reply")
+            status_line = (
+                "✓ Zoho status → Awaiting Reply"
+                if status_ok
+                else "⚠ Zoho status update failed — update manually"
+            )
             _reply(
                 channel, thread_ts,
-                "✓ Sent to client\n"
-                "✓ Zoho status → Awaiting Reply\n"
+                f"✓ Sent to client\n"
+                f"{status_line}\n"
                 f"View in Zoho: {zoho_url}",
             )
         return

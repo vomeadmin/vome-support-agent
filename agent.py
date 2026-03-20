@@ -128,11 +128,19 @@ def _extract_ticket_fields(raw_result: dict) -> dict:
         or ""
     )
 
+    # CC list — Zoho returns as a comma-separated string or a list
+    raw_cc = ticket.get("cc", "") or ""
+    if isinstance(raw_cc, list):
+        cc_email = ",".join(raw_cc)
+    else:
+        cc_email = raw_cc
+
     return {
         "subject": ticket.get("subject", ""),
         "description": ticket.get("description", ""),
         "contact_name": contact_name,
         "contact_email": contact_email,
+        "cc_email": cc_email,
         "status": ticket.get("status", ""),
         "created_time": ticket.get("createdTime", ""),
     }
