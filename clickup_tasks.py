@@ -76,8 +76,28 @@ MODULE_IDS = {
 SOURCE_ZOHO_TICKET = "9b678f29-3b49-4842-9305-ada436cfc0b3"
 SOURCE_FIELD_FEEDBACK = "ef5fcb3c-c27d-443c-bef2-32be1521baf1"
 
+# ClickUp user IDs
+CLICKUP_USER_SANJAY = 4434086
+CLICKUP_USER_ONLYG = 49257687
+CLICKUP_USER_SAM = 3691763
+
 # ClickUp priority: 1=urgent(P1), 2=high(P2), 3=normal(P3)
 PRIORITY_MAP = {"p1": 1, "p2": 2, "p3": 3}
+
+# Complexity -> Auto Score default mapping
+COMPLEXITY_SCORE_MAP = {
+    "low": 2,
+    "medium": 5,
+    "high": 7,
+    "very-high": 9,
+}
+
+# Engineer type -> ClickUp assignee ID
+ENGINEER_ASSIGNEE_MAP = {
+    "frontend": CLICKUP_USER_SANJAY,
+    "mobile": CLICKUP_USER_SANJAY,
+    "backend": CLICKUP_USER_ONLYG,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +124,49 @@ def _parse_agent_response(agent_response: str) -> dict:
         "auto_score": _extract("AUTO SCORE", agent_response),
         "timing": _extract("TIMING", agent_response),
     }
+
+
+def _derive_priority_label(analysis: dict) -> str:
+    """Derive P1/P2/P3 from tier and complexity.
+
+    tier:very-high OR complexity:very-high -> P1
+    complexity:high OR tier:high           -> P2
+    else                                   -> P3
+    """
+    tier = analysis.get("client_tier", "low")
+    cx = analysis.get("complexity", "low")
+    if tier == "very-high" or cx == "very-high":
+        return "P1"
+    if cx == "high" or tier == "high":
+        return "P2"
+    return "P3"
+
+
+def _determine_list_from_category(category: str) -> str | None:
+    """Route to the correct ClickUp list based on category.
+
+    Returns list ID or None (no task should be created).
+    """
+    if category in ("bug", "investigation", "auth"):
+        return LIST_PRIORITY_QUEUE
+    if category == "feature":
+        return LIST_RAW_INTAKE
+    # how-to, billing -> no ClickUp task
+    return None
+
+
+def _determine_assignee_from_analysis(analysis: dict) -> int | None:
+    """Map engineer_type to ClickUp user ID.
+
+    auth category always routes to OnlyG regardless of engineer_type.
+    """
+    cat = analysis.get("category", "")
+    if cat == "auth":
+        return CLICKUP_USER_ONLYG
+    eng = analysis.get("engineer_type", "")
+    if eng == "unclear":
+        return CLICKUP_USER_SANJAY
+    return ENGINEER_ASSIGNEE_MAP.get(eng)
 
 
 def _map_type_option(classification: str) -> str:
@@ -157,33 +220,32 @@ def _map_priority(priority: str) -> int:
 
 
 def _determine_list(classification: str, priority: str) -> str:
-    """Route to the correct ClickUp list based on classification + priority."""
+    """Route to the correct ClickUp list based on classification + priority.
+
+    Legacy helper kept for backward compatibility (field_feedback, reply handler).
+    New ticket flow uses _determine_list_from_category instead.
+    """
     cl = classification.lower()
     if "feature" in cl:
         return LIST_RAW_INTAKE
     if "ux" in cl:
-        # Non-urgent UX (P3) → Accepted Backlog; urgent → Priority Queue
         if "p3" in priority.lower():
             return LIST_ACCEPTED_BACKLOG
         return LIST_PRIORITY_QUEUE
-    # Bug, access, direct action, general question, investigation → Priority Queue
     return LIST_PRIORITY_QUEUE
 
 
 def _determine_assignee(classification: str) -> int | None:
-    """
-    Infer suggested assignee from classification type.
-    Returns ClickUp user ID integer or None.
+    """Infer suggested assignee from classification type.
+
+    Legacy helper kept for backward compatibility (field_feedback, reply handler).
+    New ticket flow uses _determine_assignee_from_analysis instead.
     """
     cl = classification.lower()
-    # Frontend bugs and UX → Sanjay
     if any(x in cl for x in ("frontend", "ux", "ui")):
-        uid = os.environ.get("CLICKUP_USER_SANJAY", "")
-        return int(uid) if uid else None
-    # Backend, data, access, API → OnlyG
+        return CLICKUP_USER_SANJAY
     if any(x in cl for x in ("backend", "data", "access", "api")):
-        uid = os.environ.get("CLICKUP_USER_ONLYG", "")
-        return int(uid) if uid else None
+        return CLICKUP_USER_ONLYG
     return None
 
 
@@ -264,44 +326,86 @@ def create_clickup_task(
     crm: dict,
     zoho_url: str,
     source_option_id: str | None = None,
+    analysis: dict | None = None,
 ) -> dict | None:
     """
     Parse agent response and create a ClickUp task via REST API.
 
-    Returns {"task_id": str, "task_url": str} or None on any failure.
-    Never raises — errors are logged and None is returned so the main
+    When ``analysis`` is provided (dict with category, complexity,
+    client_tier, engineer_type, flags), routing and scoring use the
+    new classification system.  Otherwise falls back to legacy parsing
+    for backward compatibility (field feedback, reply handler).
+
+    Returns {"task_id": str, "task_url": str} or None on any failure
+    (including categories that should not produce a task).
+    Never raises -- errors are logged and None is returned so the main
     pipeline continues without crashing.
     """
     if not CLICKUP_API_TOKEN:
-        print("create_clickup_task: CLICKUP_API_TOKEN not set — skipping")
+        print("create_clickup_task: CLICKUP_API_TOKEN not set -- skipping")
         return None
 
     try:
         parsed = _parse_agent_response(agent_response)
-        classification = parsed["classification"]
-        priority_str = parsed["priority"]
         subject = ticket_data.get("subject", "Unknown issue")
 
-        # Determine routing
-        list_id = _determine_list(classification, priority_str)
-        cu_priority = _map_priority(priority_str)
+        # -----------------------------------------------------------------
+        # Routing, priority, assignee, score -- new vs legacy path
+        # -----------------------------------------------------------------
+        if analysis:
+            category = analysis.get("category", "")
 
-        # Build task body
-        title = _build_title(ticket_data, crm, subject, priority_str)
+            # Determine list -- may return None (no task for how-to/billing)
+            list_id = _determine_list_from_category(category)
+            if list_id is None:
+                print(
+                    f"create_clickup_task: category '{category}' "
+                    f"does not get a ClickUp task -- skipping"
+                )
+                return None
+
+            # Priority label from tier + complexity
+            priority_label = _derive_priority_label(analysis)
+            cu_priority = PRIORITY_MAP.get(priority_label.lower(), 3)
+
+            # Assignee from engineer_type
+            assignee = _determine_assignee_from_analysis(analysis)
+
+            # Auto score from complexity
+            complexity = analysis.get("complexity", "low")
+            auto_score = COMPLEXITY_SCORE_MAP.get(complexity, 2)
+
+            # Type mapping: category -> ClickUp Type option
+            cat_type_map = {
+                "bug": TYPE_BUG,
+                "investigation": TYPE_INVESTIGATION,
+                "feature": TYPE_FEATURE,
+                "auth": TYPE_INVESTIGATION,
+            }
+            type_option = cat_type_map.get(category, TYPE_INVESTIGATION)
+        else:
+            # Legacy path (field feedback / reply handler)
+            classification = parsed["classification"]
+            priority_label = parsed["priority"] or "P3"
+            list_id = _determine_list(classification, priority_label)
+            cu_priority = _map_priority(priority_label)
+            assignee = _determine_assignee(classification)
+            type_option = _map_type_option(classification)
+
+            auto_score = None
+            if parsed.get("auto_score"):
+                try:
+                    auto_score = int(parsed["auto_score"])
+                except ValueError:
+                    pass
+
+        # -----------------------------------------------------------------
+        # Build task title and description (always English)
+        # -----------------------------------------------------------------
+        title = _build_title(ticket_data, crm, subject, priority_label)
         description = _build_description(
             ticket_data, crm, parsed, zoho_url
         )
-
-        # Assignee
-        assignee = _determine_assignee(classification)
-
-        # Auto Score
-        auto_score = None
-        if parsed.get("auto_score"):
-            try:
-                auto_score = int(parsed["auto_score"])
-            except ValueError:
-                pass
 
         # ARR
         arr_value = None
@@ -311,11 +415,12 @@ def create_clickup_task(
             except (ValueError, TypeError):
                 pass
 
-        # Build custom_fields list — only include fields with resolved values
+        # -----------------------------------------------------------------
+        # Custom fields
+        # -----------------------------------------------------------------
         custom_fields = []
 
         # Type
-        type_option = _map_type_option(classification)
         custom_fields.append({"id": FIELD_TYPE, "value": type_option})
 
         # Platform
@@ -332,19 +437,32 @@ def create_clickup_task(
                 {"id": FIELD_MODULE, "value": module_option}
             )
 
-        # Source — caller can override (e.g. Field Feedback)
+        # Source -- caller can override (e.g. Field Feedback)
         source = source_option_id or SOURCE_ZOHO_TICKET
         custom_fields.append({"id": FIELD_SOURCE, "value": source})
 
-        # Zoho Ticket Link
+        # Zoho Ticket Link (always included)
         custom_fields.append(
             {"id": FIELD_ZOHO_TICKET_LINK, "value": zoho_url}
         )
 
-        # Highest Tier
-        if crm.get("tier") and crm["tier"] != "Unknown":
+        # Highest Tier -- prefer analysis client_tier, fall back to CRM tier
+        tier_display = None
+        if analysis:
+            tier_map = {
+                "very-high": "Very High",
+                "high": "High",
+                "medium": "Medium",
+                "low": "Low",
+            }
+            tier_display = tier_map.get(
+                analysis.get("client_tier", ""), None
+            )
+        if not tier_display and crm.get("tier") and crm["tier"] != "Unknown":
+            tier_display = crm["tier"]
+        if tier_display:
             custom_fields.append(
-                {"id": FIELD_HIGHEST_TIER, "value": crm["tier"]}
+                {"id": FIELD_HIGHEST_TIER, "value": tier_display}
             )
 
         # Requesting Clients
@@ -368,7 +486,9 @@ def create_clickup_task(
                 {"id": FIELD_AUTO_SCORE, "value": auto_score}
             )
 
-        # Assemble request payload
+        # -----------------------------------------------------------------
+        # Assemble and POST
+        # -----------------------------------------------------------------
         payload: dict = {
             "name": title,
             "description": description,
@@ -379,7 +499,6 @@ def create_clickup_task(
         if assignee:
             payload["assignees"] = [assignee]
 
-        # POST to ClickUp
         url = f"{CLICKUP_BASE}/list/{list_id}/task"
         r = httpx.post(
             url,

@@ -21,8 +21,11 @@ from slack_sdk.errors import SlackApiError
 
 from agent import (
     SYSTEM_PROMPT,
+    ZOHO_ORG_ID,
     _extract_ticket_fields,
     _format_conversations,
+    _zoho_mcp_call,
+    _unwrap_mcp_result,
     fetch_ticket_conversations,
     fetch_ticket_from_zoho,
 )
@@ -102,6 +105,28 @@ def update_clickup_status_finished(task_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Zoho status update
+# ---------------------------------------------------------------------------
+
+def _set_zoho_status_final_review(zoho_ticket_id: str) -> bool:
+    """Update the Zoho ticket status to 'Final Review'."""
+    result = _zoho_mcp_call("ZohoDesk_updateTicket", {
+        "body": {"status": "Final Review"},
+        "path_variables": {"ticketId": str(zoho_ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+    if not result:
+        print(f"[ON PROD] Failed to set Zoho ticket {zoho_ticket_id} to Final Review")
+        return False
+    data = _unwrap_mcp_result(result)
+    if isinstance(data, dict) and data.get("errorCode"):
+        print(f"[ON PROD] Zoho status update failed for ticket {zoho_ticket_id}: {data}")
+        return False
+    print(f"[ON PROD] Zoho ticket {zoho_ticket_id} status set to Final Review")
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Thread map helpers
 # ---------------------------------------------------------------------------
 
@@ -132,20 +157,34 @@ def _generate_resolution_draft(
     conversations_text: str,
     classification: str,
     module: str,
+    language: str | None = None,
 ) -> str:
-    """Call Claude to generate a resolution confirmation response."""
+    """Call Claude to generate a resolution confirmation response.
+
+    If ``language`` is provided (e.g. "French"), the draft will be
+    written in that language.  Otherwise defaults to English.
+    """
     contact_name = ticket_fields.get("contact_name", "")
     subject = ticket_fields.get("subject", "")
     body = ticket_fields.get("description", "")
+
+    lang_instruction = ""
+    if language and language.lower() != "english":
+        lang_instruction = (
+            f"\nIMPORTANT: The client communicates in {language}. "
+            f"Write the entire draft response in {language}. "
+            f"Do not mix languages.\n"
+        )
 
     user_message = (
         "Generate a resolution confirmation response for this support ticket.\n"
         "The issue has been fixed and deployed to production.\n"
         "Follow all voice guidelines from the system prompt strictly.\n"
-        "Confirm what was resolved — be specific to the issue, not generic.\n"
+        "Confirm what was resolved -- be specific to the issue, not generic.\n"
         "Do not use technical jargon or mention internal tools or processes.\n"
         "Do not use an em-dash anywhere in the response.\n"
-        "Output the draft response only — no labels, no analysis, no preamble.\n\n"
+        "Output the draft response only -- no labels, no analysis, no preamble.\n"
+        f"{lang_instruction}\n"
         f"Classification: {classification}\n"
         f"Module: {module}\n"
         f"Client: {contact_name}\n"
@@ -308,20 +347,33 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
 
     print(f"[ON PROD] Zoho ticket ID: {zoho_ticket_id}")
 
-    # Step 3 — fetch Zoho ticket + conversations
+    # Step 3 — set Zoho ticket status to Final Review
+    _set_zoho_status_final_review(zoho_ticket_id)
+
+    # Step 4 — fetch Zoho ticket + conversations
     zoho_ticket = fetch_ticket_from_zoho(zoho_ticket_id)
     conversations_result = fetch_ticket_conversations(zoho_ticket_id)
 
     fields = _extract_ticket_fields(zoho_ticket) if zoho_ticket else {}
     conversations_text = _format_conversations(conversations_result)
 
-    # Step 4 — generate resolution draft
+    # Step 5 — determine client language from thread_map
+    language = None
+    thread_ts = _find_thread_ts(zoho_ticket_id)
+    if thread_ts:
+        thread_entry = get_thread(thread_ts) or {}
+        classification_data = thread_entry.get("classification") or {}
+        # Language may be stored directly or inferred from tags
+        language = classification_data.get("language")
+
+    # Step 6 — generate resolution draft (in client's language)
     try:
         draft = _generate_resolution_draft(
             ticket_fields=fields,
             conversations_text=conversations_text,
             classification=classification,
             module=module,
+            language=language,
         )
     except Exception as e:
         print(f"[ON PROD] Draft generation failed: {e}")
@@ -332,8 +384,10 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
             "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
         )
 
-    # Step 5 — find existing Slack thread or create new one
-    thread_ts = _find_thread_ts(zoho_ticket_id)
+    # Step 7 — find existing Slack thread or create new one
+    # (thread_ts may already be set from the language lookup above)
+    if not thread_ts:
+        thread_ts = _find_thread_ts(zoho_ticket_id)
 
     if thread_ts:
         thread_entry = get_thread(thread_ts) or {}

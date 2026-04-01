@@ -7,7 +7,10 @@ import anthropic
 import httpx
 from pathlib import Path
 
+import random
+
 from slack_ticket_brief import send_ticket_brief
+from slack import post_to_engineering
 
 # Fix Windows console encoding for emoji in system_prompt.md
 if sys.stdout.encoding != "utf-8":
@@ -478,6 +481,333 @@ def _detect_language(text: str) -> str | None:
     return None
 
 
+def get_client_tier(arr) -> str:
+    """Derive client tier from CRM ARR value.
+
+    Returns one of: very-high, high, medium, low.
+    """
+    if arr is None:
+        return "low"
+    try:
+        value = float(arr)
+    except (ValueError, TypeError):
+        return "low"
+    if value >= 4000:
+        return "very-high"
+    if value >= 1500:
+        return "high"
+    if value >= 1000:
+        return "medium"
+    return "low"
+
+
+# -- Zoho agent IDs for routing --
+ZOHO_AGENT_SANJAY = "569440000023159001"
+ZOHO_AGENT_ONLYG = "569440000023160001"
+ZOHO_AGENT_SAM = "569440000000139001"
+
+
+def _parse_new_classification(agent_response: str, arr) -> dict:
+    """Parse the four new classification fields from Claude's structured output.
+
+    Returns dict with keys: category, complexity, engineer_type, client_tier, flags.
+    """
+
+    def _extract(field: str) -> str:
+        m = re.search(
+            rf"^{re.escape(field)}:\s*(.+)",
+            agent_response,
+            re.IGNORECASE | re.MULTILINE,
+        )
+        return m.group(1).strip().lower() if m else ""
+
+    raw_category = _extract("CATEGORY")
+    category_map = {
+        "technical bug": "bug",
+        "bug": "bug",
+        "investigation": "investigation",
+        "feature request": "feature",
+        "feature explanation/how-to": "how-to",
+        "feature explanation": "how-to",
+        "how-to": "how-to",
+        "admin & billing": "billing",
+        "admin and billing": "billing",
+        "billing": "billing",
+        "authentication": "auth",
+        "auth": "auth",
+    }
+    category = category_map.get(raw_category, raw_category)
+
+    raw_complexity = _extract("COMPLEXITY")
+    complexity_map = {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "very high": "very-high",
+        "very-high": "very-high",
+    }
+    complexity = complexity_map.get(raw_complexity, raw_complexity)
+
+    raw_eng = _extract("ENGINEER TYPE")
+    eng_map = {
+        "frontend": "frontend",
+        "mobile": "mobile",
+        "backend": "backend",
+        "unclear": "unclear",
+    }
+    engineer_type = eng_map.get(raw_eng, raw_eng)
+
+    client_tier = get_client_tier(arr)
+
+    # Derive flags
+    flags = []
+    if category in ("bug", "investigation") and engineer_type in ("frontend", "mobile"):
+        if complexity in ("high", "very-high") or client_tier == "very-high":
+            flags.append("ping-sam")
+    if client_tier == "very-high" and category in ("bug", "investigation"):
+        if "ping-sam" not in flags:
+            flags.append("ping-sam")
+    if engineer_type == "unclear":
+        flags.append("eng-unclear")
+
+    return {
+        "category": category,
+        "complexity": complexity,
+        "engineer_type": engineer_type,
+        "client_tier": client_tier,
+        "flags": flags,
+    }
+
+
+def _get_routing(classification: dict) -> dict:
+    """Determine Zoho assignee and ClickUp list from classification.
+
+    Returns dict with keys: assignee_id (str or None), clickup_list (str or None).
+    """
+    cat = classification["category"]
+    eng = classification["engineer_type"]
+
+    assignee_id = None
+    clickup_list = None
+
+    if cat in ("bug", "investigation") and eng in ("frontend", "mobile"):
+        assignee_id = ZOHO_AGENT_SANJAY
+        clickup_list = "priority_queue"
+    elif cat == "auth":
+        assignee_id = ZOHO_AGENT_ONLYG
+        clickup_list = "priority_queue"
+    elif cat in ("bug", "investigation") and eng == "backend":
+        assignee_id = ZOHO_AGENT_ONLYG
+        clickup_list = "priority_queue"
+    elif cat in ("bug", "investigation") and eng == "unclear":
+        assignee_id = ZOHO_AGENT_SANJAY
+        clickup_list = "priority_queue"
+    elif cat == "feature":
+        assignee_id = None
+        clickup_list = "raw_intake"
+    elif cat in ("how-to", "billing"):
+        assignee_id = None
+        clickup_list = None
+
+    return {"assignee_id": assignee_id, "clickup_list": clickup_list}
+
+
+def _build_zoho_tags(classification: dict) -> list[str]:
+    """Build the list of private Zoho tags from classification dimensions."""
+    tags = [
+        f"cat:{classification['category']}",
+        f"cx:{classification['complexity']}",
+        f"tier:{classification['client_tier']}",
+        f"eng:{classification['engineer_type']}",
+    ]
+    for flag in classification.get("flags", []):
+        tags.append(f"flag:{flag}")
+    return tags
+
+
+def update_zoho_ticket_tags_and_assignee(
+    ticket_id: str,
+    tags: list[str],
+    assignee_id: str | None,
+) -> bool:
+    """Update a Zoho Desk ticket with tags and optional assignee."""
+    body: dict = {}
+    if tags:
+        # Zoho Desk accepts tags as a comma-separated string
+        body["tag"] = ",".join(tags)
+    if assignee_id:
+        body["assigneeId"] = assignee_id
+
+    if not body:
+        return True
+
+    result = _zoho_mcp_call("ZohoDesk_updateTicket", {
+        "body": body,
+        "path_variables": {"ticketId": str(ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+
+    if not result:
+        print(f"Failed to update tags/assignee on ticket {ticket_id}")
+        return False
+
+    data = _unwrap_mcp_result(result)
+    if isinstance(data, dict) and data.get("errorCode"):
+        print(f"Failed to update tags/assignee on ticket {ticket_id}: {data}")
+        return False
+
+    print(f"Zoho ticket {ticket_id} updated -- tags: {tags}, assignee: {assignee_id}")
+    return True
+
+
+# -- Auto-acknowledgment reply templates --
+
+_ACK_TEMPLATES_EN = [
+    (
+        "Hi {name}, thanks for reaching out. We've received your message "
+        "and our team is reviewing it. We'll follow up shortly.\n"
+        "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+    ),
+    (
+        "Hi {name}, we've got this and are looking into it. "
+        "You'll hear from us soon.\n"
+        "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+    ),
+    (
+        "Hi {name}, thanks for flagging this. Our team is on it "
+        "and we'll get back to you with an update.\n"
+        "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+    ),
+    (
+        "Hi {name}, this has been received and is being reviewed "
+        "by our team. We'll be in touch shortly.\n"
+        "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+    ),
+]
+
+_ACK_TEMPLATES_FR = [
+    (
+        "Bonjour {name}, merci de nous avoir contactes. Nous avons bien "
+        "recu votre message et notre equipe l'examine. Nous reviendrons "
+        "vers vous sous peu.\n"
+        "Cordialement,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+    ),
+    (
+        "Bonjour {name}, nous avons bien pris note de votre demande "
+        "et notre equipe s'en occupe. Vous aurez de nos nouvelles bientot.\n"
+        "Cordialement,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+    ),
+    (
+        "Bonjour {name}, merci d'avoir signale ceci. Notre equipe "
+        "examine la situation et nous vous tiendrons informe.\n"
+        "Cordialement,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+    ),
+    (
+        "Bonjour {name}, votre demande a bien ete recue et est "
+        "en cours d'examen par notre equipe. Nous vous recontacterons "
+        "rapidement.\n"
+        "Cordialement,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+    ),
+]
+
+# Module names used for info-sufficiency check
+_MODULE_KEYWORDS = [
+    "volunteer", "homepage", "schedule", "opportunities", "sequences",
+    "forms", "dashboard", "settings", "permissions", "sites", "groups",
+    "categories", "hour", "kiosk", "email", "chat", "reports", "kpi",
+    "integrations", "authentication", "login", "sso",
+]
+
+_INFO_REQUEST_EN = (
+    "If possible, could you share the affected user's email, "
+    "any screenshots or a short video, and the steps you took "
+    "when this happened?"
+)
+_INFO_REQUEST_FR = (
+    "Si possible, pourriez-vous nous partager l'adresse courriel "
+    "de l'utilisateur concerne, des captures d'ecran ou une courte "
+    "video, ainsi que les etapes que vous avez suivies?"
+)
+
+
+def _ticket_is_sparse(body: str) -> bool:
+    """Check if ticket body is too vague to act on without more info.
+
+    Sparse = fewer than 30 words AND contains no module keyword AND
+    no email address AND no numbered/bulleted steps.
+    """
+    if not body:
+        return True
+    words = body.split()
+    if len(words) >= 30:
+        return False
+    lower = body.lower()
+    has_module = any(kw in lower for kw in _MODULE_KEYWORDS)
+    has_email = bool(re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", body))
+    has_steps = bool(re.search(r"(^|\n)\s*(\d+[\.\):]|[-*])\s+", body))
+    if has_module or has_email or has_steps:
+        return False
+    return True
+
+
+def send_auto_acknowledgment(
+    ticket_id: str,
+    contact_name: str,
+    contact_email: str,
+    body: str,
+    client_tier: str,
+    detected_lang: str | None,
+) -> bool:
+    """Send an immediate auto-acknowledgment reply to the client.
+
+    Picks a random template, optionally appends info-request for
+    low/medium tier clients with sparse tickets.
+    """
+    first_name = (contact_name or "").split()[0] if contact_name else ""
+    if not first_name:
+        first_name = "there"
+
+    is_french = detected_lang == "French"
+    templates = _ACK_TEMPLATES_FR if is_french else _ACK_TEMPLATES_EN
+    reply = random.choice(templates).format(name=first_name)
+
+    # For low/medium tier only: append info request if ticket is sparse
+    if client_tier in ("low", "medium") and _ticket_is_sparse(body):
+        info_req = _INFO_REQUEST_FR if is_french else _INFO_REQUEST_EN
+        # Insert before the sign-off line
+        sign_off_marker = "Cordialement," if is_french else "Best,"
+        if sign_off_marker in reply:
+            reply = reply.replace(
+                sign_off_marker,
+                f"\n{info_req}\n\n{sign_off_marker}",
+            )
+
+    # Send via ZohoDesk_sendReply (actually sends, not a draft)
+    result = _zoho_mcp_call("ZohoDesk_sendReply", {
+        "body": {
+            "channel": "EMAIL",
+            "fromEmailAddress": ZOHO_FROM_ADDRESS,
+            "to": contact_email,
+            "content": reply,
+            "contentType": "plainText",
+        },
+        "path_variables": {"ticketId": str(ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+
+    if not result:
+        print(f"Auto-ack FAILED on ticket {ticket_id}")
+        return False
+
+    data = _unwrap_mcp_result(result)
+    if isinstance(data, dict) and data.get("errorCode"):
+        print(f"Auto-ack FAILED on ticket {ticket_id}: {data}")
+        return False
+
+    print(f"Auto-ack sent on ticket {ticket_id} (lang={'FR' if is_french else 'EN'}, tier={client_tier})")
+    return True
+
+
 def post_draft_reply(ticket_id: str, content: str, to_email: str = "") -> bool:
     """Post an email draft reply on the Zoho Desk ticket (saved, not sent)."""
     body = {
@@ -748,11 +1078,52 @@ def process_ticket(ticket_data: dict) -> str | None:
             )
             return m.group(1).strip() if m else ""
 
+        # --- NEW: Parse classification, apply tags/assignee, auto-ack ---
+
+        # 1. Parse four new classification fields
+        new_class = _parse_new_classification(result, crm.get("arr"))
+        print(
+            f"Classification: cat={new_class['category']} "
+            f"cx={new_class['complexity']} eng={new_class['engineer_type']} "
+            f"tier={new_class['client_tier']} flags={new_class['flags']}"
+        )
+
+        # 2. Apply Zoho tags
+        zoho_tags = _build_zoho_tags(new_class)
+        routing = _get_routing(new_class)
+        update_zoho_ticket_tags_and_assignee(
+            ticket_id, zoho_tags, routing["assignee_id"]
+        )
+
+        # 3. Send auto-acknowledgment reply (immediate, no approval needed)
+        send_auto_acknowledgment(
+            ticket_id=ticket_id,
+            contact_name=contact_name,
+            contact_email=contact_email,
+            body=body,
+            client_tier=new_class["client_tier"],
+            detected_lang=detected_lang,
+        )
+
+        # 4. Slack ping to Sam if flag:ping-sam is set
+        if "ping-sam" in new_class["flags"]:
+            ping_msg = (
+                f"FYI -- High complexity or VIP ticket just assigned to "
+                f"Sanjay: #{ticket_data.get('ticket_number', ticket_id)} "
+                f"{subject} | tier:{new_class['client_tier']} "
+                f"cx:{new_class['complexity']} | {zoho_url}"
+            )
+            try:
+                post_to_engineering(ping_msg)
+                print(f"ping-sam sent for ticket {ticket_id}")
+            except Exception as e:
+                print(f"ping-sam Slack post failed for ticket {ticket_id}: {e}")
+
         latest_reply = _get_latest_client_reply(
             conversations_result, contact_email
         )
 
-        # Send Slack brief — only output on new ticket arrival
+        # Send Slack brief -- only output on new ticket arrival
         send_ticket_brief(
             ticket_id=ticket_id,
             ticket_number=ticket_data.get(
@@ -773,6 +1144,8 @@ def process_ticket(ticket_data: dict) -> str | None:
             timing=_extract_field("TIMING"),
             priority=_extract_field("PRIORITY"),
             suggested_owner=_extract_field("SUGGESTED OWNER"),
+            # Pass new classification for enriched DB storage
+            new_classification=new_class,
         )
 
         return result

@@ -15,9 +15,11 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request, Response
 
 from agent import process_ticket, process_ticket_update
+from clickup_assignee_handler import handle_assignee_updated
 from database import init_db
 from field_feedback import handle_field_feedback
 from on_prod_handler import handle_on_prod
+from slack_agent_mention_handler import handle_agent_mention
 from slack_reply_handler import handle_reply
 from slack_digest import send_daily_digest
 
@@ -141,6 +143,11 @@ async def slack_events_webhook(request: Request):
     if event.get("bot_id") or event.get("subtype"):
         return {"status": "ok"}
 
+    # app_mention — @Agent was mentioned in a channel
+    if event_type == "app_mention":
+        handle_agent_mention(event)
+        return {"status": "ok"}
+
     # file_shared — attach file data to event and route as a reply
     if event_type == "file_shared":
         file_id = event.get("file_id")
@@ -228,6 +235,10 @@ async def zoho_update_webhook(request: Request):
     return {"status": "ok"}
 
 
+# ClickUp webhook subscription must include BOTH event types:
+#   - taskStatusUpdated  (ON PROD flow)
+#   - taskAssigneeUpdated (assignee sync to Zoho)
+# Configure at: https://app.clickup.com > Space settings > Integrations > Webhooks
 @app.post("/webhook/clickup-status")
 async def clickup_status_webhook(request: Request):
     raw_body = await request.body()
@@ -235,6 +246,11 @@ async def clickup_status_webhook(request: Request):
 
     event = payload.get("event", "")
     task_id = payload.get("task_id", "")
+
+    # Handle assignee changes
+    if event == "taskAssigneeUpdated" and task_id:
+        handle_assignee_updated(payload)
+        return {"status": "ok"}
 
     if event != "taskStatusUpdated" or not task_id:
         return {"status": "ok"}

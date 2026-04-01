@@ -57,6 +57,7 @@ def send_ticket_brief(
     timing: str = "",
     priority: str = "",
     suggested_owner: str = "",
+    new_classification: dict | None = None,
 ) -> str | None:
     """
     Post a structured ticket brief to #vome-tickets.
@@ -188,6 +189,27 @@ def send_ticket_brief(
             f" thread_ts={thread_ts}"
         )
 
+        class_dict = {
+            "type": classification,
+            "module": module,
+            "platform": (
+                _extract_from_response(agent_response, "PLATFORM")
+            ),
+            "priority": priority,
+            "auto_score": (
+                _extract_from_response(agent_response, "AUTO SCORE")
+            ),
+            "suggested_owner": suggested_owner,
+            "issue_summary": issue_summary,
+        }
+        # Merge new classification fields if provided
+        if new_classification:
+            class_dict["category"] = new_classification.get("category", "")
+            class_dict["complexity"] = new_classification.get("complexity", "")
+            class_dict["engineer_type"] = new_classification.get("engineer_type", "")
+            class_dict["client_tier"] = new_classification.get("client_tier", "")
+            class_dict["flags"] = new_classification.get("flags", [])
+
         save_thread(
             thread_ts=thread_ts,
             ticket_id=ticket_id,
@@ -195,19 +217,7 @@ def send_ticket_brief(
             subject=subject,
             channel=CHANNEL_TICKETS,
             clickup_task_id=clickup_task_id,
-            classification={
-                "type": classification,
-                "module": module,
-                "platform": (
-                    _extract_from_response(agent_response, "PLATFORM")
-                ),
-                "priority": priority,
-                "auto_score": (
-                    _extract_from_response(agent_response, "AUTO SCORE")
-                ),
-                "suggested_owner": suggested_owner,
-                "issue_summary": issue_summary,
-            },
+            classification=class_dict,
             crm=crm,
         )
         return thread_ts
