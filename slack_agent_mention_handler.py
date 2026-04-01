@@ -171,10 +171,10 @@ def _load_channel_defaults():
         os.environ.get("SLACK_CHANNEL_OPS", ""): "901106558605",
         os.environ.get("SLACK_CHANNEL_ENG_FRONTEND", ""): "42278953",
         os.environ.get("SLACK_CHANNEL_ENG_BACKEND", ""): "901102882382",
-        os.environ.get("SLACK_CHANNEL_FIELD_FEEDBACK", ""): "901113386484",
-        os.environ.get("SLACK_CHANNEL_FEATURE_REQUESTS", ""): "901113386484",
-        os.environ.get("SLACK_CHANNEL_SUPPORT_SANJAY", ""): "901113386257",
-        os.environ.get("SLACK_CHANNEL_SUPPORT_ONLYG", ""): "901113386257",
+        os.environ.get("SLACK_CHANNEL_VOME_FIELD_FEEDBACK", ""): "901113386484",
+        os.environ.get("SLACK_CHANNEL_VOME_FEATURE_REQUESTS", ""): "901113386484",
+        os.environ.get("SLACK_CHANNEL_SUPPORT_QUEUE_SANJAY", ""): "901113386257",
+        os.environ.get("SLACK_CHANNEL_SUPPORT_QUEUE_ONLYG", ""): "901113386257",
     })
     # Remove empty-string keys (unset env vars)
     CHANNEL_DEFAULTS.pop("", None)

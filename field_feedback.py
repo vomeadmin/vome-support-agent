@@ -29,7 +29,7 @@ from slack_sdk.errors import SlackApiError
 _slack = WebClient(token=os.environ.get("SLACK_BOT_TOKEN", ""))
 _anthropic = anthropic.Anthropic()
 
-CHANNEL_FIELD_FEEDBACK = os.environ.get("SLACK_CHANNEL_FIELD_FEEDBACK", "")
+CHANNEL_FIELD_FEEDBACK = os.environ.get("SLACK_CHANNEL_VOME_FIELD_FEEDBACK", "")
 
 CLICKUP_API_TOKEN = os.environ.get("CLICKUP_API_TOKEN", "")
 CLICKUP_BASE = "https://api.clickup.com/api/v2"

@@ -66,7 +66,7 @@ CLICKUP_LIST_RAW_INTAKE = "901113386484"
 CLICKUP_LIST_SLEEPING = "901113389897"
 
 SLACK_CHANNEL_ENGINEERING = os.environ.get(
-    "SLACK_CHANNEL_ENGINEERING", ""
+    "SLACK_CHANNEL_VOME_SUPPORT_ENGINEERING", ""
 )
 
 PRIORITY_MAP = {"p1": 1, "p2": 2, "p3": 3}
@@ -768,7 +768,7 @@ def _notify_engineering(
     """Post assignment notification to #vome-support-engineering."""
     if not SLACK_CHANNEL_ENGINEERING:
         print(
-            "_notify_engineering: SLACK_CHANNEL_ENGINEERING not set"
+            "_notify_engineering: SLACK_CHANNEL_VOME_SUPPORT_ENGINEERING not set"
         )
         return
     msg = (

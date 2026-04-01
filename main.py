@@ -16,6 +16,8 @@ from fastapi import FastAPI, Request, Response
 
 from agent import process_ticket, process_ticket_update
 from clickup_assignee_handler import handle_assignee_updated
+from clickup_needs_review_handler import handle_needs_review
+from clickup_waiting_client_handler import handle_waiting_on_client
 from database import init_db
 from field_feedback import handle_field_feedback
 from on_prod_handler import handle_on_prod
@@ -115,8 +117,8 @@ def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool
 # Slack events webhook
 # ---------------------------------------------------------------------------
 
-SLACK_TICKETS_CHANNEL = os.environ.get("SLACK_TICKETS_CHANNEL", "")
-SLACK_FIELD_FEEDBACK_CHANNEL = os.environ.get("SLACK_CHANNEL_FIELD_FEEDBACK", "")
+SLACK_TICKETS_CHANNEL = os.environ.get("SLACK_CHANNEL_VOME_TICKETS", "")
+SLACK_FIELD_FEEDBACK_CHANNEL = os.environ.get("SLACK_CHANNEL_VOME_FIELD_FEEDBACK", "")
 
 
 @app.post("/webhook/slack-events")
@@ -236,7 +238,7 @@ async def zoho_update_webhook(request: Request):
 
 
 # ClickUp webhook subscription must include BOTH event types:
-#   - taskStatusUpdated  (ON PROD flow)
+#   - taskStatusUpdated  (ON PROD, Waiting on Client, Needs Review)
 #   - taskAssigneeUpdated (assignee sync to Zoho)
 # Configure at: https://app.clickup.com > Space settings > Integrations > Webhooks
 @app.post("/webhook/clickup-status")
@@ -261,8 +263,6 @@ async def clickup_status_webhook(request: Request):
         new_status = (
             (item.get("after") or {}).get("status") or ""
         ).lower().strip()
-        if new_status not in ("on prod", "on_prod", "on prod ✅"):
-            continue
         user = item.get("user") or {}
         engineer_name = (
             user.get("username")
@@ -272,12 +272,30 @@ async def clickup_status_webhook(request: Request):
         timestamp = datetime.now(timezone.utc).strftime(
             "%Y-%m-%d %H:%M:%S UTC"
         )
-        print(
-            f"[{timestamp}] ON PROD detected — "
-            f"task {task_id} by {engineer_name}"
-        )
-        handle_on_prod(task_id, engineer_name)
-        break
+
+        if new_status in ("on prod", "on_prod", "on prod ✅"):
+            print(
+                f"[{timestamp}] ON PROD detected — "
+                f"task {task_id} by {engineer_name}"
+            )
+            handle_on_prod(task_id, engineer_name)
+            break
+
+        if new_status in ("waiting on client", "waiting_on_client"):
+            print(
+                f"[{timestamp}] WAITING ON CLIENT detected — "
+                f"task {task_id} by {engineer_name}"
+            )
+            handle_waiting_on_client(task_id, engineer_name)
+            break
+
+        if new_status in ("needs review", "needs_review"):
+            print(
+                f"[{timestamp}] NEEDS REVIEW detected — "
+                f"task {task_id} by {engineer_name}"
+            )
+            handle_needs_review(task_id, engineer_name)
+            break
 
     return {"status": "ok"}
 

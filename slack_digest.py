@@ -69,7 +69,7 @@ def send_daily_digest():
     Called by APScheduler at 18:00 America/Montreal.
     """
     if not CHANNEL_TICKETS:
-        print("send_daily_digest: SLACK_TICKETS_CHANNEL not set")
+        print("send_daily_digest: SLACK_CHANNEL_VOME_TICKETS not set")
         return
 
     today = _today_str()

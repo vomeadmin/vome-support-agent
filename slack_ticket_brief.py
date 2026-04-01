@@ -7,7 +7,7 @@ from slack_sdk.errors import SlackApiError
 from database import save_thread, get_thread
 
 _slack = WebClient(token=os.environ.get("SLACK_BOT_TOKEN", ""))
-CHANNEL_TICKETS = os.environ.get("SLACK_TICKETS_CHANNEL", "")
+CHANNEL_TICKETS = os.environ.get("SLACK_CHANNEL_VOME_TICKETS", "")
 
 
 def _extract_from_response(agent_response: str, field: str) -> str:
@@ -69,7 +69,7 @@ def send_ticket_brief(
     """
     if not CHANNEL_TICKETS:
         print(
-            "send_ticket_brief: SLACK_TICKETS_CHANNEL not configured"
+            "send_ticket_brief: SLACK_CHANNEL_VOME_TICKETS not configured"
             " — skipping"
         )
         return None
