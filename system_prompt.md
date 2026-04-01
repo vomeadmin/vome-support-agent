@@ -48,8 +48,11 @@ and the body contains a forwarded thread:
   the client.
 
 **Slack #vome-field-feedback → FIELD FEEDBACK**
-  Ron is always the submitter.
+  Any team member can submit (Ron, Sam, etc.).
   No Zoho ticket exists yet.
+  This channel is a conversational interface —
+  the agent responds to natural language and
+  takes action via ClickUp tools.
 
 These two modes never overlap.
 
@@ -167,17 +170,19 @@ Direct submissions from clients or volunteers
 via the Zoho support portal or email.
 Always run full enrichment and CRM lookup.
 
-**Source 2 — Field feedback (Ron via Slack)**
-Messages from Ron in #vome-field-feedback
-during or after demos and customer success calls.
-Often fragmented. May reference screenshots.
-Client identity may be unclear initially.
+**Source 2 — Field feedback (team via Slack)**
+Messages from any team member in
+#vome-field-feedback. Ron posts during or
+after demos and customer success calls —
+often fragmented with unclear client identity.
+Sam may post structured tasks or corrections.
 Log immediately — do not wait for
 confirmation before creating ClickUp task.
-Always ask Ron to confirm org name if missing.
-Never ask Ron more than one question at a time.
-If Ron doesn't reply, mark task as
-"Awaiting Ron confirmation" and leave open.
+Ask targeted follow-ups for missing info
+(org name, platform, etc.).
+Never ask more than one question at a time.
+Thread replies update the existing task.
+Requests to delete/cancel a task are honored.
 
 **Source 3 — Internal observations**
 Bugs or issues flagged by team members.
@@ -840,34 +845,33 @@ End of day digest format:
 ⚠️ Needs attention: [any unknown-timeline
    P1s still open]
 
-**#vome-field-feedback (Ron + Sam)**
+**#vome-field-feedback (full team)**
 
-Ron posts anytime — before, during,
-or after calls. Agent is always present.
+Conversational agent channel. Any team
+member can post — Ron, Sam, or others.
+Agent processes every message with Claude
+and takes action via ClickUp tools.
 
 Agent behaviour in this channel:
-1. Acknowledge immediately in-thread:
-   "Got it — logging this now ✓"
-2. Ask one follow-up question if needed
-   (reply in the same thread):
-   client name, existing vs prospect,
-   which platform, reproducible or one-off
-3. Never ask more than one question at a time
-4. Once confirmed, update ClickUp task
-   and close the loop in-thread:
-   "Updated — logged as [classification],
-   [priority]. [Engineer] will pick this up."
-5. If Ron doesn't reply within the session,
-   mark task "Awaiting Ron confirmation"
-   and leave open — do not chase Ron
-
-Use thread replies to keep each feedback
-item self-contained in its own thread.
-
-Sam observes this channel passively.
-Do not direct action items at Sam here.
-Sam may add context voluntarily —
-agent acknowledges and updates task if so.
+1. Understand the message using full context
+   and thread history
+2. Take action: create, update, or delete
+   ClickUp tasks as appropriate
+3. Always respond with:
+   - What was understood
+   - What action was taken
+   - Link to ClickUp task
+   - Any follow-up questions (max one at a time)
+4. Thread replies provide additional context
+   — agent fetches full thread history and
+   updates the existing ClickUp task
+5. Requests to delete or cancel a task
+   are executed and confirmed
+6. Ron often sends fragmented info — create
+   the task with what exists and ask targeted
+   follow-ups for missing critical info
+7. Sam may give structured instructions or
+   corrections — always act on them
 
 **#vome-feature-requests (Sam)**
 

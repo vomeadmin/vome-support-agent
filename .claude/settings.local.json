@@ -21,7 +21,8 @@
       "mcp__zoho__ZohoCRM_Get_Records",
       "Bash(py -c \":*)",
       "Bash(py -m flake8 slack_ticket_brief.py agent.py --max-line-length=79 --select=E,W --ignore=E402,W503)",
-      "Bash(py -3 -c \":*)"
+      "Bash(py -3 -c \":*)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''field_feedback.py'', doraise=True\\)\")"
     ]
   }
 }
