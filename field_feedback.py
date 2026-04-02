@@ -698,6 +698,18 @@ def _run_agent(thread_ts: str, new_message: str, user_name: str, thread_context:
         final_text = "\n".join(text_parts).strip()
         if not final_text:
             final_text = "Got it."
+
+        # Deduplicate: if Claude repeated the same block, keep only the first
+        lines = final_text.split("\n")
+        if len(lines) > 4:
+            half = len(lines) // 2
+            first_half = "\n".join(lines[:half]).strip()
+            second_half = "\n".join(lines[half:]).strip()
+            if first_half and second_half and (
+                second_half in first_half or first_half in second_half
+            ):
+                final_text = first_half if len(first_half) >= len(second_half) else second_half
+
         return final_text, thread_context
 
     # Exhausted iterations
