@@ -1308,15 +1308,18 @@ def process_ticket(ticket_data: dict) -> str | None:
         routing = _get_routing(new_class)
         update_zoho_ticket_assignment(ticket_id, routing["assignee_id"])
 
-        # 3. Auto-ack (dry run — posts as private comment, not sent to client)
-        send_auto_acknowledgment(
-            ticket_id=ticket_id,
-            contact_name=contact_name,
-            contact_email=contact_email,
-            body=body,
-            client_tier=new_class["client_tier"],
-            detected_lang=detected_lang,
-        )
+        # 3. Auto-ack only when routed to an engineer (not Sam/Ron tickets)
+        if routing["assignee_id"]:
+            send_auto_acknowledgment(
+                ticket_id=ticket_id,
+                contact_name=contact_name,
+                contact_email=contact_email,
+                body=body,
+                client_tier=new_class["client_tier"],
+                detected_lang=detected_lang,
+            )
+        else:
+            print(f"Auto-ack skipped for ticket {ticket_id} -- no engineer assigned, Sam will handle")
 
         # 4. Slack ping to Sam if flag:ping-sam is set
         if "ping-sam" in new_class["flags"]:

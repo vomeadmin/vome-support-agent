@@ -84,12 +84,52 @@ CLICKUP_USER_SAM = 3691763
 # ClickUp priority: 1=urgent(P1), 2=high(P2), 3=normal(P3)
 PRIORITY_MAP = {"p1": 1, "p2": 2, "p3": 3}
 
-# Complexity -> Auto Score default mapping
+# Auto Score (0-100) matrix: category urgency + complexity + client tier
+# Higher = more urgent, engineers sort by this to prioritize work
+
+_CATEGORY_BASE = {
+    "bug": 40,
+    "investigation": 35,
+    "auth": 45,
+    "feature": 15,
+    "how-to": 5,
+    "billing": 5,
+}
+
+_COMPLEXITY_BUMP = {
+    "low": 0,
+    "medium": 10,
+    "high": 20,
+    "very-high": 30,
+}
+
+_TIER_BUMP = {
+    "very-high": 25,   # Ultimate / $4k+ ARR
+    "high": 15,         # Enterprise / $1.5k-4k ARR
+    "medium": 5,        # Pro / $1k-1.5k ARR
+    "low": 0,
+}
+
+
+def _compute_auto_score(analysis: dict) -> int:
+    """Compute Auto Score (0-100) from category, complexity, and client tier."""
+    cat = analysis.get("category", "")
+    cx = analysis.get("complexity", "low")
+    tier = analysis.get("client_tier", "low")
+
+    base = _CATEGORY_BASE.get(cat, 20)
+    cx_bump = _COMPLEXITY_BUMP.get(cx, 0)
+    tier_bump = _TIER_BUMP.get(tier, 0)
+
+    return min(base + cx_bump + tier_bump, 100)
+
+
+# Legacy map kept for backward compat (field feedback / reply handler)
 COMPLEXITY_SCORE_MAP = {
-    "low": 2,
-    "medium": 5,
-    "high": 7,
-    "very-high": 9,
+    "low": 20,
+    "medium": 40,
+    "high": 60,
+    "very-high": 80,
 }
 
 # Engineer type -> ClickUp assignee ID
@@ -391,9 +431,8 @@ def create_clickup_task(
             # Assignee from engineer_type
             assignee = _determine_assignee_from_analysis(analysis)
 
-            # Auto score from complexity
-            complexity = analysis.get("complexity", "low")
-            auto_score = COMPLEXITY_SCORE_MAP.get(complexity, 2)
+            # Auto score from category + complexity + tier
+            auto_score = _compute_auto_score(analysis)
 
             # Type mapping: category -> ClickUp Type option
             cat_type_map = {
