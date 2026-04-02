@@ -105,13 +105,15 @@ ENGINEER_ASSIGNEE_MAP = {
 # ---------------------------------------------------------------------------
 
 def _extract(field: str, text: str) -> str:
-    """Extract a labelled field from the agent's structured analysis text."""
+    """Extract a labelled field, handling optional markdown bold."""
     m = re.search(
-        rf"^{re.escape(field)}:\s*(.+)",
+        rf"^\*?\*?{re.escape(field)}\*?\*?:\s*\*?\*?(.+)",
         text,
         re.IGNORECASE | re.MULTILINE,
     )
-    return m.group(1).strip() if m else ""
+    if not m:
+        return ""
+    return m.group(1).strip().rstrip("*").strip()
 
 
 def _parse_agent_response(agent_response: str) -> dict:
@@ -250,24 +252,33 @@ def _determine_assignee(classification: str) -> int | None:
 
 
 def _build_title(
-    ticket_data: dict, crm: dict, subject: str, priority: str
+    ticket_data: dict, crm: dict, subject: str, priority: str,
+    issue_summary: str = "",
 ) -> str:
-    """Build task title: [Account] — [subject] — [P1/P2/P3]"""
+    """Build task title: [Account] -- [concise issue] -- [P1/P2/P3]
+
+    Prefers the first sentence of issue_summary (always English) over
+    the raw subject which may be in another language or outdated.
+    """
     if crm.get("found"):
         account = crm.get("account_name") or "Unknown"
     else:
         account = "Volunteer"
 
-    # Truncate long subjects
-    subj = subject.strip()
-    if len(subj) > 65:
-        subj = subj[:62] + "..."
+    # Use first sentence of issue summary if available
+    if issue_summary:
+        first_sentence = issue_summary.split(".")[0].strip()
+        subj = first_sentence[:65]
+    else:
+        subj = subject.strip()
+        if len(subj) > 65:
+            subj = subj[:62] + "..."
 
     p = priority.upper().strip()
     if not re.match(r"^P[123]$", p):
         p = "P3"
 
-    return f"{account} — {subj} — {p}"
+    return f"{account} -- {subj} -- {p}"
 
 
 def _build_description(
@@ -275,10 +286,9 @@ def _build_description(
     crm: dict,
     parsed: dict,
     zoho_url: str,
+    issue_summary: str = "",
 ) -> str:
-    """Build the ClickUp task description from ticket and enrichment data."""
-    lines = []
-
+    """Build a clean ClickUp task description (always English)."""
     account = crm.get("account_name") or "Unknown"
     tier = crm.get("tier") or "Unknown"
     arr_raw = crm.get("arr")
@@ -290,28 +300,38 @@ def _build_description(
     else:
         arr_str = "Unknown"
 
-    lines.append(
-        f"Account: {account} | Tier: {tier} | ARR: {arr_str}"
-    )
     ticket_num = ticket_data.get("ticket_number") or ticket_data.get(
         "ticket_id", ""
     )
-    lines.append(f"Zoho ticket: #{ticket_num}")
-    lines.append(f"Zoho link: {zoho_url}")
-    lines.append("")
 
-    body = ticket_data.get("body", "").strip()
-    if body:
-        # Cap at 3000 chars to stay within ClickUp limits
-        lines.append(body[:3000])
+    lines = [
+        f"**Account:** {account} | **Tier:** {tier} | **ARR:** {arr_str}",
+        f"**Zoho ticket:** #{ticket_num}",
+        f"**Zoho link:** {zoho_url}",
+        "",
+        "---",
+        "",
+    ]
+
+    if issue_summary:
+        lines.append(issue_summary)
         lines.append("")
 
-    if parsed.get("classification"):
-        lines.append(f"Classification: {parsed['classification']}")
-    if parsed.get("module"):
-        lines.append(f"Module: {parsed['module']}")
-    if parsed.get("timing"):
-        lines.append(f"Timing: {parsed['timing']}")
+    classification = parsed.get("classification", "")
+    module = parsed.get("module", "")
+    timing = parsed.get("timing", "")
+
+    meta_parts = []
+    if classification:
+        meta_parts.append(f"Classification: {classification}")
+    if module:
+        meta_parts.append(f"Module: {module}")
+    if parsed.get("platform"):
+        meta_parts.append(f"Platform: {parsed['platform']}")
+    if timing:
+        meta_parts.append(f"Timing: {timing}")
+    if meta_parts:
+        lines.append(" | ".join(meta_parts))
 
     return "\n".join(lines)
 
@@ -402,9 +422,14 @@ def create_clickup_task(
         # -----------------------------------------------------------------
         # Build task title and description (always English)
         # -----------------------------------------------------------------
-        title = _build_title(ticket_data, crm, subject, priority_label)
+        issue_summary = _extract("ISSUE SUMMARY", agent_response)
+        title = _build_title(
+            ticket_data, crm, subject, priority_label,
+            issue_summary=issue_summary,
+        )
         description = _build_description(
-            ticket_data, crm, parsed, zoho_url
+            ticket_data, crm, parsed, zoho_url,
+            issue_summary=issue_summary,
         )
 
         # ARR
@@ -446,23 +471,23 @@ def create_clickup_task(
             {"id": FIELD_ZOHO_TICKET_LINK, "value": zoho_url}
         )
 
-        # Highest Tier -- prefer analysis client_tier, fall back to CRM tier
-        tier_display = None
-        if analysis:
-            tier_map = {
-                "very-high": "Very High",
-                "high": "High",
-                "medium": "Medium",
-                "low": "Low",
-            }
-            tier_display = tier_map.get(
-                analysis.get("client_tier", ""), None
-            )
-        if not tier_display and crm.get("tier") and crm["tier"] != "Unknown":
-            tier_display = crm["tier"]
-        if tier_display:
+        # Highest Tier -- map CRM plan tier to ClickUp dropdown option UUID
+        tier_option_map = {
+            "ultimate": "a4857fdc-2212-4e94-bc4b-a9dc3cbe2156",
+            "enterprise": "8ee06497-a017-4863-8e2e-1baee9f5d5fe",
+            "pro": "5dcd5624-ab1e-4ce6-a191-4a44b5862cd9",
+            "recruit": "ff26f6e4-2936-43f6-ae92-7ea65522983b",
+            "prospect": "f34e3c4f-7518-4f2f-83bd-628a304ab328",
+            "volunteer": "bffde2a3-0a61-409b-9021-f4bcb1b46e11",
+            "internal": "54849b41-9293-4c57-be3e-fd6e6da51fa8",
+        }
+        crm_tier = (crm.get("tier") or "").strip().lower()
+        tier_option = tier_option_map.get(crm_tier)
+        if not tier_option and not crm.get("found"):
+            tier_option = tier_option_map["volunteer"]
+        if tier_option:
             custom_fields.append(
-                {"id": FIELD_HIGHEST_TIER, "value": tier_display}
+                {"id": FIELD_HIGHEST_TIER, "value": tier_option}
             )
 
         # Requesting Clients

@@ -11,13 +11,18 @@ CHANNEL_TICKETS = os.environ.get("SLACK_CHANNEL_VOME_TICKETS", "")
 
 
 def _extract_from_response(agent_response: str, field: str) -> str:
-    """Extract a labelled field from the agent's structured analysis text."""
+    """Extract a labelled field from the agent's structured analysis text.
+
+    Handles optional markdown bold: **FIELD:** value or FIELD: value
+    """
     match = re.search(
-        rf"^{field}:\s*(.+)",
+        rf"^\*?\*?{field}\*?\*?:\s*\*?\*?(.+)",
         agent_response,
         re.IGNORECASE | re.MULTILINE,
     )
-    return match.group(1).strip() if match else ""
+    if not match:
+        return ""
+    return match.group(1).strip().rstrip("*").strip()
 
 
 def _extract_clickup_url(agent_response: str) -> str | None:

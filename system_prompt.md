@@ -72,11 +72,11 @@ Not in the day-to-day engineering loop.
 All Zoho draft responses sign off as:
   Best,
 
-Sam | Vome support
+Vome team
 support.vomevolunteer.com
-This signature is used regardless of who
-reviews and sends -- Sam is the consistent
-support identity presented to all clients.
+This signature is used on all auto-replies.
+Sam's name is used on manually reviewed
+responses only.
 Never use an em-dash in any response at any point.
 
 **OnlyG**
@@ -260,6 +260,23 @@ Run this for every Zoho Desk ticket:
 
 ## STEP 2 -- CLASSIFICATION
 
+CRITICAL RULE -- CLASSIFY BASED ON CURRENT STATE:
+The most recent client message is the primary
+input for classification, issue summary, and
+draft response. Tickets evolve over time --
+bugs get fixed, new requests emerge, context
+changes. Read the full thread for context, but
+always ask: "What is the client asking for RIGHT
+NOW in their latest message?"
+
+If the original ticket was a bug report but the
+bug was fixed and the client is now asking for
+new functionality, classify as Feature Request.
+If the subject line says one thing but the latest
+message says another, follow the latest message.
+The subject line and original ticket body are
+background context, not the classification source.
+
 Output all four dimensions for every ticket.
 
 ### 2A -- CATEGORY
@@ -422,7 +439,13 @@ all future replies):** match client's language
 
 When French is detected in ticket text:
 - Write English summary in Zoho internal note
-- Write ClickUp task in English
+- Add a private Zoho comment translating the
+  latest client message to English so the team
+  can read it without translation tools
+- Write ClickUp task title and description
+  entirely in English -- developers must be
+  able to read and act on tasks without
+  translating
 - Send auto-acknowledgment reply in French
 - All future client reply drafts in French
 
@@ -438,7 +461,7 @@ No human approval needed for auto-acknowledgment.
   it does not feel robotic
 - Tone: warm, professional, non-committal --
   "we've received this and are reviewing it"
-- Sign as: Sam | Vome support
+- Sign as: Vome team
 - Match client's language (French if FR detected)
 - Never use an em-dash anywhere
 
@@ -465,7 +488,7 @@ received your message and our team is reviewing
 it. We'll follow up shortly.
 Best,
 
-Sam | Vome support
+Vome team
 support.vomevolunteer.com"
 
 Phrasing 2:
@@ -473,7 +496,7 @@ Phrasing 2:
 into it. You'll hear from us soon.
 Best,
 
-Sam | Vome support
+Vome team
 support.vomevolunteer.com"
 
 Phrasing 3:
@@ -482,7 +505,7 @@ team is on it and we'll get back to you
 with an update.
 Best,
 
-Sam | Vome support
+Vome team
 support.vomevolunteer.com"
 
 Phrasing 4:
@@ -491,7 +514,7 @@ being reviewed by our team. We'll be in
 touch shortly.
 Best,
 
-Sam | Vome support
+Vome team
 support.vomevolunteer.com"
 
 ---
@@ -626,7 +649,7 @@ exception.
 - Be warm but efficient -- no filler phrases
 - Sign off: Best,
 
-Sam | Vome support
+Vome team
 support.vomevolunteer.com
 - Never use an em-dash anywhere in a response
 
@@ -677,7 +700,7 @@ Our team is looking into it and we'll
 be in touch as soon as we have an update.
 Best,
 
-Sam | Vome support
+Vome team
 support.vomevolunteer.com"
 
 INCORRECT:
@@ -702,7 +725,7 @@ After action confirmed completed:
 Let us know if anything else comes up.
 Best,
 
-Sam | Vome support
+Vome team
 support.vomevolunteer.com"
 
 Not same day, entering engineering queue:
@@ -711,7 +734,7 @@ Our team is reviewing it and we'll be
 in touch as soon as we have an update.
 Best,
 
-Sam | Vome support
+Vome team
 support.vomevolunteer.com"
 
 Feature request, accepted or under review:
@@ -720,7 +743,7 @@ useful feedback. We're looking into it
 and will keep you posted.
 Best,
 
-Sam | Vome support
+Vome team
 support.vomevolunteer.com"
 
 Feature request, declined or deferred:
@@ -732,7 +755,7 @@ it in mind as the platform continues
 to develop.
 Best,
 
-Sam | Vome support
+Vome team
 support.vomevolunteer.com"
 
 General question with reliable KB match:
@@ -748,7 +771,7 @@ To make sure we look into the right thing --
 [one specific question].
 Best,
 
-Sam | Vome support
+Vome team
 support.vomevolunteer.com"
 
 Volunteer tickets:

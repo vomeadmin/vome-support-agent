@@ -364,34 +364,94 @@ def _fetch_desk_fallback(contact_email: str) -> dict:
         return not_found
 
 
-def fetch_crm_account(contact_email: str) -> dict:
-    """Look up a contact in Zoho CRM by email and pull account + deal data."""
+SOCIAL_DOMAINS = {
+    "gmail.com", "outlook.com", "hotmail.com", "yahoo.com",
+    "icloud.com", "live.com", "aol.com", "protonmail.com",
+    "me.com", "msn.com", "mail.com", "ymail.com",
+}
+
+
+def _crm_search_contacts(query_params: dict) -> list | None:
+    """Search CRM contacts. Returns list of contacts or None."""
+    # Limit fields to prevent response truncation from MCP server
+    params = {
+        **query_params,
+        "fields": "Full_Name,Email,Account_Name,FV_Offering,Offering",
+    }
+    result = _zoho_crm_call("ZohoCRM_searchRecords", {
+        "path_variables": {"module": "Contacts"},
+        "query_params": params,
+    })
+    if _is_auth_error(result):
+        return None
+    data = _unwrap_mcp_result(result)
+    if not data or not isinstance(data, dict):
+        return []
+    return data.get("data", [])
+
+
+def fetch_crm_account(
+    contact_email: str,
+    contact_name: str = "",
+) -> dict:
+    """Look up a contact in Zoho CRM by email, domain, or name."""
     not_found = {"found": False, "contact_type": "volunteer"}
 
     if not contact_email:
-        print("CRM step 1: no email provided — skipping lookup")
+        print("CRM step 1: no email provided — skipping")
         return not_found
 
     try:
-        # Step 1 — search Contacts by email
-        result = _zoho_crm_call("ZohoCRM_searchRecords", {
-            "path_variables": {"module": "Contacts"},
-            "query_params": {"email": contact_email},
-        })
-
-        if _is_auth_error(result):
-            print("CRM authorization error — re-authorization needed in Zoho MCP portal")
+        # Step 1a — exact email match
+        contacts = _crm_search_contacts({"email": contact_email})
+        if contacts is None:
+            print("CRM auth error — falling back to Desk")
             return _fetch_desk_fallback(contact_email)
 
-        data = _unwrap_mcp_result(result)
+        if contacts:
+            print(f"CRM step 1a: exact email match ({contact_email})")
+        else:
+            print(f"CRM step 1a: no exact match ({contact_email})")
 
-        if not data or not isinstance(data, dict):
-            print(f"CRM step 1: not found ({contact_email})")
-            return not_found
-
-        contacts = data.get("data", [])
+        # Step 1b — domain search (skip social email providers)
         if not contacts:
-            print(f"CRM step 1: not found ({contact_email})")
+            domain = contact_email.split("@")[-1].lower()
+            if domain not in SOCIAL_DOMAINS:
+                print(f"CRM step 1b: trying domain {domain}")
+                domain_contacts = _crm_search_contacts(
+                    {"email": domain}
+                )
+                if domain_contacts:
+                    contacts = domain_contacts
+                    print(
+                        f"CRM step 1b: domain match — "
+                        f"found {len(contacts)} contact(s)"
+                    )
+                else:
+                    print(f"CRM step 1b: no domain match")
+            else:
+                print(f"CRM step 1b: social domain, skipping")
+
+        # Step 1c — name search as last resort
+        if not contacts and contact_name:
+            name_parts = contact_name.strip().split()
+            if len(name_parts) >= 2:
+                last = name_parts[-1]
+                print(f"CRM step 1c: trying name '{last}'")
+                name_contacts = _crm_search_contacts(
+                    {"word": last}
+                )
+                if name_contacts:
+                    contacts = name_contacts
+                    print(
+                        f"CRM step 1c: name match — "
+                        f"found {len(contacts)} contact(s)"
+                    )
+                else:
+                    print(f"CRM step 1c: no name match")
+
+        if not contacts:
+            print(f"CRM: all lookups exhausted — not found")
             return not_found
 
         contact = contacts[0]
@@ -527,14 +587,22 @@ def _parse_new_classification(agent_response: str, arr) -> dict:
     """
 
     def _extract(field: str) -> str:
+        # Match with optional markdown bold: **FIELD:** or FIELD:
         m = re.search(
-            rf"^{re.escape(field)}:\s*(.+)",
+            rf"^\*?\*?{re.escape(field)}\*?\*?:\s*\*?\*?(.+)",
             agent_response,
             re.IGNORECASE | re.MULTILINE,
         )
-        return m.group(1).strip().lower() if m else ""
+        if not m:
+            return ""
+        val = m.group(1).strip().lower()
+        # Strip trailing markdown bold
+        val = val.rstrip("*").strip()
+        return val
 
     raw_category = _extract("CATEGORY")
+    # Strip parenthetical notes: "feature request (details...)" -> "feature request"
+    raw_category = re.sub(r"\s*\(.*\)$", "", raw_category).strip()
     category_map = {
         "technical bug": "bug",
         "bug": "bug",
@@ -552,6 +620,9 @@ def _parse_new_classification(agent_response: str, arr) -> dict:
     category = category_map.get(raw_category, raw_category)
 
     raw_complexity = _extract("COMPLEXITY")
+    raw_complexity = re.sub(r"\s*\(.*\)$", "", raw_complexity).strip()
+    # Also handle "medium -- some note" or "medium - some note"
+    raw_complexity = re.split(r"\s+[-—–]", raw_complexity)[0].strip()
     complexity_map = {
         "low": "low",
         "medium": "medium",
@@ -562,6 +633,8 @@ def _parse_new_classification(agent_response: str, arr) -> dict:
     complexity = complexity_map.get(raw_complexity, raw_complexity)
 
     raw_eng = _extract("ENGINEER TYPE")
+    raw_eng = re.sub(r"\s*\(.*\)$", "", raw_eng).strip()
+    raw_eng = re.split(r"\s+[-—–]", raw_eng)[0].strip()
     eng_map = {
         "frontend": "frontend",
         "mobile": "mobile",
@@ -669,22 +742,22 @@ _ACK_TEMPLATES_EN = [
     (
         "Hi {name}, thanks for reaching out. We've received your message "
         "and our team is reviewing it. We'll follow up shortly.\n"
-        "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+        "Best,\n\nVome team\nsupport.vomevolunteer.com"
     ),
     (
         "Hi {name}, we've got this and are looking into it. "
         "You'll hear from us soon.\n"
-        "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+        "Best,\n\nVome team\nsupport.vomevolunteer.com"
     ),
     (
         "Hi {name}, thanks for flagging this. Our team is on it "
         "and we'll get back to you with an update.\n"
-        "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+        "Best,\n\nVome team\nsupport.vomevolunteer.com"
     ),
     (
         "Hi {name}, this has been received and is being reviewed "
         "by our team. We'll be in touch shortly.\n"
-        "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+        "Best,\n\nVome team\nsupport.vomevolunteer.com"
     ),
 ]
 
@@ -693,23 +766,23 @@ _ACK_TEMPLATES_FR = [
         "Bonjour {name}, merci de nous avoir contactes. Nous avons bien "
         "recu votre message et notre equipe l'examine. Nous reviendrons "
         "vers vous sous peu.\n"
-        "Cordialement,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+        "Cordialement,\n\nVome team\nsupport.vomevolunteer.com"
     ),
     (
         "Bonjour {name}, nous avons bien pris note de votre demande "
         "et notre equipe s'en occupe. Vous aurez de nos nouvelles bientot.\n"
-        "Cordialement,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+        "Cordialement,\n\nVome team\nsupport.vomevolunteer.com"
     ),
     (
         "Bonjour {name}, merci d'avoir signale ceci. Notre equipe "
         "examine la situation et nous vous tiendrons informe.\n"
-        "Cordialement,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+        "Cordialement,\n\nVome team\nsupport.vomevolunteer.com"
     ),
     (
         "Bonjour {name}, votre demande a bien ete recue et est "
         "en cours d'examen par notre equipe. Nous vous recontacterons "
         "rapidement.\n"
-        "Cordialement,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+        "Cordialement,\n\nVome team\nsupport.vomevolunteer.com"
     ),
 ]
 
@@ -880,6 +953,56 @@ def post_to_zoho(ticket_id: str, agent_response: str) -> bool:
     return True
 
 
+def _get_latest_client_message_full(conversations_result, contact_email: str) -> str:
+    """Return the full text of the most recent client message (HTML stripped).
+
+    Used to highlight the current ask in the Claude prompt so classification
+    reflects the latest state of the conversation, not the original subject.
+    """
+    if not conversations_result:
+        return ""
+
+    data = _unwrap_mcp_result(conversations_result)
+    if isinstance(data, dict):
+        data = data.get("data", data.get("conversations", []))
+    if not isinstance(data, list) or len(data) < 2:
+        return ""
+
+    contact_email_lower = contact_email.lower()
+
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        if not entry.get("isPublic", True):
+            continue
+        content = entry.get("content", "") or ""
+        if NOTE_HEADER in content or UPDATE_HEADER in content:
+            continue
+        # Skip description thread (original ticket body)
+        if entry.get("isDescriptionThread"):
+            continue
+
+        author = entry.get("author", {}) or {}
+        author_email = (author.get("email") or "").lower()
+        author_type = (author.get("type") or "").upper()
+
+        is_client = (
+            author_type == "END_USER"
+            or (author_email and author_email == contact_email_lower)
+            or (author_email and author_email not in TEAM_EMAILS and author_type != "AGENT")
+        )
+        if not is_client:
+            continue
+
+        # content may be empty in list responses; fall back to summary
+        text = content or entry.get("summary", "") or ""
+        clean = re.sub(r"<[^>]+>", "", text).strip()
+        if clean:
+            return clean[:2000]
+
+    return ""
+
+
 def _get_latest_client_reply(conversations_result, contact_email: str) -> str:
     """Return the most recent client message text (HTML stripped, max 200 chars).
 
@@ -968,7 +1091,7 @@ def process_ticket(ticket_data: dict) -> str | None:
         )
 
     # CRM enrichment
-    crm = fetch_crm_account(contact_email)
+    crm = fetch_crm_account(contact_email, contact_name)
     if crm["found"]:
         source_note = crm.get("enrichment_source", "")
         source_line = f"\nEnrichment source: {source_note}" if source_note else ""
@@ -1020,6 +1143,24 @@ def process_ticket(ticket_data: dict) -> str | None:
     else:
         attachment_note = ""
 
+    # Extract latest client message for classification focus
+    latest_client_msg = _get_latest_client_message_full(
+        conversations_result, contact_email
+    )
+
+    latest_msg_block = ""
+    if latest_client_msg:
+        latest_msg_block = (
+            "\n\nLATEST CLIENT MESSAGE (classify based on this):\n"
+            "This is the most recent message from the client.\n"
+            "Your classification, issue summary, and draft response\n"
+            "must reflect what the client is asking for HERE, not\n"
+            "what the original ticket subject says. The thread may\n"
+            "have evolved -- bugs may have been fixed, new requests\n"
+            "may have emerged.\n"
+            f"\n{latest_client_msg}\n"
+        )
+
     user_message = (
         "\u26a0\ufe0f MANDATORY PROCESSING RULE \u2014 READ FIRST:\n"
         "This input arrived via Zoho Desk webhook.\n"
@@ -1032,9 +1173,10 @@ def process_ticket(ticket_data: dict) -> str | None:
         "Process as a client ticket with full enrichment.\n\n"
         "REQUIRED ADDITIONS TO YOUR AGENT ANALYSIS BLOCK:\n"
         "Include these two fields before CLASSIFICATION:\n"
-        "ISSUE SUMMARY: [one line — 2-3 sentences plain English:"
-        " what the person said, what they tried, any relevant"
-        " context. Written as if briefing a colleague verbally.]\n"
+        "ISSUE SUMMARY: [one line -- 2-3 sentences plain English:"
+        " what the person is asking for NOW based on the latest"
+        " message, in context of the thread history. Written as"
+        " if briefing a colleague verbally.]\n"
         "SUGGESTED OWNER: [Sanjay / OnlyG / Sam / Either]\n"
         f"{attachment_note}\n"
         f"{enrichment_block}\n\n"
@@ -1043,12 +1185,13 @@ def process_ticket(ticket_data: dict) -> str | None:
         f"Client contact: {contact_name} ({contact_email})\n"
         f"Subject: {subject}\n"
         f"{lang_note}"
+        f"{latest_msg_block}"
     )
     if extra_context:
         user_message += f"\n{extra_context}\n"
     user_message += (
-        f"\nTicket body:\n{body}\n\n"
-        f"Full conversation thread:\n{thread_text}"
+        f"\nOriginal ticket body:\n{body}\n\n"
+        f"Full conversation thread (oldest to newest):\n{thread_text}"
     )
 
     try:
@@ -1075,11 +1218,14 @@ def process_ticket(ticket_data: dict) -> str | None:
         # Extract structured fields from Claude's response
         def _extract_field(field: str) -> str:
             m = re.search(
-                rf"^{re.escape(field)}:\s*(.+)",
+                rf"^\*?\*?{re.escape(field)}\*?\*?:\s*\*?\*?(.+)",
                 result,
                 re.IGNORECASE | re.MULTILINE,
             )
-            return m.group(1).strip() if m else ""
+            if not m:
+                return ""
+            val = m.group(1).strip().rstrip("*").strip()
+            return val
 
         # --- NEW: Parse classification, apply tags/assignee, auto-ack ---
 
@@ -1239,7 +1385,7 @@ def process_ticket_update(ticket_id: str) -> str | None:
 
         thread_text = _format_conversations(conversations_result)
 
-        crm = fetch_crm_account(contact_email)
+        crm = fetch_crm_account(contact_email, contact_name)
         if crm["found"]:
             enrichment_block = (
                 "ACCOUNT ENRICHMENT:\n"
