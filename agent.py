@@ -858,29 +858,36 @@ def send_auto_acknowledgment(
                 f"\n{info_req}\n\n{sign_off_marker}",
             )
 
-    # Send via ZohoDesk_sendReply (actually sends, not a draft)
-    result = _zoho_desk_call("ZohoDesk_sendReply", {
+    # DRY RUN: Post as private comment instead of sending email.
+    # This lets us verify the output without clients receiving anything.
+    # To go live: replace createTicketComment with ZohoDesk_sendReply.
+    preview = (
+        f"AUTO-ACK PREVIEW (not sent to client)\n"
+        f"To: {contact_email}\n"
+        f"Tier: {client_tier} | Lang: {'FR' if is_french else 'EN'}\n"
+        f"---\n{reply}"
+    )
+
+    result = _zoho_desk_call("ZohoDesk_createTicketComment", {
         "body": {
-            "channel": "EMAIL",
-            "fromEmailAddress": ZOHO_FROM_ADDRESS,
-            "to": contact_email,
-            "content": reply,
+            "content": preview,
             "contentType": "plainText",
+            "isPublic": "false",
         },
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
     })
 
     if not result:
-        print(f"Auto-ack FAILED on ticket {ticket_id}")
+        print(f"Auto-ack preview FAILED on ticket {ticket_id}")
         return False
 
     data = _unwrap_mcp_result(result)
     if isinstance(data, dict) and data.get("errorCode"):
-        print(f"Auto-ack FAILED on ticket {ticket_id}: {data}")
+        print(f"Auto-ack preview FAILED on ticket {ticket_id}: {data}")
         return False
 
-    print(f"Auto-ack sent on ticket {ticket_id} (lang={'FR' if is_french else 'EN'}, tier={client_tier})")
+    print(f"Auto-ack PREVIEW posted on ticket {ticket_id} (lang={'FR' if is_french else 'EN'}, tier={client_tier})")
     return True
 
 
@@ -1048,13 +1055,73 @@ def _get_latest_client_reply(conversations_result, contact_email: str) -> str:
     return ""
 
 
+# In-memory dedup: tracks ticket IDs currently being processed or recently
+# completed.  Prevents duplicate processing when Zoho fires the webhook
+# more than once (network retry, timeout, etc.).
+_processing_tickets: dict[str, float] = {}
+_DEDUP_TTL_SECONDS = 300  # ignore duplicate webhooks within 5 minutes
+
+def _dedup_check(ticket_id: str) -> bool:
+    """Return True if this ticket should be skipped (already processing)."""
+    import time
+    now = time.time()
+    # Clean expired entries
+    expired = [
+        k for k, v in _processing_tickets.items()
+        if now - v > _DEDUP_TTL_SECONDS
+    ]
+    for k in expired:
+        del _processing_tickets[k]
+    if ticket_id in _processing_tickets:
+        return True
+    _processing_tickets[ticket_id] = now
+    return False
+
+
+def _has_agent_reply(conversations_result) -> bool:
+    """Check if the agent has already replied to this ticket.
+
+    Returns True if any outbound message from our team exists in the
+    conversation history.  This prevents sending duplicate auto-acks
+    even if the in-memory dedup is bypassed (e.g. server restart).
+    """
+    if not conversations_result:
+        return False
+    data = _unwrap_mcp_result(conversations_result)
+    if isinstance(data, dict):
+        data = data.get("data", [])
+    if not isinstance(data, list):
+        return False
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("isDescriptionThread"):
+            continue
+        author = entry.get("author", {}) or {}
+        if (author.get("type") or "").upper() == "AGENT":
+            return True
+        if entry.get("direction") == "out":
+            return True
+    return False
+
+
 def process_ticket(ticket_data: dict) -> str | None:
     """Process a Zoho Desk ticket through the support agent."""
     ticket_id = ticket_data.get("ticket_id", "unknown")
 
+    # Dedup: skip if already processing or recently processed
+    if _dedup_check(ticket_id):
+        print(f"Duplicate webhook for ticket {ticket_id} -- skipping")
+        return None
+
     # Fetch full ticket details and conversations from Zoho
     zoho_ticket = fetch_ticket_from_zoho(ticket_id)
     conversations_result = fetch_ticket_conversations(ticket_id)
+
+    # Safety: skip if we've already replied to this ticket
+    if _has_agent_reply(conversations_result):
+        print(f"Agent already replied to ticket {ticket_id} -- skipping to prevent duplicate")
+        return None
 
     if zoho_ticket:
         fields = _extract_ticket_fields(zoho_ticket)
@@ -1241,7 +1308,7 @@ def process_ticket(ticket_data: dict) -> str | None:
         routing = _get_routing(new_class)
         update_zoho_ticket_assignment(ticket_id, routing["assignee_id"])
 
-        # 3. Send auto-acknowledgment reply (immediate, no approval needed)
+        # 3. Auto-ack (dry run — posts as private comment, not sent to client)
         send_auto_acknowledgment(
             ticket_id=ticket_id,
             contact_name=contact_name,
