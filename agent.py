@@ -839,8 +839,18 @@ def send_auto_acknowledgment(
     Picks a random template, optionally appends info-request for
     low/medium tier clients with sparse tickets.
     """
-    first_name = (contact_name or "").split()[0] if contact_name else ""
-    if not first_name:
+    # Detect if contact_name is a real person or an org/shared mailbox
+    name_lower = (contact_name or "").lower()
+    org_signals = {
+        "volunteer", "admin", "team", "support", "info",
+        "contact", "office", "staff", "service", "help",
+        "membership", "scheduling", "coordinator", "vome",
+        "center", "centre", "program", "department",
+    }
+    is_org_name = any(w in name_lower for w in org_signals)
+    if contact_name and not is_org_name:
+        first_name = contact_name.split()[0]
+    else:
         first_name = "there"
 
     is_french = detected_lang == "French"
@@ -858,36 +868,29 @@ def send_auto_acknowledgment(
                 f"\n{info_req}\n\n{sign_off_marker}",
             )
 
-    # DRY RUN: Post as private comment instead of sending email.
-    # This lets us verify the output without clients receiving anything.
-    # To go live: replace createTicketComment with ZohoDesk_sendReply.
-    preview = (
-        f"AUTO-ACK PREVIEW (not sent to client)\n"
-        f"To: {contact_email}\n"
-        f"Tier: {client_tier} | Lang: {'FR' if is_french else 'EN'}\n"
-        f"---\n{reply}"
-    )
-
-    result = _zoho_desk_call("ZohoDesk_createTicketComment", {
+    # LIVE: Send reply to client via email
+    result = _zoho_desk_call("ZohoDesk_sendReply", {
         "body": {
-            "content": preview,
+            "channel": "EMAIL",
+            "fromEmailAddress": ZOHO_FROM_ADDRESS,
+            "to": contact_email,
+            "content": reply,
             "contentType": "plainText",
-            "isPublic": "false",
         },
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
     })
 
     if not result:
-        print(f"Auto-ack preview FAILED on ticket {ticket_id}")
+        print(f"Auto-ack FAILED on ticket {ticket_id}")
         return False
 
     data = _unwrap_mcp_result(result)
     if isinstance(data, dict) and data.get("errorCode"):
-        print(f"Auto-ack preview FAILED on ticket {ticket_id}: {data}")
+        print(f"Auto-ack FAILED on ticket {ticket_id}: {data}")
         return False
 
-    print(f"Auto-ack PREVIEW posted on ticket {ticket_id} (lang={'FR' if is_french else 'EN'}, tier={client_tier})")
+    print(f"Auto-ack sent on ticket {ticket_id} (lang={'FR' if is_french else 'EN'}, tier={client_tier})")
     return True
 
 
