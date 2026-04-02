@@ -25,7 +25,7 @@ from agent import (
     _extract_ticket_fields,
     _format_conversations,
     _unwrap_mcp_result,
-    _zoho_mcp_call,
+    _zoho_desk_call,
     fetch_ticket_conversations,
     fetch_ticket_from_zoho,
 )
@@ -150,7 +150,7 @@ def _generate_need_info_message(
 
 def _send_reply(ticket_id: str, content: str, to_email: str) -> bool:
     """Send a reply to the client via ZohoDesk (immediate send, not draft)."""
-    result = _zoho_mcp_call("ZohoDesk_sendReply", {
+    result = _zoho_desk_call("ZohoDesk_sendReply", {
         "body": {
             "channel": "EMAIL",
             "fromEmailAddress": ZOHO_FROM_ADDRESS,
@@ -174,7 +174,7 @@ def _send_reply(ticket_id: str, content: str, to_email: str) -> bool:
 
 def _tag_zoho_ticket(ticket_id: str, tag: str) -> bool:
     """Add a tag to a Zoho ticket."""
-    result = _zoho_mcp_call("ZohoDesk_updateTicket", {
+    result = _zoho_desk_call("ZohoDesk_updateTicket", {
         "body": {"tag": tag},
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},

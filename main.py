@@ -27,8 +27,8 @@ from slack_digest import send_daily_digest
 
 REQUIRED_ENV = [
     "ANTHROPIC_API_KEY",
-    "ZOHO_MCP_URL",
-    "ZOHO_MCP_TOKEN",
+    "ZOHO_DESK_MCP_URL",
+    "ZOHO_CRM_MCP_URL",
     "ZOHO_ORG_ID",
 ]
 
@@ -40,9 +40,12 @@ def _check_env():
         print("The agent may fail on requests that need these variables.")
     else:
         print("Startup: all required env variables present")
-    mcp_url = os.environ.get("ZOHO_MCP_URL", "")
-    if not mcp_url.startswith("http"):
-        print("ERROR: ZOHO_MCP_URL not configured -- Zoho API calls will fail")
+    desk_url = os.environ.get("ZOHO_DESK_MCP_URL", "")
+    crm_url = os.environ.get("ZOHO_CRM_MCP_URL", "")
+    if not desk_url.startswith("http"):
+        print("ERROR: ZOHO_DESK_MCP_URL not configured")
+    if not crm_url.startswith("http"):
+        print("ERROR: ZOHO_CRM_MCP_URL not configured")
 
 
 def _extract_zoho_payload(raw_body: bytes) -> dict:

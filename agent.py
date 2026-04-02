@@ -11,6 +11,7 @@ import random
 
 from slack_ticket_brief import send_ticket_brief
 from slack import post_to_engineering
+from clickup_tasks import create_clickup_task
 
 # Fix Windows console encoding for emoji in system_prompt.md
 if sys.stdout.encoding != "utf-8":
@@ -39,8 +40,8 @@ if _templates_path.exists():
         f"{_templates_content}"
     )
 
-ZOHO_MCP_URL = os.environ.get("ZOHO_MCP_URL", "")
-ZOHO_MCP_TOKEN = os.environ.get("ZOHO_MCP_TOKEN", "")
+ZOHO_DESK_MCP_URL = os.environ.get("ZOHO_DESK_MCP_URL", "")
+ZOHO_CRM_MCP_URL = os.environ.get("ZOHO_CRM_MCP_URL", "")
 ZOHO_ORG_ID = os.environ.get("ZOHO_ORG_ID", "")
 
 NOTE_HEADER = "\U0001f916 AGENT ANALYSIS \u2014 DO NOT SEND \u2014 FOR REVIEW ONLY"
@@ -54,9 +55,8 @@ TEAM_EMAILS = {
 ZOHO_FROM_ADDRESS = os.environ.get("ZOHO_FROM_ADDRESS", "admin@vomevolunteer.com")
 
 
-def _zoho_mcp_call(tool_name: str, arguments: dict) -> dict | None:
-    """Send a tools/call request to the Zoho MCP server. Returns result or None."""
-    mcp_url = f"{ZOHO_MCP_URL}?key={ZOHO_MCP_TOKEN}"
+def _mcp_post(url: str, tool_name: str, arguments: dict) -> dict | None:
+    """Send a tools/call JSON-RPC request to an MCP server."""
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -67,16 +67,32 @@ def _zoho_mcp_call(tool_name: str, arguments: dict) -> dict | None:
         },
     }
     try:
-        resp = httpx.post(mcp_url, json=payload, timeout=30)
+        resp = httpx.post(url, json=payload, timeout=30)
         resp.raise_for_status()
         result = resp.json()
         if "error" in result:
-            print(f"Zoho MCP error ({tool_name}): {result['error']}")
+            print(f"MCP error ({tool_name}): {result['error']}")
             return None
         return result.get("result", result)
     except Exception as e:
-        print(f"Zoho MCP request failed ({tool_name}): {e}")
+        print(f"MCP request failed ({tool_name}): {e}")
         return None
+
+
+def _zoho_desk_call(tool_name: str, arguments: dict) -> dict | None:
+    """Call a ZohoDesk tool via the Desk MCP server."""
+    if not ZOHO_DESK_MCP_URL:
+        print(f"ZOHO_DESK_MCP_URL not set -- skipping {tool_name}")
+        return None
+    return _mcp_post(ZOHO_DESK_MCP_URL, tool_name, arguments)
+
+
+def _zoho_crm_call(tool_name: str, arguments: dict) -> dict | None:
+    """Call a ZohoCRM tool via the CRM MCP server."""
+    if not ZOHO_CRM_MCP_URL:
+        print(f"ZOHO_CRM_MCP_URL not set -- skipping {tool_name}")
+        return None
+    return _mcp_post(ZOHO_CRM_MCP_URL, tool_name, arguments)
 
 
 def _unwrap_mcp_result(result: dict | list | None) -> dict | list | None:
@@ -95,7 +111,7 @@ def _unwrap_mcp_result(result: dict | list | None) -> dict | list | None:
 
 def fetch_ticket_from_zoho(ticket_id: str) -> dict | None:
     """Fetch full ticket details from Zoho Desk including contact info."""
-    result = _zoho_mcp_call("ZohoDesk_getTicket", {
+    result = _zoho_desk_call("ZohoDesk_getTicket", {
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {
             "orgId": str(ZOHO_ORG_ID),
@@ -111,7 +127,7 @@ def fetch_ticket_from_zoho(ticket_id: str) -> dict | None:
 
 def fetch_ticket_conversations(ticket_id: str) -> dict | None:
     """Fetch all conversation threads and comments for a ticket."""
-    result = _zoho_mcp_call("ZohoDesk_getTicketConversations", {
+    result = _zoho_desk_call("ZohoDesk_getTicketConversations", {
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {
             "orgId": str(ZOHO_ORG_ID),
@@ -288,7 +304,7 @@ def _fetch_desk_fallback(contact_email: str) -> dict:
     not_found = {"found": False, "contact_type": "volunteer", "enrichment_source": "Desk only — CRM unavailable"}
 
     try:
-        result = _zoho_mcp_call("ZohoDesk_searchContacts", {
+        result = _zoho_desk_call("ZohoDesk_searchContacts", {
             "query_params": {
                 "orgId": str(ZOHO_ORG_ID),
                 "_all": contact_email,
@@ -329,7 +345,7 @@ def _fetch_desk_fallback(contact_email: str) -> dict:
             print("Desk fallback: no account ID on contact")
             return enrichment
 
-        acct_result = _zoho_mcp_call("ZohoDesk_getAccount", {
+        acct_result = _zoho_desk_call("ZohoDesk_getAccount", {
             "path_variables": {"accountId": str(account_id)},
             "query_params": {"orgId": str(ZOHO_ORG_ID)},
         })
@@ -358,7 +374,7 @@ def fetch_crm_account(contact_email: str) -> dict:
 
     try:
         # Step 1 — search Contacts by email
-        result = _zoho_mcp_call("ZohoCRM_Search_Records", {
+        result = _zoho_crm_call("ZohoCRM_searchRecords", {
             "path_variables": {"module": "Contacts"},
             "query_params": {"email": contact_email},
         })
@@ -408,13 +424,10 @@ def fetch_crm_account(contact_email: str) -> dict:
             print("CRM step 2: no account ID — skipping deal lookup")
             return enrichment
 
-        deal_result = _zoho_mcp_call("ZohoCRM_getRelatedRecords", {
-            "path_variables": {
-                "parentRecordModule": "Accounts",
-                "parentRecord": account_id,
-                "relatedList": "Deals",
-            },
+        deal_result = _zoho_crm_call("ZohoCRM_searchRecords", {
+            "path_variables": {"module": "Deals"},
             "query_params": {
+                "criteria": f"(Account_Name:equals:{account_id})",
                 "fields": "Deal_Name,Stage,Amount,Currency",
             },
         })
@@ -612,51 +625,41 @@ def _get_routing(classification: dict) -> dict:
     return {"assignee_id": assignee_id, "clickup_list": clickup_list}
 
 
-def _build_zoho_tags(classification: dict) -> list[str]:
-    """Build the list of private Zoho tags from classification dimensions."""
-    tags = [
-        f"cat:{classification['category']}",
-        f"cx:{classification['complexity']}",
-        f"tier:{classification['client_tier']}",
-        f"eng:{classification['engineer_type']}",
-    ]
-    for flag in classification.get("flags", []):
-        tags.append(f"flag:{flag}")
-    return tags
-
-
-def update_zoho_ticket_tags_and_assignee(
+def update_zoho_ticket_assignment(
     ticket_id: str,
-    tags: list[str],
     assignee_id: str | None,
 ) -> bool:
-    """Update a Zoho Desk ticket with tags and optional assignee."""
-    body: dict = {}
-    if tags:
-        # Zoho Desk accepts tags as a comma-separated string
-        body["tag"] = ",".join(tags)
-    if assignee_id:
-        body["assigneeId"] = assignee_id
+    """Update a Zoho Desk ticket with assignee and set status to In Progress.
 
-    if not body:
+    If assignee_id is provided, sets the assignee and moves status to
+    "In Progress".  If no assignee (how-to, billing, feature), leaves
+    the ticket as-is for Sam to pick up.
+    """
+    if not assignee_id:
+        print(f"Zoho ticket {ticket_id}: no engineer assignee -- leaving as New for Sam")
         return True
 
-    result = _zoho_mcp_call("ZohoDesk_updateTicket", {
+    body: dict = {
+        "assigneeId": assignee_id,
+        "status": "In Progress",
+    }
+
+    result = _zoho_desk_call("ZohoDesk_updateTicket", {
         "body": body,
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
     })
 
     if not result:
-        print(f"Failed to update tags/assignee on ticket {ticket_id}")
+        print(f"Failed to update assignee/status on ticket {ticket_id}")
         return False
 
     data = _unwrap_mcp_result(result)
     if isinstance(data, dict) and data.get("errorCode"):
-        print(f"Failed to update tags/assignee on ticket {ticket_id}: {data}")
+        print(f"Failed to update assignee/status on ticket {ticket_id}: {data}")
         return False
 
-    print(f"Zoho ticket {ticket_id} updated -- tags: {tags}, assignee: {assignee_id}")
+    print(f"Zoho ticket {ticket_id} updated -- assignee: {assignee_id}, status: In Progress")
     return True
 
 
@@ -783,7 +786,7 @@ def send_auto_acknowledgment(
             )
 
     # Send via ZohoDesk_sendReply (actually sends, not a draft)
-    result = _zoho_mcp_call("ZohoDesk_sendReply", {
+    result = _zoho_desk_call("ZohoDesk_sendReply", {
         "body": {
             "channel": "EMAIL",
             "fromEmailAddress": ZOHO_FROM_ADDRESS,
@@ -819,7 +822,7 @@ def post_draft_reply(ticket_id: str, content: str, to_email: str = "") -> bool:
     if to_email:
         body["to"] = to_email
 
-    result = _zoho_mcp_call("ZohoDesk_draftsReply", {
+    result = _zoho_desk_call("ZohoDesk_draftsReply", {
         "body": body,
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
@@ -846,7 +849,7 @@ def post_to_zoho(ticket_id: str, agent_response: str) -> bool:
     """Post the agent's analysis as an internal note on the Zoho Desk ticket."""
     note_content = f"{NOTE_HEADER}\n\n{agent_response}"
 
-    result = _zoho_mcp_call("ZohoDesk_createTicketComment", {
+    result = _zoho_desk_call("ZohoDesk_createTicketComment", {
         "body": {
             "content": note_content,
             "contentType": "plainText",
@@ -1088,12 +1091,9 @@ def process_ticket(ticket_data: dict) -> str | None:
             f"tier={new_class['client_tier']} flags={new_class['flags']}"
         )
 
-        # 2. Apply Zoho tags
-        zoho_tags = _build_zoho_tags(new_class)
+        # 2. Apply Zoho assignee + status (In Progress if routed to engineer)
         routing = _get_routing(new_class)
-        update_zoho_ticket_tags_and_assignee(
-            ticket_id, zoho_tags, routing["assignee_id"]
-        )
+        update_zoho_ticket_assignment(ticket_id, routing["assignee_id"])
 
         # 3. Send auto-acknowledgment reply (immediate, no approval needed)
         send_auto_acknowledgment(
@@ -1147,6 +1147,22 @@ def process_ticket(ticket_data: dict) -> str | None:
             # Pass new classification for enriched DB storage
             new_classification=new_class,
         )
+
+        # 5. Create ClickUp task with full classification data
+        cu_result = create_clickup_task(
+            ticket_data=ticket_data,
+            agent_response=result,
+            crm=crm,
+            zoho_url=zoho_url,
+            analysis=new_class,
+        )
+        if cu_result:
+            print(
+                f"ClickUp task created for ticket {ticket_id}: "
+                f"{cu_result['task_url']}"
+            )
+        else:
+            print(f"No ClickUp task created for ticket {ticket_id} (category may not require one)")
 
         return result
     except Exception as e:
@@ -1288,7 +1304,7 @@ def process_ticket_update(ticket_id: str) -> str | None:
 
         # Also post as internal note for audit trail
         note_content = f"{UPDATE_HEADER}\n\n{result}"
-        _zoho_mcp_call("ZohoDesk_createTicketComment", {
+        _zoho_desk_call("ZohoDesk_createTicketComment", {
             "body": {
                 "content": note_content,
                 "contentType": "plainText",

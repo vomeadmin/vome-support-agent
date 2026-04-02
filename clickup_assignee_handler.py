@@ -18,7 +18,7 @@ import httpx
 
 from agent import (
     ZOHO_ORG_ID,
-    _zoho_mcp_call,
+    _zoho_desk_call,
     _unwrap_mcp_result,
 )
 from slack import post_to_engineering
@@ -171,7 +171,7 @@ def handle_assignee_updated(payload: dict) -> None:
     )
 
     # --- Update Zoho ticket assignee ---
-    update_result = _zoho_mcp_call("ZohoDesk_updateTicket", {
+    update_result = _zoho_desk_call("ZohoDesk_updateTicket", {
         "body": {"assigneeId": zoho_agent_id},
         "path_variables": {"ticketId": str(zoho_ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
@@ -192,7 +192,7 @@ def handle_assignee_updated(payload: dict) -> None:
     note_content = (
         f"Ticket reassigned to {new_name} following ClickUp task update."
     )
-    _zoho_mcp_call("ZohoDesk_createTicketComment", {
+    _zoho_desk_call("ZohoDesk_createTicketComment", {
         "body": {
             "content": note_content,
             "contentType": "plainText",

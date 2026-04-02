@@ -24,7 +24,7 @@ from agent import (
     _extract_ticket_fields,
     _format_conversations,
     _unwrap_mcp_result,
-    _zoho_mcp_call,
+    _zoho_desk_call,
     fetch_crm_account,
     fetch_ticket_conversations,
     fetch_ticket_from_zoho,
@@ -501,7 +501,7 @@ def _send_client_reply(
         f"{f' cc={cc_email}' if cc_email else ''}"
     )
 
-    result = _zoho_mcp_call("ZohoDesk_sendReply", {
+    result = _zoho_desk_call("ZohoDesk_sendReply", {
         "body": body,
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
@@ -532,7 +532,7 @@ def _send_client_reply(
 
 def _zoho_assign_ticket(ticket_id: str, agent_id: str) -> bool:
     """Reassign a Zoho Desk ticket to the given agent ID."""
-    result = _zoho_mcp_call("ZohoDesk_updateTicket", {
+    result = _zoho_desk_call("ZohoDesk_updateTicket", {
         "body": {"assigneeId": str(agent_id)},
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
@@ -556,7 +556,7 @@ def _zoho_assign_ticket(ticket_id: str, agent_id: str) -> bool:
 
 def _zoho_set_status(ticket_id: str, status: str) -> bool:
     """Update the status of a Zoho Desk ticket."""
-    result = _zoho_mcp_call("ZohoDesk_updateTicket", {
+    result = _zoho_desk_call("ZohoDesk_updateTicket", {
         "body": {"status": status},
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},

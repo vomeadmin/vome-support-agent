@@ -24,7 +24,7 @@ from agent import (
     ZOHO_ORG_ID,
     _extract_ticket_fields,
     _format_conversations,
-    _zoho_mcp_call,
+    _zoho_desk_call,
     _unwrap_mcp_result,
     fetch_ticket_conversations,
     fetch_ticket_from_zoho,
@@ -110,7 +110,7 @@ def update_clickup_status_finished(task_id: str) -> bool:
 
 def _set_zoho_status_final_review(zoho_ticket_id: str) -> bool:
     """Update the Zoho ticket status to 'Final Review'."""
-    result = _zoho_mcp_call("ZohoDesk_updateTicket", {
+    result = _zoho_desk_call("ZohoDesk_updateTicket", {
         "body": {"status": "Final Review"},
         "path_variables": {"ticketId": str(zoho_ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
