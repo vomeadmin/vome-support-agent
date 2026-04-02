@@ -191,9 +191,7 @@ def _determine_list_from_category(category: str) -> str | None:
     """
     if category in ("bug", "investigation", "auth"):
         return LIST_PRIORITY_QUEUE
-    if category == "feature":
-        return LIST_RAW_INTAKE
-    # how-to, billing -> no ClickUp task
+    # feature, how-to, billing -> no ClickUp task (Sam curates manually)
     return None
 
 

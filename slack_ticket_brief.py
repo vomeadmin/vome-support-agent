@@ -63,16 +63,18 @@ def send_ticket_brief(
     priority: str = "",
     suggested_owner: str = "",
     new_classification: dict | None = None,
+    channel: str = "",
 ) -> str | None:
     """
-    Post a structured ticket brief to #vome-tickets.
+    Post a structured ticket brief to a Slack channel.
 
     Returns thread_ts of the posted message (used as the thread root for all
     subsequent replies), or None if the post failed.
 
     Also persists the thread_ts → ticket mapping to thread_map.json.
     """
-    if not CHANNEL_TICKETS:
+    target_channel = channel or CHANNEL_TICKETS
+    if not target_channel:
         print(
             "send_ticket_brief: SLACK_CHANNEL_VOME_TICKETS not configured"
             " — skipping"
@@ -186,7 +188,7 @@ def send_ticket_brief(
 
     try:
         resp = _slack.chat_postMessage(
-            channel=CHANNEL_TICKETS, text=brief
+            channel=target_channel, text=brief
         )
         thread_ts = resp["ts"]
         print(
@@ -220,7 +222,7 @@ def send_ticket_brief(
             ticket_id=ticket_id,
             ticket_number=ticket_number,
             subject=subject,
-            channel=CHANNEL_TICKETS,
+            channel=target_channel,
             clickup_task_id=clickup_task_id,
             classification=class_dict,
             crm=crm,

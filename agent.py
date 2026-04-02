@@ -1339,7 +1339,17 @@ def process_ticket(ticket_data: dict) -> str | None:
             conversations_result, contact_email
         )
 
-        # Send Slack brief -- only output on new ticket arrival
+        # Route Slack brief to the right channel:
+        # OnlyG tickets -> #support-queue-onlyg
+        # Sanjay tickets -> #support-queue-sanjay
+        # Sam tickets -> #vome-tickets
+        if routing["assignee_id"] == ZOHO_AGENT_ONLYG:
+            slack_channel = os.environ.get("SLACK_CHANNEL_SUPPORT_QUEUE_ONLYG", "")
+        elif routing["assignee_id"] == ZOHO_AGENT_SANJAY:
+            slack_channel = os.environ.get("SLACK_CHANNEL_SUPPORT_QUEUE_SANJAY", "")
+        else:
+            slack_channel = os.environ.get("SLACK_CHANNEL_VOME_TICKETS", "")
+
         send_ticket_brief(
             ticket_id=ticket_id,
             ticket_number=ticket_data.get(
@@ -1360,8 +1370,8 @@ def process_ticket(ticket_data: dict) -> str | None:
             timing=_extract_field("TIMING"),
             priority=_extract_field("PRIORITY"),
             suggested_owner=_extract_field("SUGGESTED OWNER"),
-            # Pass new classification for enriched DB storage
             new_classification=new_class,
+            channel=slack_channel,
         )
 
         # 5. Create ClickUp task with full classification data
