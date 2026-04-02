@@ -283,17 +283,29 @@ Output all four dimensions for every ticket.
 
 Assign exactly one:
 
-- **Technical Bug** -- something is broken,
-  not working as expected, or producing errors
+- **Technical Bug** -- something is objectively
+  broken: errors, crashes, data loss, UI not
+  rendering, actions that used to work now fail.
+  The client is reporting a malfunction, not
+  asking "how do I do X?"
 - **Investigation** -- unclear whether it is a
   bug or expected behaviour; requires engineer
-  review to determine root cause
+  review to determine root cause. Use this
+  when the client describes unexpected behaviour
+  but it might be working as designed.
 - **Feature Request** -- client is asking for
-  new functionality or a change to existing
-  behaviour that is working as designed
+  new functionality, a change to existing
+  behaviour, or wants to do something the
+  platform does not currently support. Key
+  language: "how can we...", "is there a way
+  to...", "can you add...", "we would like to..."
+  If the platform is doing what it was designed
+  to do but the client wants it to work
+  differently, this is a feature request.
 - **Feature Explanation/How-To** -- client is
   asking how to do something the platform
-  already supports
+  already supports. They need guidance, not
+  a code change.
 - **Admin & Billing** -- account changes, plan
   upgrades/downgrades, billing questions,
   invoice requests
