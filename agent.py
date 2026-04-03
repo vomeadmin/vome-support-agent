@@ -833,32 +833,61 @@ def send_auto_acknowledgment(
     body: str,
     client_tier: str,
     detected_lang: str | None,
+    has_attachments: bool = False,
 ) -> bool:
     """Send an immediate auto-acknowledgment reply to the client.
 
     Picks a random template, optionally appends info-request for
     low/medium tier clients with sparse tickets.
     """
-    # Detect if contact_name is a real person or an org/shared mailbox
-    name_lower = (contact_name or "").lower()
-    org_signals = {
-        "volunteer", "admin", "team", "support", "info",
-        "contact", "office", "staff", "service", "help",
-        "membership", "scheduling", "coordinator", "vome",
-        "center", "centre", "program", "department",
-    }
-    is_org_name = any(w in name_lower for w in org_signals)
-    if contact_name and not is_org_name:
-        first_name = contact_name.split()[0]
-    else:
-        first_name = "there"
+    # Extract a real first name, or fall back to "there"
+    first_name = "there"
+    candidate = (contact_name or "").split()[0] if contact_name else ""
+    if candidate:
+        c_lower = candidate.lower()
+        # Must look like a person's first name:
+        # - alphabetic only (no numbers, punctuation)
+        # - not a common org/role/generic word
+        # - between 2-15 chars (real names)
+        # - full contact_name has 2-3 words (first + last)
+        not_a_name = {
+            "volunteer", "admin", "team", "support", "info",
+            "contact", "office", "staff", "service", "help",
+            "membership", "scheduling", "coordinator", "vome",
+            "center", "centre", "program", "department",
+            "general", "director", "manager", "operations",
+            "hr", "the", "a", "my", "our", "new", "test",
+            "billing", "accounts", "hello", "hi", "dear",
+            "benevolat", "benevole", "equipe", "comite",
+        }
+        name_parts = contact_name.strip().split()
+        is_valid = (
+            c_lower.isalpha()
+            and len(candidate) >= 2
+            and len(candidate) <= 15
+            and c_lower not in not_a_name
+            and len(name_parts) in (2, 3)
+        )
+        # Also reject if ANY word in the full name is an org signal
+        if is_valid:
+            full_lower = contact_name.lower()
+            org_anywhere = {
+                "team", "center", "centre", "program",
+                "department", "office", "staff", "volunteer",
+                "admin", "service", "committee", "comite",
+            }
+            if any(w in full_lower for w in org_anywhere):
+                is_valid = False
+        if is_valid:
+            first_name = candidate
 
     is_french = detected_lang == "French"
     templates = _ACK_TEMPLATES_FR if is_french else _ACK_TEMPLATES_EN
     reply = random.choice(templates).format(name=first_name)
 
     # For low/medium tier only: append info request if ticket is sparse
-    if client_tier in ("low", "medium") and _ticket_is_sparse(body):
+    # Never ask for more info if attachments are present
+    if client_tier in ("low", "medium") and _ticket_is_sparse(body) and not has_attachments:
         info_req = _INFO_REQUEST_FR if is_french else _INFO_REQUEST_EN
         # Insert before the sign-off line
         sign_off_marker = "Cordialement," if is_french else "Best,"
@@ -1320,6 +1349,7 @@ def process_ticket(ticket_data: dict) -> str | None:
                 body=body,
                 client_tier=new_class["client_tier"],
                 detected_lang=detected_lang,
+                has_attachments=attachment_info["has_attachments"],
             )
         else:
             print(f"Auto-ack skipped for ticket {ticket_id} -- no engineer assigned, Sam will handle")
