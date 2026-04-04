@@ -885,17 +885,8 @@ def send_auto_acknowledgment(
     templates = _ACK_TEMPLATES_FR if is_french else _ACK_TEMPLATES_EN
     reply = random.choice(templates).format(name=first_name)
 
-    # For low/medium tier only: append info request if ticket is sparse
-    # Never ask for more info if attachments are present
-    if client_tier in ("low", "medium") and _ticket_is_sparse(body) and not has_attachments:
-        info_req = _INFO_REQUEST_FR if is_french else _INFO_REQUEST_EN
-        # Insert before the sign-off line
-        sign_off_marker = "Cordialement," if is_french else "Best,"
-        if sign_off_marker in reply:
-            reply = reply.replace(
-                sign_off_marker,
-                f"\n{info_req}\n\n{sign_off_marker}",
-            )
+    # Auto-ack is a clean acknowledgment only — never ask for more info.
+    # If more details are needed, Sam handles that in a manual reply.
 
     # LIVE: Send reply to client via email
     result = _zoho_desk_call("ZohoDesk_sendReply", {
