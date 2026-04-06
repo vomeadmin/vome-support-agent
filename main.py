@@ -95,11 +95,14 @@ init_db()
 app = FastAPI(title="Vome Support Agent")
 
 # ---------------------------------------------------------------------------
-# APScheduler — daily digest at 18:00 America/Montreal
+# APScheduler — daily digest at 17:00 ET (America/Montreal)
 # ---------------------------------------------------------------------------
 
 _scheduler = BackgroundScheduler(timezone="America/Montreal")
-_scheduler.add_job(send_daily_digest, CronTrigger(hour=18, minute=0))
+_scheduler.add_job(
+    send_daily_digest,
+    CronTrigger(hour=17, minute=0, timezone="America/Montreal"),
+)
 _scheduler.start()
 
 

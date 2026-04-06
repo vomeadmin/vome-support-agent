@@ -105,40 +105,73 @@ def send_daily_digest():
     # Format date for display
     display_date = datetime.now(timezone.utc).strftime("%B %-d, %Y")
 
+    # Separate urgent/high-value tickets that need Sam's attention
+    needs_attention: list[dict] = []
+    routine: list[dict] = []
+
+    for e in open_tickets:
+        crm = e.get("crm") or {}
+        classification = e.get("classification") or {}
+        arr = crm.get("arr")
+        tier = crm.get("tier", "").lower()
+        category = classification.get("category", "").lower()
+        complexity = classification.get("complexity", "").lower()
+
+        is_high_value = tier in (
+            "enterprise", "ultimate"
+        ) or (arr and float(arr) >= 1500)
+        is_urgent_bug = category in ("bug", "investigation") and (
+            complexity in ("high", "very-high")
+        )
+
+        if is_high_value or is_urgent_bug:
+            needs_attention.append(e)
+        else:
+            routine.append(e)
+
     # Build digest
-    lines = [f"📋 *End of Day — {display_date}*\n"]
+    lines = [f"*EOD Summary — {display_date}*\n"]
 
-    lines.append(f"✅ *Handled today:* {len(handled)}")
-    lines.append(_format_ticket_list(handled))
-    lines.append("")
-
-    lines.append(f"⏸ *Parked — needs follow-up:* {len(parked)}")
-    lines.append(_format_ticket_list(parked))
-    lines.append("")
-
-    lines.append(f"🔴 *Open with no response:* {len(open_tickets)}")
-    lines.append(_format_ticket_list(open_tickets))
-    lines.append("")
+    if needs_attention:
+        lines.append(
+            f"*Needs your attention ({len(needs_attention)}):*"
+        )
+        for e in needs_attention:
+            num = e.get("ticket_number", "?")
+            subj = e.get("subject", "(no subject)")
+            crm = e.get("crm") or {}
+            account = crm.get("account_name", "")
+            tier = crm.get("tier", "")
+            tag = f" | {account} ({tier})" if account else ""
+            lines.append(f"  *#{num}*{tag} — {subj}")
+        lines.append("")
 
     if on_prod_pending:
         lines.append(
-            f"⚠️ *Fixed on prod, client not yet notified:*"
-            f" {len(on_prod_pending)}"
+            f"*On prod, client not yet notified"
+            f" ({len(on_prod_pending)}):*"
         )
         for e in on_prod_pending:
-            num = e.get("ticket_number", e.get("ticket_id", "?"))
+            num = e.get("ticket_number", "?")
             subj = e.get("subject", "(no subject)")
-            lines.append(f"  • #{num} — {subj}")
+            lines.append(f"  #{num} — {subj}")
         lines.append("")
 
-    lines.append("*Engineers:*")
-    onlyg_noun = "tasks" if onlyg_count != 1 else "task"
-    sanjay_noun = "tasks" if sanjay_count != 1 else "task"
-    lines.append(f"OnlyG — {onlyg_count} {onlyg_noun} in progress")
-    lines.append(f"Sanjay — {sanjay_count} {sanjay_noun} in progress")
+    lines.append(
+        f"*Open:* {len(open_tickets)} total"
+        f" | *Handled today:* {len(handled)}"
+        f" | *Parked:* {len(parked)}"
+    )
 
-    if not parked and not open_tickets and not on_prod_pending:
-        lines.append("\nAll clear — nothing pending 🎉")
+    lines.append("")
+    lines.append("*Engineers:*")
+    lines.append(
+        f"OnlyG — {onlyg_count} in progress"
+        f" | Sanjay — {sanjay_count} in progress"
+    )
+
+    if not needs_attention and not on_prod_pending:
+        lines.append("\nNothing urgent — all clear")
 
     message = "\n".join(lines)
 
