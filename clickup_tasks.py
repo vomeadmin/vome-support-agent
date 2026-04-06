@@ -592,3 +592,53 @@ def create_clickup_task(
     except Exception as e:
         print(f"ClickUp task creation failed: {e}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Sync functions: update/close ClickUp tasks from Zoho changes
+# ---------------------------------------------------------------------------
+
+def close_clickup_task(task_id: str) -> bool:
+    """Close a ClickUp task by setting status to CLOSED."""
+    if not CLICKUP_API_TOKEN or not task_id:
+        return False
+    try:
+        url = f"{CLICKUP_BASE}/task/{task_id}"
+        r = httpx.put(
+            url,
+            json={"status": "CLOSED"},
+            headers={
+                "Authorization": CLICKUP_API_TOKEN,
+                "Content-Type": "application/json",
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        print(f"ClickUp task {task_id} closed")
+        return True
+    except Exception as e:
+        print(f"Failed to close ClickUp task {task_id}: {e}")
+        return False
+
+
+def remove_clickup_task_assignee(task_id: str) -> bool:
+    """Remove all assignees from a ClickUp task (Sam took it over)."""
+    if not CLICKUP_API_TOKEN or not task_id:
+        return False
+    try:
+        url = f"{CLICKUP_BASE}/task/{task_id}"
+        r = httpx.put(
+            url,
+            json={"assignees": {"rem": [CLICKUP_USER_SANJAY, CLICKUP_USER_ONLYG]}},
+            headers={
+                "Authorization": CLICKUP_API_TOKEN,
+                "Content-Type": "application/json",
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        print(f"ClickUp task {task_id} assignees removed")
+        return True
+    except Exception as e:
+        print(f"Failed to update ClickUp task {task_id}: {e}")
+        return False

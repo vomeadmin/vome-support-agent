@@ -29,7 +29,7 @@ from agent import (
     fetch_ticket_conversations,
     fetch_ticket_from_zoho,
 )
-from slack_ticket_brief import CHANNEL_TICKETS
+CHANNEL_FINAL_REVIEW = os.environ.get("SLACK_CHANNEL_SUPPORT_FINAL_REVIEW", "")
 from database import (
     get_thread,
     get_thread_by_ticket_id,
@@ -257,7 +257,7 @@ def _post_to_existing_thread(
     text = _on_prod_message(ticket_number, engineer_name, draft)
     try:
         _slack.chat_postMessage(
-            channel=CHANNEL_TICKETS,
+            channel=CHANNEL_FINAL_REVIEW,
             thread_ts=thread_ts,
             text=text,
         )
@@ -288,14 +288,14 @@ def _create_new_thread(
         zoho_ticket_id=zoho_ticket_id,
     )
     try:
-        resp = _slack.chat_postMessage(channel=CHANNEL_TICKETS, text=text)
+        resp = _slack.chat_postMessage(channel=CHANNEL_FINAL_REVIEW, text=text)
         thread_ts = resp["ts"]
         save_thread(
             thread_ts=thread_ts,
             ticket_id=zoho_ticket_id,
             ticket_number=zoho_ticket_id,
             subject=subject,
-            channel=CHANNEL_TICKETS,
+            channel=CHANNEL_FINAL_REVIEW,
             clickup_task_id=clickup_task_id,
         )
         return thread_ts

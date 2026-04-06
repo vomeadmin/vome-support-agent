@@ -587,7 +587,14 @@ Key behaviors:
 - Route tasks to the correct list: bugs/access → priority_queue, features → raw_intake,
   non-urgent UX → accepted_backlog.
 - Assign engineers based on type: frontend/UX → sanjay, backend/data/API → onlyg.
-- Be concise. No walls of text. Brief acknowledgment + what you did + link.
+- Be VERY concise. Your entire response must be 2-4 lines max.
+  Format: one line summary of what you understood + one line of what
+  you did + task link. No bullet lists, no headers, no "What I did"
+  sections. Example:
+  "Got it — UMM wants a resources feature (P2). Created task: [link]"
+  That's it. Nothing more unless you have a follow-up question.
+- Never repeat yourself. Never echo back what the user said in detail.
+- If you have a follow-up question, add it as one short line at the end.
 - Use the priority and classification rules from the context document above.
 {task_context}"""
 
@@ -721,15 +728,32 @@ def _run_agent(thread_ts: str, new_message: str, user_name: str, thread_context:
 # Entry point — called from main.py
 # ---------------------------------------------------------------------------
 
+_processing_events: dict[str, float] = {}
+_EVENT_TTL = 60  # ignore duplicate events within 60 seconds
+
+
 def handle_field_feedback(event: dict):
     """
     Route a #vome-field-feedback Slack event to the conversational agent.
     Works for any team member — Ron, Sam, or anyone else.
     """
+    import time
+
     text = (event.get("text") or "").strip()
     ts = event.get("ts", "")
     thread_ts = event.get("thread_ts")
     user_id = event.get("user", "")
+
+    # Dedup: Slack retries if we don't respond in 3s, causing duplicate replies
+    now = time.time()
+    expired = [k for k, v in _processing_events.items() if now - v > _EVENT_TTL]
+    for k in expired:
+        del _processing_events[k]
+    event_key = f"{ts}:{user_id}"
+    if event_key in _processing_events:
+        print(f"[field_feedback] Duplicate event {event_key} -- skipping")
+        return
+    _processing_events[event_key] = now
 
     if not text:
         return

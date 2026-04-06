@@ -11,7 +11,7 @@ import random
 
 from slack_ticket_brief import send_ticket_brief
 from slack import post_to_engineering
-from clickup_tasks import create_clickup_task
+from clickup_tasks import create_clickup_task, close_clickup_task
 
 # Fix Windows console encoding for emoji in system_prompt.md
 if sys.stdout.encoding != "utf-8":
@@ -1166,6 +1166,12 @@ def process_ticket(ticket_data: dict) -> str | None:
         extra_context = ""
         print(f"Zoho fetch failed -- falling back to webhook payload for ticket {ticket_id}")
 
+    # Error reports from Vome frontend — Sam handles these directly
+    combined_text = f"{subject} {body or ''}".lower()
+    if "vome error report" in combined_text or "error report ===" in combined_text:
+        print(f"Vome Error Report detected in ticket {ticket_id} -- leaving as New for Sam")
+        return None
+
     thread_text = _format_conversations(conversations_result)
 
     # Comprehensive attachment detection across all sources
@@ -1411,6 +1417,15 @@ def process_ticket(ticket_data: dict) -> str | None:
                 f"ClickUp task created for ticket {ticket_id}: "
                 f"{cu_result['task_url']}"
             )
+            # Save ClickUp task ID to database for sync
+            try:
+                from database import get_thread_by_ticket_id, update_thread
+                thread_info = get_thread_by_ticket_id(ticket_id)
+                if thread_info:
+                    thread_ts, _ = thread_info
+                    update_thread(thread_ts, clickup_task_id=cu_result["task_id"])
+            except Exception as e:
+                print(f"Failed to save ClickUp task ID to DB: {e}")
         else:
             print(f"No ClickUp task created for ticket {ticket_id} (category may not require one)")
 
@@ -1418,6 +1433,59 @@ def process_ticket(ticket_data: dict) -> str | None:
     except Exception as e:
         print(f"Agent error processing ticket {ticket_id}: {e}")
         return None
+
+
+def sync_zoho_to_clickup(ticket_id: str) -> None:
+    """Sync a Zoho ticket's status/assignee changes to ClickUp.
+
+    Called when a Zoho ticket update webhook fires. Handles:
+    - Ticket reassigned to Sam/Ron -> close ClickUp task (Sam took over)
+    - Ticket closed on Zoho -> close ClickUp task
+    """
+    from database import get_thread_by_ticket_id, update_thread
+
+    # Look up the ClickUp task ID from our database
+    thread_info = get_thread_by_ticket_id(ticket_id)
+    if not thread_info:
+        return
+    thread_ts, thread_data = thread_info
+    clickup_task_id = thread_data.get("clickup_task_id")
+    if not clickup_task_id:
+        return
+
+    # Fetch current ticket state from Zoho
+    zoho_ticket = fetch_ticket_from_zoho(ticket_id)
+    if not zoho_ticket:
+        return
+    ticket = _unwrap_mcp_result(zoho_ticket) or {}
+    status = (ticket.get("status") or "").lower().strip()
+    assignee_id = ticket.get("assigneeId") or ""
+
+    # Closed on Zoho -> close on ClickUp
+    if status in ("closed", "resolved"):
+        print(f"Zoho ticket {ticket_id} is {status} -- closing ClickUp task {clickup_task_id}")
+        close_clickup_task(clickup_task_id)
+        update_thread(thread_ts, status="closed")
+        return
+
+    # Reassigned to Sam or Ron (not an engineer) -> close ClickUp task
+    engineer_ids = {ZOHO_AGENT_SANJAY, ZOHO_AGENT_ONLYG}
+    if assignee_id and assignee_id not in engineer_ids:
+        print(
+            f"Zoho ticket {ticket_id} reassigned to non-engineer "
+            f"({assignee_id}) -- closing ClickUp task {clickup_task_id}"
+        )
+        close_clickup_task(clickup_task_id)
+        return
+
+    # Unassigned -> also close ClickUp (Sam will handle)
+    if not assignee_id:
+        print(
+            f"Zoho ticket {ticket_id} unassigned -- "
+            f"closing ClickUp task {clickup_task_id}"
+        )
+        close_clickup_task(clickup_task_id)
+        return
 
 
 def _is_client_reply(conversations_result: dict | None, ticket_id: str = "unknown") -> tuple[bool, dict]:

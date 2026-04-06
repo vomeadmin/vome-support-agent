@@ -14,7 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request, Response
 
-from agent import process_ticket, process_ticket_update
+from agent import process_ticket, process_ticket_update, sync_zoho_to_clickup
 from clickup_assignee_handler import handle_assignee_updated
 from clickup_needs_review_handler import handle_needs_review
 from clickup_waiting_client_handler import handle_waiting_on_client
@@ -123,6 +123,8 @@ def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool
 SLACK_TICKETS_CHANNEL = os.environ.get("SLACK_CHANNEL_VOME_TICKETS", "")
 SLACK_FIELD_FEEDBACK_CHANNEL = os.environ.get("SLACK_CHANNEL_VOME_FIELD_FEEDBACK", "")
 
+_slack_processed_events: dict[str, float] = {}
+
 
 @app.post("/webhook/slack-events")
 async def slack_events_webhook(request: Request):
@@ -139,6 +141,20 @@ async def slack_events_webhook(request: Request):
     # Slack URL verification challenge (sent once when configuring Event Subscriptions)
     if payload.get("type") == "url_verification":
         return {"challenge": payload["challenge"]}
+
+    # Dedup: Slack retries events if we don't respond in 3s.
+    # Use event_id to prevent processing the same event twice.
+    event_id = payload.get("event_id", "")
+    if event_id and event_id in _slack_processed_events:
+        return {"status": "ok"}
+    if event_id:
+        import time
+        now = time.time()
+        _slack_processed_events[event_id] = now
+        # Clean old entries
+        expired = [k for k, v in _slack_processed_events.items() if now - v > 120]
+        for k in expired:
+            del _slack_processed_events[k]
 
     event = payload.get("event", {})
     event_type = event.get("type", "")
@@ -236,6 +252,9 @@ async def zoho_update_webhook(request: Request):
     print(f"[{timestamp}] Ticket update #{ticket_number} (ID: {ticket_id})")
 
     process_ticket_update(ticket_id)
+
+    # Sync Zoho assignee/status changes to ClickUp
+    sync_zoho_to_clickup(ticket_id)
 
     return {"status": "ok"}
 
