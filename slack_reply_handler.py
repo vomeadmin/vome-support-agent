@@ -1355,6 +1355,62 @@ def handle_reply(event: dict):
             _reply(channel, thread_ts, "Cancelled — nothing sent to client.")
         return
 
+    if text_lower.startswith("redraft:") or text_lower.startswith("redraft "):
+        notes = text[text.index(":") + 1:].strip() if ":" in text else text[8:].strip()
+        _fresh = get_thread(thread_ts) or {}
+        pending = _fresh.get("pending_send", "")
+        if not pending:
+            _reply(channel, thread_ts, "Nothing pending to redraft.")
+            return
+
+        # Fetch ticket context for Claude
+        _ticket_raw = fetch_ticket_from_zoho(ticket_id)
+        _fields = _extract_ticket_fields(_ticket_raw) if _ticket_raw else {}
+        conversations_result = fetch_ticket_conversations(ticket_id)
+        conversations_text = _format_conversations(conversations_result)
+
+        from agent import SYSTEM_PROMPT
+        import anthropic
+        _claude = anthropic.Anthropic()
+
+        redraft_prompt = (
+            "You previously drafted this reply to a client:\n\n"
+            f"{pending}\n\n"
+            "The reviewer wants you to redraft it with these notes:\n\n"
+            f"{notes}\n\n"
+            "Keep the same general intent but incorporate the feedback. "
+            "Match the client's language. Output only the new draft, "
+            "no labels or preamble.\n\n"
+            f"Client: {_fields.get('contact_name', '')}\n"
+            f"Subject: {_fields.get('subject', '')}\n"
+            f"Conversation:\n{conversations_text}"
+        )
+
+        try:
+            resp = _claude.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=600,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": redraft_prompt}],
+            )
+            new_draft = resp.content[0].text.strip()
+        except Exception as e:
+            print(f"Redraft failed: {e}")
+            _reply(channel, thread_ts, f"Redraft failed: {e}")
+            return
+
+        # Store new draft as pending
+        update_thread(thread_ts, pending_send=new_draft)
+
+        _reply(
+            channel, thread_ts,
+            f"Redrafted:\n\n{new_draft}\n\n"
+            "`confirm` — send this version\n"
+            "`redraft: [more notes]` — adjust again\n"
+            "`cancel` — discard",
+        )
+        return
+
     if text_lower == "move backlog":
         if clickup_task_id:
             if _cu_move_to_list(

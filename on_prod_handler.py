@@ -208,42 +208,58 @@ def _generate_resolution_draft(
 # ---------------------------------------------------------------------------
 
 def _on_prod_message(
-    ticket_number: str, engineer_name: str, draft: str, include_header: bool = False,
-    ticket_fields: dict | None = None, zoho_ticket_id: str = "",
+    ticket_number: str,
+    engineer_name: str,
+    draft: str,
+    ticket_fields: dict | None = None,
+    zoho_ticket_id: str = "",
+    clickup_task_id: str = "",
 ) -> str:
     """Build the ON PROD Slack message block."""
+    zoho_url = (
+        f"https://desk.zoho.com/support/vomevolunteer"
+        f"/ShowHomePage.do#Cases/dv/{zoho_ticket_id}"
+    ) if zoho_ticket_id else ""
+    clickup_url = (
+        f"https://app.clickup.com/t/{clickup_task_id}"
+    ) if clickup_task_id else ""
+
     lines = [
-        f"🚀 *On Prod — #{ticket_number}*",
+        f":rocket: *On Prod — #{ticket_number}*",
         f"*{engineer_name} marked this as fixed.*",
     ]
-    if include_header and ticket_fields:
+    if ticket_fields:
         contact_name = ticket_fields.get("contact_name", "")
         contact_email = ticket_fields.get("contact_email", "")
         subject = ticket_fields.get("subject", "")
-        zoho_url = (
-            f"https://desk.zoho.com/support/vomevolunteer"
-            f"/ShowHomePage.do#Cases/dv/{zoho_ticket_id}"
-        )
         contact_line = (
             f"{contact_name} ({contact_email})"
             if contact_email
             else contact_name or "Unknown"
         )
-        lines += [
-            f"*Contact:* {contact_line}",
-            f"*Subject:* {subject}",
-            f"*Zoho:* {zoho_url}",
-        ]
+        lines.append(f"*Contact:* {contact_line}")
+        lines.append(f"*Subject:* {subject}")
+
+    # Always show links
+    link_parts = []
+    if zoho_url:
+        link_parts.append(f"<{zoho_url}|Zoho>")
+    if clickup_url:
+        link_parts.append(f"<{clickup_url}|ClickUp>")
+    if link_parts:
+        lines.append(" | ".join(link_parts))
+
     lines += [
         "",
         _SEP,
-        "💬 *SUGGESTED RESOLUTION — not sent yet*",
+        ":speech_balloon: *SUGGESTED RESOLUTION — not sent yet*",
         "",
         draft,
         _SEP,
-        "Reply `confirm` to send to client",
-        "Reply `send: [your version]` to customise",
-        "Reply `cancel` to hold — I'll remind you in tonight's digest",
+        "`confirm` — send as-is",
+        "`send: [your version]` — send your custom reply",
+        "`redraft: [your notes]` — redraft with your pointers",
+        "`cancel` — hold for tonight's digest",
     ]
     return "\n".join(lines)
 
@@ -253,9 +269,17 @@ def _post_to_existing_thread(
     ticket_number: str,
     engineer_name: str,
     draft: str,
+    zoho_ticket_id: str = "",
+    clickup_task_id: str = "",
+    ticket_fields: dict | None = None,
 ) -> bool:
     """Post ON PROD notification as a reply in an existing Slack thread."""
-    text = _on_prod_message(ticket_number, engineer_name, draft)
+    text = _on_prod_message(
+        ticket_number, engineer_name, draft,
+        ticket_fields=ticket_fields,
+        zoho_ticket_id=zoho_ticket_id,
+        clickup_task_id=clickup_task_id,
+    )
     try:
         _slack.chat_postMessage(
             channel=CHANNEL_FINAL_REVIEW,
@@ -284,9 +308,9 @@ def _create_new_thread(
         ticket_number=zoho_ticket_id,
         engineer_name=engineer_name,
         draft=draft,
-        include_header=True,
         ticket_fields=ticket_fields,
         zoho_ticket_id=zoho_ticket_id,
+        clickup_task_id=clickup_task_id,
     )
     try:
         resp = _slack.chat_postMessage(channel=CHANNEL_FINAL_REVIEW, text=text)
@@ -415,6 +439,9 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
             ticket_number=ticket_number,
             engineer_name=engineer_name,
             draft=draft,
+            zoho_ticket_id=zoho_ticket_id,
+            clickup_task_id=task_id,
+            ticket_fields=fields,
         )
         if not posted:
             return False

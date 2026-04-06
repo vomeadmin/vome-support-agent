@@ -463,10 +463,24 @@ def fetch_crm_account(
         account_name = account_info.get("name")
         account_id = str(account_info.get("id", "")) if account_info.get("id") else None
 
-        offering = contact.get("FV_Offering") or contact.get("Offering")
-        if isinstance(offering, list):
-            offering = offering[0] if offering else None
-        tier = _normalize_tier(offering)
+        # Use the highest tier across all contacts at this account
+        tier_rank = {
+            "ultimate": 4, "enterprise": 3, "pro": 2, "recruit": 1,
+        }
+        best_tier = "Unknown"
+        best_rank = -1
+        for c in contacts:
+            c_offering = c.get("FV_Offering") or c.get("Offering")
+            if isinstance(c_offering, list):
+                c_offering = c_offering[0] if c_offering else None
+            c_tier = _normalize_tier(c_offering)
+            rank = tier_rank.get(c_tier.lower(), 0)
+            if rank > best_rank:
+                best_rank = rank
+                best_tier = c_tier
+        tier = best_tier
+        if len(contacts) > 1:
+            print(f"CRM: {len(contacts)} contacts found — using highest tier: {tier}")
 
         enrichment = {
             "found": True,

@@ -467,7 +467,7 @@ def _extract_task_with_claude(
         "identity, logo, and messaging.'\n"
         "- priority: 'urgent', 'high', 'normal', or 'low' (infer from words "
         "like 'urgent', 'blocking', 'asap', 'when you get a chance')\n"
-        f"- assignee_id: {assignee_id if assignee_id else 'null'}\n"
+        f"- assignee_id: {assignee_id if assignee_id else 'null — BUT if the conversation mentions assigning to a team member, use their ID from this map: Sam=3691763, Sanjay=4434086, OnlyG=49257687, Ron=4434980'}\n"
         "- auto_score: integer 0-100 if the user specified one, otherwise null\n"
         f"{title_instruction}\n\n"
         f"Conversation:\n{conversation}\n\n"
