@@ -30,6 +30,7 @@ from agent import (
     fetch_ticket_from_zoho,
 )
 CHANNEL_FINAL_REVIEW = os.environ.get("SLACK_CHANNEL_SUPPORT_FINAL_REVIEW", "")
+CHANNEL_FINISHED_TASKS = os.environ.get("SLACK_CHANNEL_FINISHED_TASKS", "")
 from database import (
     get_thread,
     get_thread_by_ticket_id,
@@ -324,7 +325,23 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
         return False
 
     task_title = task.get("name", task_id)
+    task_url = task.get("url") or f"https://app.clickup.com/t/{task_id}"
     description = task.get("description") or ""
+
+    # Always post a brief notification to #eng-alerts so Ron + team
+    # can see every on-prod update in real time
+    if CHANNEL_FINISHED_TASKS:
+        try:
+            _slack.chat_postMessage(
+                channel=CHANNEL_FINISHED_TASKS,
+                text=(
+                    f":rocket: *On Prod* — {engineer_name} shipped: "
+                    f"*{task_title}*\n{task_url}"
+                ),
+            )
+            print(f"[ON PROD] Alert posted to #eng-alerts for {task_id}")
+        except SlackApiError as e:
+            print(f"[ON PROD] eng-alerts post failed: {e.response['error']}")
 
     # Pull classification + module from task description for draft context
     cl_match = re.search(
@@ -336,14 +353,15 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
     classification = cl_match.group(1).strip() if cl_match else "Bug"
     module = mod_match.group(1).strip() if mod_match else "Other"
 
-    # Step 2 — extract Zoho ticket ID
+    # Step 2 — extract Zoho ticket ID (only support tickets get the
+    # full final-review flow with draft generation)
     zoho_ticket_id = _extract_zoho_ticket_id(task)
     if not zoho_ticket_id:
         print(
             f"[ON PROD] No Zoho ticket ID in task {task_id} ({task_title}) "
-            "— Zoho Ticket Link field may be empty"
+            "— no support ticket to review, eng-alert posted"
         )
-        return False
+        return True  # eng-alert was posted, that's enough
 
     print(f"[ON PROD] Zoho ticket ID: {zoho_ticket_id}")
 
@@ -381,7 +399,7 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
         draft = (
             f"Hi {first_name}, the issue you reported has been resolved "
             "and the fix is now live. Let us know if anything else comes up.\n"
-            "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+            "Best,\n\nVome team\nsupport.vomevolunteer.com"
         )
 
     # Step 7 — find existing Slack thread or create new one
