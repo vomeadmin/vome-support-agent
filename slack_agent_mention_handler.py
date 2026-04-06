@@ -167,20 +167,26 @@ def _load_channel_defaults():
         return
     _channel_defaults_loaded = True
 
+    # Product/engineering channels -> Priority Queue
+    # Only Operations channel -> Admin Stuff
     CHANNEL_DEFAULTS.update({
         os.environ.get("SLACK_CHANNEL_OPS", ""): "901106558605",
-        os.environ.get("SLACK_CHANNEL_ENG_FRONTEND", ""): "42278953",
-        os.environ.get("SLACK_CHANNEL_ENG_BACKEND", ""): "901102882382",
+        os.environ.get("SLACK_CHANNEL_ENG_FRONTEND", ""): "901113386257",
+        os.environ.get("SLACK_CHANNEL_ENG_BACKEND", ""): "901113386257",
         os.environ.get("SLACK_CHANNEL_VOME_FIELD_FEEDBACK", ""): "901113386484",
         os.environ.get("SLACK_CHANNEL_VOME_FEATURE_REQUESTS", ""): "901113386484",
         os.environ.get("SLACK_CHANNEL_SUPPORT_QUEUE_SANJAY", ""): "901113386257",
         os.environ.get("SLACK_CHANNEL_SUPPORT_QUEUE_ONLYG", ""): "901113386257",
+        os.environ.get("SLACK_CHANNEL_ENG_INFRA", ""): "901113386257",
+        os.environ.get("SLACK_CHANNEL_VOME_SUPPORT_ENGINEERING", ""): "901113386257",
     })
     # Remove empty-string keys (unset env vars)
     CHANNEL_DEFAULTS.pop("", None)
 
 
-DEFAULT_LIST_ID = "901106558605"  # Operations / Admin Stuff
+# Default for any channel not mapped above -> Priority Queue
+# (product work is the most common use case)
+DEFAULT_LIST_ID = "901113386257"  # Vome Product / Priority Queue
 
 PRIORITY_MAP = {"urgent": 1, "high": 2, "normal": 3, "low": 4}
 
@@ -455,6 +461,7 @@ def _extract_task_with_claude(
         "- priority: 'urgent', 'high', 'normal', or 'low' (infer from words "
         "like 'urgent', 'blocking', 'asap', 'when you get a chance')\n"
         f"- assignee_id: {assignee_id if assignee_id else 'null'}\n"
+        "- auto_score: integer 0-100 if the user specified one, otherwise null\n"
         f"{title_instruction}\n\n"
         f"Conversation:\n{conversation}\n\n"
         "Return only valid JSON, no other text."
@@ -498,6 +505,7 @@ def _create_clickup_task(
     priority: str,
     assignee_id: int | None,
     is_note: bool = False,
+    auto_score: int | None = None,
 ) -> dict | None:
     """Create a ClickUp task via REST API.
 
@@ -509,14 +517,23 @@ def _create_clickup_task(
 
     cu_priority = PRIORITY_MAP.get(priority, 3)
 
+    # Use "queued" for Priority Queue, omit status for other lists
     payload: dict = {
         "name": title,
         "description": description,
         "priority": cu_priority,
-        "status": "to do",
     }
+    if list_id == "901113386257":  # Priority Queue
+        payload["status"] = "queued"
     if assignee_id:
         payload["assignees"] = [assignee_id]
+
+    # Custom fields
+    if auto_score is not None:
+        FIELD_AUTO_SCORE = "fd77f978-eca8-499e-bc3c-dc1bf4b8181e"
+        payload["custom_fields"] = [
+            {"id": FIELD_AUTO_SCORE, "value": auto_score}
+        ]
 
     try:
         r = httpx.post(
@@ -612,6 +629,7 @@ def handle_agent_mention(event: dict) -> None:
     description = task_data.get("description", "")
     priority = task_data.get("priority", "normal")
     assignee_id = task_data.get("assignee_id")
+    auto_score = task_data.get("auto_score")
 
     # Ensure assignee_id is an int if present
     if assignee_id:
@@ -619,6 +637,13 @@ def handle_agent_mention(event: dict) -> None:
             assignee_id = int(assignee_id)
         except (ValueError, TypeError):
             assignee_id = None
+
+    # Ensure auto_score is an int if present
+    if auto_score is not None:
+        try:
+            auto_score = int(auto_score)
+        except (ValueError, TypeError):
+            auto_score = None
 
     # Notes have no assignee
     if is_note:
@@ -632,6 +657,7 @@ def handle_agent_mention(event: dict) -> None:
         priority=priority,
         assignee_id=assignee_id,
         is_note=is_note,
+        auto_score=auto_score,
     )
 
     if not result:

@@ -219,6 +219,17 @@ async def slack_events_webhook(request: Request):
                 "files": files,
             })
 
+        elif event.get("channel_type") == "im":
+            # DM to the bot — treat as @mention
+            handle_agent_mention({
+                "type": "app_mention",
+                "user": user,
+                "text": text,
+                "ts": event.get("ts", ""),
+                "thread_ts": thread_ts,
+                "channel": channel,
+            })
+
     return {"status": "ok"}
 
 

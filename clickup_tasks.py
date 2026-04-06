@@ -555,7 +555,7 @@ def create_clickup_task(
             "name": title,
             "description": description,
             "priority": cu_priority,
-            "status": "QUEUED",
+            "status": "queued",
             "custom_fields": custom_fields,
         }
         if assignee:
