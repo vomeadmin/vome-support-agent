@@ -1351,8 +1351,27 @@ def process_ticket(ticket_data: dict) -> str | None:
         routing = _get_routing(new_class)
         update_zoho_ticket_assignment(ticket_id, routing["assignee_id"])
 
-        # 3. Auto-ack only when routed to an engineer (not Sam/Ron tickets)
-        if routing["assignee_id"]:
+        # 3. Auto-ack: only for low/medium tier bug/investigation tickets
+        #    Skip for: high-tier clients (Sam gives personal response),
+        #    feature requests, how-to, billing
+        _skip_ack = False
+        if not routing["assignee_id"]:
+            _skip_ack = True
+            _skip_reason = "no engineer assigned, Sam will handle"
+        elif new_class["client_tier"] in ("high", "very-high"):
+            _skip_ack = True
+            _skip_reason = (
+                f"high-tier client ({new_class['client_tier']})"
+                " — Sam should respond personally"
+            )
+        elif new_class["category"] in ("feature", "how-to", "billing"):
+            _skip_ack = True
+            _skip_reason = (
+                f"category={new_class['category']}"
+                " — not a bug/investigation"
+            )
+
+        if not _skip_ack:
             send_auto_acknowledgment(
                 ticket_id=ticket_id,
                 contact_name=contact_name,
@@ -1363,7 +1382,7 @@ def process_ticket(ticket_data: dict) -> str | None:
                 has_attachments=attachment_info["has_attachments"],
             )
         else:
-            print(f"Auto-ack skipped for ticket {ticket_id} -- no engineer assigned, Sam will handle")
+            print(f"Auto-ack skipped for ticket {ticket_id} -- {_skip_reason}")
 
         # 4. Slack ping to Sam if flag:ping-sam is set
         if "ping-sam" in new_class["flags"]:

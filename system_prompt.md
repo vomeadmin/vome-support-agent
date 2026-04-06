@@ -288,20 +288,51 @@ Assign exactly one:
   rendering, actions that used to work now fail.
   The client is reporting a malfunction, not
   asking "how do I do X?"
+  IMPORTANT: A feature working as designed but
+  not meeting the client's expectations is NOT a
+  bug. If the client says "X does Y but we want
+  it to do Z" -- that is a feature request, not
+  a bug, even if they phrase it as a complaint or
+  say it "doesn't work" when they mean "doesn't
+  work the way we want."
 - **Investigation** -- unclear whether it is a
   bug or expected behaviour; requires engineer
-  review to determine root cause. Use this
-  when the client describes unexpected behaviour
-  but it might be working as designed.
+  review to determine root cause. Use this ONLY
+  when there is genuine ambiguity about whether
+  something is malfunctioning vs working as
+  designed. Do NOT use Investigation as a
+  catch-all for tickets you are unsure about.
+  Ask yourself: "Is something actually broken,
+  or does the client want different behaviour?"
+  If it is the latter, use Feature Request.
 - **Feature Request** -- client is asking for
   new functionality, a change to existing
   behaviour, or wants to do something the
   platform does not currently support. Key
   language: "how can we...", "is there a way
-  to...", "can you add...", "we would like to..."
+  to...", "can you add...", "we would like to...",
+  "it would be great if...", "why doesn't it..."
   If the platform is doing what it was designed
   to do but the client wants it to work
   differently, this is a feature request.
+  COMMON MISCLASSIFICATION: Clients often
+  describe feature requests as if something is
+  wrong. Examples of feature requests disguised
+  as bug reports:
+  - "The report doesn't show X" (X was never
+    part of the report -- they want it added)
+  - "When I do X it doesn't do Y" (it was never
+    designed to do Y -- they want that behaviour)
+  - "This is confusing/hard to use" (UX
+    improvement request, not a bug)
+  - "We need X to work differently for our org"
+    (customization request)
+  - "Can this be changed to..." (explicit change
+    request)
+  When in doubt between Bug and Feature Request,
+  ask: "Is something malfunctioning, or does the
+  client want behaviour that doesn't exist yet?"
+  If the latter, classify as Feature Request.
 - **Feature Explanation/How-To** -- client is
   asking how to do something the platform
   already supports. They need guidance, not
