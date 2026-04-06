@@ -1394,7 +1394,38 @@ def process_ticket(ticket_data: dict) -> str | None:
         else:
             slack_channel = os.environ.get("SLACK_CHANNEL_VOME_TICKETS", "")
 
-        send_ticket_brief(
+        # 5. Create ClickUp task BEFORE Slack brief so we can include the link
+        cu_result = create_clickup_task(
+            ticket_data=ticket_data,
+            agent_response=result,
+            crm=crm,
+            zoho_url=zoho_url,
+            analysis=new_class,
+        )
+        clickup_task_url = None
+        clickup_task_id = None
+        if cu_result:
+            clickup_task_url = cu_result["task_url"]
+            clickup_task_id = cu_result["task_id"]
+            print(
+                f"ClickUp task created for ticket {ticket_id}: "
+                f"{clickup_task_url}"
+            )
+            # Post ClickUp link as internal note on the Zoho ticket
+            _zoho_desk_call("ZohoDesk_createTicketComment", {
+                "body": {
+                    "content": f"ClickUp task: {clickup_task_url}",
+                    "contentType": "plainText",
+                    "isPublic": False,
+                    "attachmentIds": [],
+                },
+                "path_variables": {"ticketId": str(ticket_id)},
+                "query_params": {"orgId": str(ZOHO_ORG_ID)},
+            })
+        else:
+            print(f"No ClickUp task created for ticket {ticket_id} (category may not require one)")
+
+        thread_ts = send_ticket_brief(
             ticket_id=ticket_id,
             ticket_number=ticket_data.get(
                 "ticket_number", ticket_id
@@ -1402,8 +1433,8 @@ def process_ticket(ticket_data: dict) -> str | None:
             subject=subject,
             crm=crm,
             agent_response=result,
-            clickup_task_url=None,
-            clickup_task_id=None,
+            clickup_task_url=clickup_task_url,
+            clickup_task_id=clickup_task_id,
             zoho_ticket_url=zoho_url,
             has_attachments=attachment_info["has_attachments"],
             attachment_count=attachment_info["attachment_count"],
@@ -1418,30 +1449,13 @@ def process_ticket(ticket_data: dict) -> str | None:
             channel=slack_channel,
         )
 
-        # 5. Create ClickUp task with full classification data
-        cu_result = create_clickup_task(
-            ticket_data=ticket_data,
-            agent_response=result,
-            crm=crm,
-            zoho_url=zoho_url,
-            analysis=new_class,
-        )
-        if cu_result:
-            print(
-                f"ClickUp task created for ticket {ticket_id}: "
-                f"{cu_result['task_url']}"
-            )
-            # Save ClickUp task ID to database for sync
+        # Save ClickUp task ID to database for sync
+        if cu_result and thread_ts:
             try:
-                from database import get_thread_by_ticket_id, update_thread
-                thread_info = get_thread_by_ticket_id(ticket_id)
-                if thread_info:
-                    thread_ts, _ = thread_info
-                    update_thread(thread_ts, clickup_task_id=cu_result["task_id"])
+                from database import update_thread
+                update_thread(thread_ts, clickup_task_id=clickup_task_id)
             except Exception as e:
                 print(f"Failed to save ClickUp task ID to DB: {e}")
-        else:
-            print(f"No ClickUp task created for ticket {ticket_id} (category may not require one)")
 
         return result
     except Exception as e:
@@ -1545,14 +1559,241 @@ def _is_client_reply(conversations_result: dict | None, ticket_id: str = "unknow
     return (False, latest)
 
 
+def _classify_client_reply(reply_content: str) -> dict:
+    """Classify a client reply as acknowledgment or substantive.
+
+    Returns {"type": "ack"|"substantive", "summary": str}.
+    - ack: simple thank-you, got it, ok, thumbs-up ��� no new info
+    - substantive: answers a question, provides details, screenshots,
+      steps, emails, new context the engineer needs
+    """
+    prompt = (
+        "Classify this client reply to a support ticket.\n\n"
+        f"Reply:\n\"{reply_content}\"\n\n"
+        "Return valid JSON only:\n"
+        "{\n"
+        '  "type": "ack" or "substantive",\n'
+        '  "summary": "one-line summary of what the client said"\n'
+        "}\n\n"
+        "Rules:\n"
+        "- ack: thank you, thanks, got it, ok, sounds good,"
+        " will do, perfect, great, acknowledged, any simple"
+        " confirmation with no new information\n"
+        "- substantive: provides new details, answers a"
+        " question, shares steps to reproduce, mentions"
+        " affected users/emails, describes behavior,"
+        " provides screenshots, adds context the team needs"
+    )
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=200,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        import json as _json
+        raw = re.sub(r"^```(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        return _json.loads(raw)
+    except Exception as e:
+        print(f"Reply classification failed: {e}")
+        # Default to substantive to be safe
+        return {"type": "substantive", "summary": ""}
+
+
+def _update_clickup_task_status(task_id: str, status: str) -> bool:
+    """Update a ClickUp task's status (e.g. QUEUED, IN PROGRESS)."""
+    import httpx as _httpx
+    cu_token = os.environ.get("CLICKUP_API_TOKEN", "")
+    if not cu_token or not task_id:
+        return False
+    try:
+        r = _httpx.put(
+            f"https://api.clickup.com/api/v2/task/{task_id}",
+            json={"status": status},
+            headers={
+                "Authorization": cu_token,
+                "Content-Type": "application/json",
+            },
+            timeout=15,
+        )
+        r.raise_for_status()
+        print(f"ClickUp task {task_id} status set to {status}")
+        return True
+    except Exception as e:
+        print(f"ClickUp status update failed ({task_id}): {e}")
+        return False
+
+
+def _append_clickup_task_context(
+    task_id: str, new_context: str
+) -> bool:
+    """Append new context to a ClickUp task's description."""
+    import httpx as _httpx
+    from datetime import datetime, timezone
+    cu_token = os.environ.get("CLICKUP_API_TOKEN", "")
+    if not cu_token or not task_id:
+        return False
+    try:
+        # Fetch current description
+        r = _httpx.get(
+            f"https://api.clickup.com/api/v2/task/{task_id}",
+            headers={"Authorization": cu_token},
+            timeout=15,
+        )
+        r.raise_for_status()
+        current_desc = r.json().get("description", "")
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        updated = (
+            f"{current_desc}\n\n"
+            f"[Client reply — {date_str}]: {new_context}"
+        )
+        r2 = _httpx.put(
+            f"https://api.clickup.com/api/v2/task/{task_id}",
+            json={"description": updated},
+            headers={
+                "Authorization": cu_token,
+                "Content-Type": "application/json",
+            },
+            timeout=15,
+        )
+        r2.raise_for_status()
+        print(f"ClickUp task {task_id} description updated")
+        return True
+    except Exception as e:
+        print(f"ClickUp description update failed ({task_id}): {e}")
+        return False
+
+
+def _set_zoho_ticket_status(ticket_id: str, status: str) -> bool:
+    """Update the Zoho ticket status."""
+    result = _zoho_desk_call("ZohoDesk_updateTicket", {
+        "body": {"status": status},
+        "path_variables": {"ticketId": str(ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+    if not result:
+        print(
+            f"Failed to set Zoho ticket {ticket_id}"
+            f" to {status}"
+        )
+        return False
+    data = _unwrap_mcp_result(result)
+    if isinstance(data, dict) and data.get("errorCode"):
+        print(
+            f"Zoho status update failed for ticket"
+            f" {ticket_id}: {data}"
+        )
+        return False
+    print(f"Zoho ticket {ticket_id} status set to {status}")
+    return True
+
+
+def _get_zoho_assignee_status(ticket_id: str) -> str:
+    """Determine the correct Zoho status based on current assignee.
+
+    Engineers -> Pending Developer Fix
+    Sam/Ron/unassigned -> Processing
+    """
+    zoho_ticket = fetch_ticket_from_zoho(ticket_id)
+    if not zoho_ticket:
+        return "Processing"
+    ticket = _unwrap_mcp_result(zoho_ticket) or {}
+    assignee_id = ticket.get("assigneeId") or ""
+    engineer_ids = {ZOHO_AGENT_SANJAY, ZOHO_AGENT_ONLYG}
+    if assignee_id in engineer_ids:
+        return "Pending Developer Fix"
+    return "Processing"
+
+
+_processing_updates: dict[str, float] = {}
+
 def process_ticket_update(ticket_id: str) -> str | None:
     """Reprocess a ticket after a client reply. Returns agent output or None."""
+    # Dedup: Zoho may fire the update webhook multiple times
+    import time
+    now = time.time()
+    expired = [k for k, v in _processing_updates.items() if now - v > _DEDUP_TTL_SECONDS]
+    for k in expired:
+        del _processing_updates[k]
+    if ticket_id in _processing_updates:
+        print(f"Duplicate update webhook for ticket {ticket_id} -- skipping")
+        return None
+    _processing_updates[ticket_id] = now
+
     try:
         conversations_result = fetch_ticket_conversations(ticket_id)
 
         is_reply, latest = _is_client_reply(conversations_result, ticket_id)
         if not is_reply:
             return None
+
+        # --- Classify the reply and sync ClickUp/Zoho ---
+        from database import get_thread_by_ticket_id, update_thread
+
+        reply_content = (latest.get("content") or "").strip()
+        reply_content_clean = re.sub(
+            r"<[^>]+>", "", reply_content
+        ).strip()
+
+        classification = _classify_client_reply(
+            reply_content_clean or "(no text content)"
+        )
+        reply_type = classification.get("type", "substantive")
+        reply_summary = classification.get("summary", "")
+        print(
+            f"Client reply classified as '{reply_type}'"
+            f" on ticket {ticket_id}: {reply_summary}"
+        )
+
+        # Look up linked ClickUp task
+        thread_info = get_thread_by_ticket_id(ticket_id)
+        clickup_task_id = None
+        thread_ts = None
+        thread_data = {}
+        was_waiting = False
+        if thread_info:
+            thread_ts, thread_data = thread_info
+            clickup_task_id = thread_data.get("clickup_task_id")
+            was_waiting = (
+                thread_data.get("status") == "waiting-client"
+            )
+
+        if reply_type == "ack":
+            # Simple acknowledgment — restore status, skip reprocessing
+            correct_status = _get_zoho_assignee_status(ticket_id)
+            _set_zoho_ticket_status(ticket_id, correct_status)
+            print(
+                f"Ack reply on ticket {ticket_id}"
+                f" — Zoho status restored to {correct_status}"
+            )
+            if was_waiting and thread_ts:
+                update_thread(thread_ts, status="open")
+            return None
+
+        # Substantive reply — update ClickUp + Zoho
+        if clickup_task_id:
+            if was_waiting:
+                # Re-queue the task for the engineer
+                _update_clickup_task_status(
+                    clickup_task_id, "QUEUED"
+                )
+                print(
+                    f"ClickUp task {clickup_task_id}"
+                    " re-queued (was waiting on client)"
+                )
+            # Append the client's reply context
+            _append_clickup_task_context(
+                clickup_task_id,
+                reply_summary or reply_content_clean[:500],
+            )
+
+        # Set Zoho back to the correct status
+        correct_status = _get_zoho_assignee_status(ticket_id)
+        _set_zoho_ticket_status(ticket_id, correct_status)
+
+        if was_waiting and thread_ts:
+            update_thread(thread_ts, status="open")
 
         zoho_ticket = fetch_ticket_from_zoho(ticket_id)
         if zoho_ticket:
@@ -1647,6 +1888,53 @@ def process_ticket_update(ticket_id: str) -> str | None:
             "query_params": {"orgId": str(ZOHO_ORG_ID)},
         })
         print(f"Update note posted to Zoho ticket {ticket_id}")
+
+        # Notify in Slack if this was a waiting-client reply
+        if was_waiting and thread_ts:
+            try:
+                from slack_sdk import WebClient
+                from slack_sdk.errors import SlackApiError
+                _slack_client = WebClient(
+                    token=os.environ.get("SLACK_BOT_TOKEN", "")
+                )
+                zoho_url = (
+                    "https://desk.zoho.com/support/"
+                    "vomevolunteer/ShowHomePage.do"
+                    f"#Cases/dv/{ticket_id}"
+                )
+                cu_url = (
+                    f"https://app.clickup.com/t/"
+                    f"{clickup_task_id}"
+                ) if clickup_task_id else ""
+                link_parts = [f"<{zoho_url}|Zoho>"]
+                if cu_url:
+                    link_parts.append(f"<{cu_url}|ClickUp>")
+                links = " | ".join(link_parts)
+
+                channel = thread_data.get("channel", "")
+                if channel:
+                    _slack_client.chat_postMessage(
+                        channel=channel,
+                        thread_ts=thread_ts,
+                        text=(
+                            f":incoming_envelope: *Client replied*"
+                            f" (was waiting on client)\n"
+                            f"{reply_summary}\n\n"
+                            f"{links}\n"
+                            f"ClickUp task re-queued."
+                            " Reply in plain English"
+                            " to take action."
+                        ),
+                    )
+                    print(
+                        f"Slack notified for client reply"
+                        f" on ticket {ticket_id}"
+                    )
+            except Exception as slack_err:
+                print(
+                    f"Slack notification failed for"
+                    f" ticket {ticket_id}: {slack_err}"
+                )
 
         return result
     except Exception as e:

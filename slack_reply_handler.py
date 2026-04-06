@@ -596,15 +596,20 @@ def _create_task_from_thread(
     list_id: str,
     assignee_cu_id: str | None = None,
     priority_override: str | None = None,
+    thread_analysis: dict | None = None,
 ) -> dict | None:
-    """Create a ClickUp task using classification stored in thread_map.
+    """Create a ClickUp task using thread analysis + stored classification.
 
-    Returns {"task_id": str, "task_url": str} or None on failure.
+    When thread_analysis is provided (from _analyze_thread_for_task), its
+    richer fields override the sparse stored classification.
+
+    Returns {"task_id": str, "task_url": str, "analysis": dict} or None.
     """
     if not CLICKUP_API_TOKEN:
         print("_create_task_from_thread: CLICKUP_API_TOKEN not set")
         return None
 
+    ta = thread_analysis or {}
     classification = thread_data.get("classification", {})
     crm = thread_data.get("crm", {})
     ticket_id = thread_data.get("ticket_id", "")
@@ -616,25 +621,34 @@ def _create_task_from_thread(
         f"/ShowHomePage.do#Cases/dv/{ticket_id}"
     )
 
+    # Priority: explicit override > thread analysis > stored classification
     priority_str = (
         priority_override
+        or (ta.get("priority") or "").upper()
         or classification.get("priority", "P3")
     ).upper().strip()
     if not re.match(r"^P[123]$", priority_str):
         priority_str = "P3"
     cu_priority = PRIORITY_MAP.get(priority_str.lower(), 3)
 
-    # Title
+    # Title: use thread analysis title if available, else fallback
     account = (
         crm.get("account_name")
         or ("Volunteer" if not crm.get("found") else "Unknown")
     )
-    subj = subject.strip()
-    if len(subj) > 65:
-        subj = subj[:62] + "..."
-    title = f"{account} — {subj} — {priority_str}"
+    if ta.get("title"):
+        # Thread-derived title: prepend account, append priority
+        ta_title = ta["title"]
+        if len(ta_title) > 65:
+            ta_title = ta_title[:62] + "..."
+        title = f"{account} — {ta_title} — {priority_str}"
+    else:
+        subj = subject.strip()
+        if len(subj) > 65:
+            subj = subj[:62] + "..."
+        title = f"{account} — {subj} — {priority_str}"
 
-    # Description
+    # Description: thread analysis provides richer context
     tier = crm.get("tier") or "Unknown"
     arr_raw = crm.get("arr")
     if arr_raw:
@@ -651,26 +665,38 @@ def _create_task_from_thread(
         f"Zoho link: {zoho_url}",
         "",
     ]
-    issue_summary = classification.get("issue_summary", "")
-    if issue_summary:
-        desc_lines.append(issue_summary)
+    # Thread analysis description is the richest source
+    if ta.get("description"):
+        desc_lines.append(ta["description"])
         desc_lines.append("")
-    cl_type = classification.get("type", "")
-    cl_module = classification.get("module", "")
+    else:
+        issue_summary = classification.get("issue_summary", "")
+        if issue_summary:
+            desc_lines.append(issue_summary)
+            desc_lines.append("")
+
+    if ta.get("affected_clients"):
+        desc_lines.append(f"Affected clients: {ta['affected_clients']}")
+
+    # Use thread analysis fields, falling back to stored classification
+    cl_type = ta.get("type") or classification.get("type", "")
+    cl_module = ta.get("module") or classification.get("module", "")
+    cl_platform = ta.get("platform") or classification.get("platform", "")
     if cl_type:
         desc_lines.append(f"Classification: {cl_type}")
     if cl_module:
         desc_lines.append(f"Module: {cl_module}")
+    if cl_platform:
+        desc_lines.append(f"Platform: {cl_platform}")
     description = "\n".join(desc_lines)
 
-    # Custom fields
+    # Custom fields — use thread-derived fields with fallbacks
     custom_fields = []
     if cl_type:
         custom_fields.append(
             {"id": FIELD_TYPE, "value": _map_type_option(cl_type)}
         )
-    platform = classification.get("platform", "")
-    platform_opt = _map_platform_option(platform)
+    platform_opt = _map_platform_option(cl_platform)
     if platform_opt:
         custom_fields.append(
             {"id": FIELD_PLATFORM, "value": platform_opt}
@@ -744,10 +770,63 @@ def _create_task_from_thread(
             or f"https://app.clickup.com/t/{task_id}"
         )
         print(f"ClickUp task created: {title} (ID: {task_id})")
-        return {"task_id": task_id, "task_url": task_url}
+        return {"task_id": task_id, "task_url": task_url, "analysis": ta}
     except Exception as e:
         print(f"ClickUp task creation failed: {e}")
         return None
+
+
+def _smart_create_task(
+    thread_data: dict,
+    list_id: str,
+    channel: str,
+    thread_ts: str,
+    assignee_cu_id: str | None = None,
+    priority_override: str | None = None,
+) -> dict | None:
+    """Create a ClickUp task with full thread context analysis.
+
+    Fetches all thread messages, runs Claude analysis for smart labeling,
+    creates the task, uploads any thread attachments, and prompts for
+    missing fields.
+
+    Returns {"task_id": str, "task_url": str, "analysis": dict} or None.
+    """
+    # 1. Fetch full thread context
+    thread_context = _fetch_thread_context(channel, thread_ts)
+
+    # 2. Analyze with Claude for smart labeling
+    analysis = _analyze_thread_for_task(thread_context, thread_data)
+
+    # 3. Create the task with enriched data
+    result = _create_task_from_thread(
+        thread_data,
+        list_id,
+        assignee_cu_id=assignee_cu_id,
+        priority_override=priority_override,
+        thread_analysis=analysis,
+    )
+    if not result:
+        return None
+
+    task_id = result["task_id"]
+    task_url = result["task_url"]
+
+    # 4. Upload all thread attachments to the new task
+    all_files = thread_context.get("all_files", [])
+    uploaded = 0
+    for f in all_files:
+        content = _download_slack_file(f["url"])
+        if content and _cu_upload_attachment(task_id, f["name"], content):
+            uploaded += 1
+    if uploaded:
+        noun = "attachment" if uploaded == 1 else "attachments"
+        print(f"[TASK] {uploaded} {noun} uploaded to ClickUp task {task_id}")
+
+    # 5. Prompt for missing fields if any
+    _prompt_missing_fields(channel, thread_ts, analysis, task_url)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1051,6 +1130,323 @@ def _handle_attachments(
     if uploaded:
         noun = "screenshot" if uploaded == 1 else "screenshots"
         _reply(channel, thread_ts, f"📎 {uploaded} {noun} added to ClickUp")
+
+
+# ---------------------------------------------------------------------------
+# Thread context fetching (for smart ClickUp task creation/updates)
+# ---------------------------------------------------------------------------
+
+def _fetch_thread_context(
+    channel: str, thread_ts: str
+) -> dict:
+    """Fetch all messages and files from a Slack thread.
+
+    Returns {
+        "messages": [{"user": str, "text": str, "ts": str, "files": [...]}],
+        "all_files": [{"url": str, "name": str, "mimetype": str}],
+        "full_text": str,  # concatenated thread text for Claude
+    }
+    """
+    messages: list[dict] = []
+    all_files: list[dict] = []
+    text_parts: list[str] = []
+    try:
+        resp = _slack.conversations_replies(
+            channel=channel, ts=thread_ts, limit=50,
+        )
+        for m in resp.get("messages", []):
+            msg = {
+                "user": m.get("user", "unknown"),
+                "text": m.get("text", ""),
+                "ts": m.get("ts", ""),
+                "files": m.get("files", []),
+            }
+            messages.append(msg)
+            if msg["text"]:
+                text_parts.append(msg["text"])
+            for f in msg["files"]:
+                url = f.get("url_private_download") or f.get("url_private")
+                if url:
+                    all_files.append({
+                        "url": url,
+                        "name": f.get("name", "attachment"),
+                        "mimetype": f.get("mimetype", ""),
+                    })
+    except SlackApiError as e:
+        print(f"[THREAD] Fetch failed: {e.response['error']}")
+    return {
+        "messages": messages,
+        "all_files": all_files,
+        "full_text": "\n---\n".join(text_parts),
+    }
+
+
+def _analyze_thread_for_task(
+    thread_context: dict, thread_data: dict
+) -> dict:
+    """Use Claude to analyze full thread context and derive ClickUp task fields.
+
+    Returns a dict with: title, description, type, platform, module,
+    priority, affected_clients, missing_fields (list of questions to ask).
+    """
+    full_text = thread_context.get("full_text", "")
+    n_files = len(thread_context.get("all_files", []))
+
+    # Include any existing classification/CRM as hints
+    classification = thread_data.get("classification", {})
+    crm = thread_data.get("crm", {})
+    subject = thread_data.get("subject", "")
+
+    hint_block = ""
+    if classification or crm:
+        hint_parts = []
+        if subject:
+            hint_parts.append(f"Ticket subject: {subject}")
+        if classification.get("type"):
+            cl_type = classification["type"]
+            hint_parts.append(
+                f"Existing classification: {cl_type}"
+            )
+        if classification.get("module"):
+            hint_parts.append(
+                f"Module: {classification['module']}"
+            )
+        if classification.get("platform"):
+            hint_parts.append(
+                f"Platform: {classification['platform']}"
+            )
+        if classification.get("issue_summary"):
+            hint_parts.append(
+                f"Issue summary: "
+                f"{classification['issue_summary']}"
+            )
+        if crm.get("account_name"):
+            hint_parts.append(f"Account: {crm['account_name']}")
+        if crm.get("tier"):
+            hint_parts.append(f"Tier: {crm['tier']}")
+        if hint_parts:
+            hint_block = (
+                "\nExisting ticket data (use as context, but the thread "
+                "may have evolved):\n" + "\n".join(hint_parts) + "\n"
+            )
+
+    file_note = ""
+    if n_files:
+        file_note = (
+            f"\n{n_files} screenshot(s)/attachment(s)"
+            " were shared in the thread."
+        )
+
+    prompt = (
+        "Analyze this Slack thread and extract structured"
+        " data for a ClickUp task.\n\n"
+        f"Thread messages:\n{full_text}\n"
+        f"{file_note}"
+        f"{hint_block}\n"
+        "Return valid JSON only — no prose, no code block"
+        " markers.\n"
+        "{\n"
+        '  "title": "concise task title (under 80 chars,'
+        ' describe the issue/request)",\n'
+        '  "description": "detailed description including'
+        ' steps, context, affected areas",\n'
+        '  "type": "bug" or "feature" or "improvement"'
+        ' or "ux" or "investigation" or null,\n'
+        '  "platform": "web" or "mobile" or "both"'
+        ' or null,\n'
+        '  "module": one of ["volunteer homepage",'
+        ' "reserve schedule", "opportunities",'
+        ' "sequences", "forms", "admin dashboard",'
+        ' "admin scheduling", "admin settings",'
+        ' "admin permissions", "sites", "groups",'
+        ' "categories", "hour tracking", "kiosk",'
+        ' "email communications", "chat", "reports",'
+        ' "kpi dashboards", "integrations",'
+        ' "access / authentication", "other"]'
+        ' or null,\n'
+        '  "priority": "p1" or "p2" or "p3" or null,\n'
+        '  "affected_clients": "specific client names'
+        ' mentioned" or null,\n'
+        '  "missing_fields": ["list of questions to ask'
+        " for fields that could not be determined from"
+        " context. Only genuinely unknown fields that"
+        ' would help document the task."]\n'
+        "}\n\n"
+        "Rules:\n"
+        "- Infer type from context: crashes/errors = bug,"
+        " new capability = feature, existing flow"
+        " improvement = improvement, confusing UX = ux,"
+        " unclear root cause = investigation\n"
+        "- Infer platform from screenshots or keywords"
+        " (app/mobile/iOS/Android = mobile,"
+        " browser/dashboard/admin = web)\n"
+        "- Infer module from the feature area discussed\n"
+        "- title: action-oriented, e.g."
+        " 'Fix X when Y', 'Add X to Y'\n"
+        "- description: thorough, all relevant details\n"
+        "- missing_fields: only genuinely missing info."
+        " If screenshots shared, don't ask for them."
+        " If client named, don't ask which client."
+        " Max 2-3 questions for truly unknown info."
+    )
+    try:
+        response = _anthropic.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        parsed = json.loads(raw)
+        print(f"[THREAD] Task analysis: {parsed}")
+        return parsed
+    except Exception as e:
+        print(f"[THREAD] Task analysis failed: {e}")
+        return {}
+
+
+def _prompt_missing_fields(
+    channel: str, thread_ts: str, analysis: dict, task_url: str
+) -> None:
+    """Post follow-up questions for fields that couldn't be inferred."""
+    missing = analysis.get("missing_fields", [])
+    if not missing:
+        return
+    # Limit to top 3 most useful questions
+    questions = missing[:3]
+    lines = [f"Task created: {task_url}", ""]
+    lines.append("A few details that would help document this properly:")
+    for i, q in enumerate(questions, 1):
+        lines.append(f"{i}. {q}")
+    lines.append("")
+    lines.append("Reply here and I'll update the ClickUp task.")
+    _reply(channel, thread_ts, "\n".join(lines))
+
+
+def _auto_update_clickup_from_thread(
+    clickup_task_id: str,
+    text: str,
+    files: list,
+    channel: str,
+    thread_ts: str,
+    thread_data: dict,
+) -> bool:
+    """Append new thread context to an existing ClickUp task.
+
+    Called when a non-command message arrives in a thread that already
+    has a linked ClickUp task. Uses Claude to determine if the message
+    contains substantive new context worth appending.
+
+    Returns True if the task was updated.
+    """
+    if not clickup_task_id or (not text and not files):
+        return False
+
+    # Use Claude to decide if this message has substantive context
+    prompt = (
+        "A user sent a new message in a support thread that has a linked "
+        "ClickUp task. Decide if this message contains new information "
+        "that should be appended to the task.\n\n"
+        f"Message: \"{text}\"\n"
+        f"Attachments: {len(files)} file(s)\n\n"
+        "Return valid JSON only:\n"
+        "{\n"
+        '  "has_context": true/false,\n'
+        '  "summary": "one-line summary of the new info to append" or null,\n'
+        '  "update_fields": {\n'
+        '    "type": "bug/feature/improvement/ux/investigation" or null,\n'
+        '    "platform": "web/mobile/both" or null,\n'
+        '    "module": "module name" or null\n'
+        '  }\n'
+        "}\n\n"
+        "Rules:\n"
+        "- has_context=true if the message provides: steps to reproduce, "
+        "affected clients, screenshots context, platform info, clarification, "
+        "error details, or answers to earlier questions\n"
+        "- has_context=false if: it's just a command (assign, move, draft, "
+        "confirm, etc.), a thank you, or a short acknowledgment\n"
+        "- summary: brief but specific, e.g. 'Confirmed this affects "
+        "iOS and Android, client Habitat for Humanity'\n"
+        "- update_fields: only fill in fields the message clarifies"
+    )
+    try:
+        response = _anthropic.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        parsed = json.loads(raw)
+    except Exception as e:
+        print(f"[UPDATE] Context check failed: {e}")
+        return False
+
+    if not parsed.get("has_context"):
+        return False
+
+    updated = False
+    summary = parsed.get("summary", "")
+
+    # Append new context to task description
+    if summary:
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        note = f"\n\n[Update — {date_str}]: {summary}"
+        # Fetch current description and append
+        try:
+            r = httpx.get(
+                f"{CLICKUP_BASE}/task/{clickup_task_id}",
+                headers=_cu_headers(),
+                timeout=15,
+            )
+            r.raise_for_status()
+            current_desc = r.json().get("description", "")
+            _cu_update_task(
+                clickup_task_id,
+                {"description": current_desc + note},
+            )
+            updated = True
+            print(
+                "[UPDATE] Appended context to"
+                f" ClickUp task {clickup_task_id}"
+            )
+        except Exception as e:
+            print(f"[UPDATE] Failed to append context: {e}")
+
+    # Update custom fields if the message clarified them
+    update_fields = parsed.get("update_fields", {})
+    if update_fields.get("type"):
+        opt = _map_type_option(update_fields["type"])
+        if opt:
+            _cu_set_field(clickup_task_id, FIELD_TYPE, opt)
+            updated = True
+    if update_fields.get("platform"):
+        opt = _map_platform_option(update_fields["platform"])
+        if opt:
+            _cu_set_field(clickup_task_id, FIELD_PLATFORM, opt)
+            updated = True
+    if update_fields.get("module"):
+        opt = _map_module_option(update_fields["module"])
+        if opt:
+            _cu_set_field(clickup_task_id, FIELD_MODULE, opt)
+            updated = True
+
+    # Upload any new attachments
+    for f in files:
+        url = f.get("url_private_download") or f.get("url_private")
+        if not url:
+            continue
+        filename = f.get("name") or "attachment"
+        content = _download_slack_file(url)
+        if content and _cu_upload_attachment(clickup_task_id, filename, content):
+            updated = True
+
+    if updated:
+        _add_reaction(channel, thread_ts, "memo")
+
+    return updated
 
 
 # ---------------------------------------------------------------------------
@@ -1425,8 +1821,9 @@ def handle_reply(event: dict):
                     "Could not move task — check ClickUp manually",
                 )
         else:
-            result = _create_task_from_thread(
-                thread_data, CLICKUP_ACCEPTED_BACKLOG_LIST
+            result = _smart_create_task(
+                thread_data, CLICKUP_ACCEPTED_BACKLOG_LIST,
+                channel, thread_ts,
             )
             if result:
                 _update_thread_clickup_id(thread_ts, result["task_id"])
@@ -1454,8 +1851,9 @@ def handle_reply(event: dict):
                     "Could not move task — check ClickUp manually",
                 )
         else:
-            result = _create_task_from_thread(
-                thread_data, CLICKUP_LIST_RAW_INTAKE
+            result = _smart_create_task(
+                thread_data, CLICKUP_LIST_RAW_INTAKE,
+                channel, thread_ts,
             )
             if result:
                 _update_thread_clickup_id(thread_ts, result["task_id"])
@@ -1483,8 +1881,9 @@ def handle_reply(event: dict):
                     "Could not move task — check ClickUp manually",
                 )
         else:
-            result = _create_task_from_thread(
-                thread_data, CLICKUP_LIST_SLEEPING
+            result = _smart_create_task(
+                thread_data, CLICKUP_LIST_SLEEPING,
+                channel, thread_ts,
             )
             if result:
                 _update_thread_clickup_id(thread_ts, result["task_id"])
@@ -1518,8 +1917,9 @@ def handle_reply(event: dict):
                     "Could not move task — check ClickUp manually",
                 )
         else:
-            result = _create_task_from_thread(
-                thread_data, CLICKUP_LIST_SLEEPING
+            result = _smart_create_task(
+                thread_data, CLICKUP_LIST_SLEEPING,
+                channel, thread_ts,
             )
             if result:
                 _update_thread_clickup_id(thread_ts, result["task_id"])
@@ -1624,20 +2024,29 @@ def handle_reply(event: dict):
                     update_clickup_status_finished,
                 )
                 update_clickup_status_finished(clickup_task_id)
+                _zoho_set_status(ticket_id, "Closed")
             else:
                 _cu_update_task(
-                    clickup_task_id, {"status": "acknowledged"}
+                    clickup_task_id,
+                    {"status": "WAITING ON CLIENT"},
+                )
+                _zoho_set_status(
+                    ticket_id, "Awaiting Client Response"
                 )
             if is_on_prod:
                 _reply(
                     channel, thread_ts,
                     "✓ Sent to client\n"
+                    "✓ Zoho ticket closed\n"
                     "✓ ClickUp marked FINISHED",
                 )
             else:
                 _reply(
                     channel, thread_ts,
-                    f"✓ Sent to client\nView in Zoho: {zoho_url}",
+                    "✓ Sent to client\n"
+                    "✓ Zoho → Awaiting Client Response\n"
+                    "✓ ClickUp → Waiting on Client\n"
+                    f"View in Zoho: {zoho_url}",
                 )
         else:
             # No ClickUp task — just send and update Zoho status
@@ -1991,7 +2400,8 @@ def handle_reply(event: dict):
     ):
         wants_task = False
 
-    # Nothing actionable at all
+    # Nothing actionable at all — but if a ClickUp task exists,
+    # try auto-updating it with any new context from this message
     if (
         not commands
         and not wants_draft
@@ -1999,7 +2409,13 @@ def handle_reply(event: dict):
         and not close_after
         and not nl.get("client_response")
     ):
-        _reply(channel, thread_ts, _NL_HELP)
+        if clickup_task_id:
+            _auto_update_clickup_from_thread(
+                clickup_task_id, text, files,
+                channel, thread_ts, thread_data,
+            )
+        else:
+            _reply(channel, thread_ts, _NL_HELP)
         return
 
     # -----------------------------------------------------------------------
@@ -2024,9 +2440,11 @@ def handle_reply(event: dict):
             if canonical:
                 assignee_cu_id = _ASSIGNEE_IDS.get(canonical) or None
 
-        result = _create_task_from_thread(
+        result = _smart_create_task(
             thread_data,
             target_list,
+            channel,
+            thread_ts,
             assignee_cu_id=assignee_cu_id,
             priority_override=(
                 commands.get("priority", "").upper() or None
@@ -2239,4 +2657,11 @@ def handle_reply(event: dict):
                 f"Draft generation failed: {e}",
             )
     else:
-        _reply(channel, thread_ts, _NL_HELP)
+        # No actions taken — try auto-updating ClickUp if task exists
+        if clickup_task_id:
+            _auto_update_clickup_from_thread(
+                clickup_task_id, text, files,
+                channel, thread_ts, thread_data,
+            )
+        else:
+            _reply(channel, thread_ts, _NL_HELP)

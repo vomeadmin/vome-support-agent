@@ -27,5 +27,9 @@
       "Bash(/c/Users/sfage/AppData/Local/Programs/Python/Python313/python.exe -c ':*)",
       "mcp__claude_ai_ZohoDesk__ZohoDesk_createTicketComment"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "zoho",
+    "clickup"
+  ]
 }
