@@ -278,6 +278,26 @@ async def zoho_update_webhook(request: Request):
 #   - taskStatusUpdated  (ON PROD, Waiting on Client, Needs Review)
 #   - taskAssigneeUpdated (assignee sync to Zoho)
 # Configure at: https://app.clickup.com > Space settings > Integrations > Webhooks
+
+import time as _time
+
+_clickup_status_dedup: dict[str, float] = {}
+_CLICKUP_DEDUP_TTL = 300  # 5 minutes
+
+def _clickup_dedup_check(key: str) -> bool:
+    """Return True if this key was already processed recently."""
+    now = _time.time()
+    expired = [
+        k for k, v in _clickup_status_dedup.items()
+        if now - v > _CLICKUP_DEDUP_TTL
+    ]
+    for k in expired:
+        del _clickup_status_dedup[k]
+    if key in _clickup_status_dedup:
+        return True
+    _clickup_status_dedup[key] = now
+    return False
+
 @app.post("/webhook/clickup-status")
 async def clickup_status_webhook(request: Request):
     raw_body = await request.body()
@@ -309,6 +329,16 @@ async def clickup_status_webhook(request: Request):
         timestamp = datetime.now(timezone.utc).strftime(
             "%Y-%m-%d %H:%M:%S UTC"
         )
+
+        # Dedup: ClickUp can fire the same status webhook
+        # multiple times (retries, network issues).
+        dedup_key = f"{task_id}:{new_status}"
+        if _clickup_dedup_check(dedup_key):
+            print(
+                f"[{timestamp}] Duplicate ClickUp status"
+                f" webhook — {dedup_key} — skipping"
+            )
+            break
 
         if new_status in ("on prod", "on_prod", "on prod ✅"):
             print(
