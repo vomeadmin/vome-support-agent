@@ -126,6 +126,8 @@ def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool
 SLACK_TICKETS_CHANNEL = os.environ.get("SLACK_CHANNEL_VOME_TICKETS", "")
 SLACK_FIELD_FEEDBACK_CHANNEL = os.environ.get("SLACK_CHANNEL_VOME_FIELD_FEEDBACK", "")
 SLACK_FINAL_REVIEW_CHANNEL = os.environ.get("SLACK_CHANNEL_SUPPORT_FINAL_REVIEW", "")
+SLACK_QUEUE_SANJAY_CHANNEL = os.environ.get("SLACK_CHANNEL_SUPPORT_QUEUE_SANJAY", "")
+SLACK_QUEUE_ONLYG_CHANNEL = os.environ.get("SLACK_CHANNEL_SUPPORT_QUEUE_ONLYG", "")
 
 _slack_processed_events: dict[str, float] = {}
 
@@ -201,7 +203,13 @@ async def slack_events_webhook(request: Request):
         text = event.get("text", "")
         files = event.get("files", [])
 
-        if channel in (SLACK_TICKETS_CHANNEL, SLACK_FINAL_REVIEW_CHANNEL) and thread_ts:
+        _reply_channels = (
+            SLACK_TICKETS_CHANNEL,
+            SLACK_FINAL_REVIEW_CHANNEL,
+            SLACK_QUEUE_SANJAY_CHANNEL,
+            SLACK_QUEUE_ONLYG_CHANNEL,
+        )
+        if channel in _reply_channels and thread_ts:
             # Only process replies in threads (not new top-level messages)
             if thread_ts != event.get("ts"):
                 handle_reply({

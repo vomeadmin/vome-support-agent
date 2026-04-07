@@ -329,14 +329,21 @@ def _waiting_client_message(
 
 def _post_to_existing_thread(
     thread_ts: str,
+    original_channel: str,
     ticket_number: str,
     engineer_name: str,
     draft: str,
     zoho_ticket_id: str = "",
     clickup_task_id: str = "",
     ticket_fields: dict | None = None,
-) -> bool:
-    """Post notification as a reply in an existing thread."""
+) -> str | None:
+    """Post notification as a reply in the original thread's channel.
+
+    Returns the message ts on success, None on failure.
+    Posts to the original thread's channel (not CHANNEL_FINAL_REVIEW)
+    so the thread_ts remains valid.
+    """
+    target_channel = original_channel or CHANNEL_FINAL_REVIEW
     text = _waiting_client_message(
         ticket_number, engineer_name, draft,
         ticket_fields=ticket_fields,
@@ -344,18 +351,18 @@ def _post_to_existing_thread(
         clickup_task_id=clickup_task_id,
     )
     try:
-        _slack.chat_postMessage(
-            channel=CHANNEL_FINAL_REVIEW,
+        resp = _slack.chat_postMessage(
+            channel=target_channel,
             thread_ts=thread_ts,
             text=text,
         )
-        return True
+        return resp.get("ts")
     except SlackApiError as e:
         print(
             "[WAITING] Slack post failed:"
             f" {e.response['error']}"
         )
-        return False
+        return None
 
 
 def _create_new_thread(
@@ -517,8 +524,12 @@ def handle_waiting_on_client(
             thread_data.get("ticket_number")
             or zoho_ticket_id
         )
-        posted = _post_to_existing_thread(
+        original_channel = (
+            thread_data.get("channel") or CHANNEL_FINAL_REVIEW
+        )
+        msg_ts = _post_to_existing_thread(
             thread_ts=thread_ts,
+            original_channel=original_channel,
             ticket_number=ticket_number,
             engineer_name=engineer_name,
             draft=draft,
@@ -526,7 +537,7 @@ def handle_waiting_on_client(
             clickup_task_id=task_id,
             ticket_fields=fields,
         )
-        if not posted:
+        if not msg_ts:
             return False
     else:
         print(

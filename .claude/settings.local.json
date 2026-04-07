@@ -25,7 +25,8 @@
       "Bash(python -c \"import py_compile; py_compile.compile\\(''field_feedback.py'', doraise=True\\)\")",
       "Bash(curl -s -X POST https://crm-917448927.zohomcp.com/mcp/5535a2c060ffbcb3c17778329389f5b5/message -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}')",
       "Bash(/c/Users/sfage/AppData/Local/Programs/Python/Python313/python.exe -c ':*)",
-      "mcp__claude_ai_ZohoDesk__ZohoDesk_createTicketComment"
+      "mcp__claude_ai_ZohoDesk__ZohoDesk_createTicketComment",
+      "Bash(\"C:\\\\Users\\\\sfage\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Launcher\\\\py.exe\" -c \"import py_compile; py_compile.compile\\('slack_agent_mention_handler.py', doraise=True\\); print\\('OK'\\)\")"
     ]
   },
   "enabledMcpjsonServers": [

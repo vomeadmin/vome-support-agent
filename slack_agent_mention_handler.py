@@ -190,6 +190,10 @@ DEFAULT_LIST_ID = "901113386257"  # Vome Product / Priority Queue
 
 PRIORITY_MAP = {"urgent": 1, "high": 2, "normal": 3, "low": 4}
 
+# Track which threads already have ClickUp tasks:
+# {thread_ts: {"task_id": str, "task_url": str}}
+_thread_tasks: dict[str, dict] = {}
+
 # ---------------------------------------------------------------------------
 # Help text
 # ---------------------------------------------------------------------------
@@ -216,27 +220,48 @@ def _strip_mention(text: str) -> str:
     return re.sub(r"<@[A-Z0-9]+>\s*", "", text).strip()
 
 
-def _fetch_thread_messages(channel: str, thread_ts: str) -> list[dict]:
-    """Fetch all messages in a Slack thread."""
+def _fetch_thread_messages(
+    channel: str, thread_ts: str
+) -> tuple[list[dict], list[dict]]:
+    """Fetch all messages and files in a Slack thread.
+
+    Returns (messages, all_files) where:
+      messages: [{"user", "text", "ts", "files"}]
+      all_files: [{"url", "name", "mimetype"}]
+    """
+    messages: list[dict] = []
+    all_files: list[dict] = []
     try:
         resp = _slack.conversations_replies(
             channel=channel,
             ts=thread_ts,
             limit=50,
         )
-        messages = resp.get("messages", [])
-        # Format for Claude
-        return [
-            {
+        for m in resp.get("messages", []):
+            msg = {
                 "user": m.get("user", "unknown"),
                 "text": m.get("text", ""),
                 "ts": m.get("ts", ""),
+                "files": m.get("files", []),
             }
-            for m in messages
-        ]
+            messages.append(msg)
+            for f in m.get("files", []):
+                url = (
+                    f.get("url_private_download")
+                    or f.get("url_private")
+                )
+                if url:
+                    all_files.append({
+                        "url": url,
+                        "name": f.get("name", "attachment"),
+                        "mimetype": f.get("mimetype", ""),
+                    })
     except SlackApiError as e:
-        print(f"[MENTION] Thread fetch failed: {e.response['error']}")
-        return []
+        print(
+            "[MENTION] Thread fetch failed:"
+            f" {e.response['error']}"
+        )
+    return (messages, all_files)
 
 
 def _fetch_recent_channel_messages(channel: str) -> list[dict]:
@@ -446,8 +471,13 @@ def _extract_task_with_claude(
     title_instruction = ""
     if explicit_title:
         title_instruction = (
-            f'\nThe user explicitly requested this title: "{explicit_title}". '
-            "Use it as the title verbatim. Use the conversation only for the description."
+            f'\nThe user said: "{explicit_title}". '
+            "This is additional context/instruction, NOT the "
+            "title. Derive the title from the full thread "
+            "conversation. The user's message tells you what "
+            "they want done, but the title should be a clean, "
+            "descriptive task name based on the actual issue "
+            "or request discussed in the thread."
         )
 
     type_label = "note" if is_note else "task"
@@ -567,6 +597,143 @@ def _create_clickup_task(
 
 
 # ---------------------------------------------------------------------------
+# File attachment helpers
+# ---------------------------------------------------------------------------
+
+def _download_slack_file(url: str) -> bytes | None:
+    """Download a file from Slack."""
+    try:
+        token = os.environ.get("SLACK_BOT_TOKEN", "")
+        r = httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+            follow_redirects=True,
+        )
+        r.raise_for_status()
+        return r.content
+    except Exception as e:
+        print(f"[MENTION] Slack file download failed: {e}")
+        return None
+
+
+def _upload_attachments_to_task(
+    task_id: str, files: list[dict]
+) -> int:
+    """Upload files to a ClickUp task. Returns count uploaded."""
+    uploaded = 0
+    for f in files:
+        content = _download_slack_file(f["url"])
+        if not content:
+            continue
+        try:
+            r = httpx.post(
+                f"{CLICKUP_BASE}/task/{task_id}/attachment",
+                headers={"Authorization": CLICKUP_API_TOKEN},
+                files={
+                    "attachment": (f["name"], content),
+                },
+                timeout=30,
+            )
+            r.raise_for_status()
+            uploaded += 1
+        except Exception as e:
+            print(
+                f"[MENTION] Attachment upload failed"
+                f" ({task_id}): {e}"
+            )
+    return uploaded
+
+
+# ---------------------------------------------------------------------------
+# ClickUp task update
+# ---------------------------------------------------------------------------
+
+def _update_clickup_task(
+    task_id: str,
+    messages: list[dict],
+    all_files: list[dict],
+    explicit_instruction: str | None,
+) -> dict | None:
+    """Update an existing ClickUp task with new thread context.
+
+    Appends new context to description and uploads new files.
+    Returns {"updated": True, "attachments": int} or None.
+    """
+    # Build the new context from messages
+    msg_lines = []
+    for m in messages:
+        text = re.sub(r"<@[A-Z0-9]+>", "", m.get("text", "")).strip()
+        if text:
+            msg_lines.append(text)
+    new_context = "\n".join(msg_lines)
+
+    # Use Claude to summarize what changed
+    prompt = (
+        "A ClickUp task already exists for this thread."
+        " New messages have been added. Summarize what"
+        " new information or instructions were provided"
+        " in 2-3 sentences. Focus on actionable updates.\n\n"
+        f"New messages:\n{new_context}\n"
+    )
+    if explicit_instruction:
+        prompt += (
+            f"\nUser's instruction: {explicit_instruction}"
+        )
+    prompt += "\nReturn only the summary text, no labels."
+
+    try:
+        resp = _anthropic.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        summary = resp.content[0].text.strip()
+    except Exception as e:
+        print(f"[MENTION] Update summary failed: {e}")
+        summary = new_context[:500]
+
+    # Fetch current description and append
+    try:
+        r = httpx.get(
+            f"{CLICKUP_BASE}/task/{task_id}",
+            headers={"Authorization": CLICKUP_API_TOKEN},
+            timeout=15,
+        )
+        r.raise_for_status()
+        current_desc = r.json().get("description", "")
+
+        date_str = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%d"
+        )
+        updated_desc = (
+            f"{current_desc}\n\n"
+            f"[Update — {date_str}]: {summary}"
+        )
+
+        r2 = httpx.put(
+            f"{CLICKUP_BASE}/task/{task_id}",
+            json={"description": updated_desc},
+            headers={
+                "Authorization": CLICKUP_API_TOKEN,
+                "Content-Type": "application/json",
+            },
+            timeout=15,
+        )
+        r2.raise_for_status()
+    except Exception as e:
+        print(f"[MENTION] Task description update failed: {e}")
+        return None
+
+    # Upload new attachments
+    n_uploaded = _upload_attachments_to_task(
+        task_id, all_files
+    )
+
+    return {"updated": True, "attachments": n_uploaded}
+
+
+# ---------------------------------------------------------------------------
 # Main handler
 # ---------------------------------------------------------------------------
 
@@ -598,15 +765,48 @@ def handle_agent_mention(event: dict) -> None:
     # --- TASK or NOTE ---
     is_note = cmd["command"] == "note"
 
-    # Gather context
+    # Gather context (messages + all files in thread)
+    all_files: list[dict] = []
     if thread_ts != ts:
         # We're inside a thread -- fetch full thread
-        messages = _fetch_thread_messages(channel, thread_ts)
+        messages, all_files = _fetch_thread_messages(
+            channel, thread_ts
+        )
     else:
         # Top-level message -- fetch recent channel messages
         messages = _fetch_recent_channel_messages(channel)
         if not messages:
-            messages = [{"user": user, "text": stripped, "ts": ts}]
+            messages = [
+                {"user": user, "text": stripped, "ts": ts}
+            ]
+
+    # --- Check if this thread already has a ClickUp task ---
+    existing = _thread_tasks.get(thread_ts)
+    if existing and not is_note:
+        # Update the existing task instead of creating new
+        result = _update_clickup_task(
+            task_id=existing["task_id"],
+            messages=messages,
+            all_files=all_files,
+            explicit_instruction=cmd["explicit_title"],
+        )
+        if result:
+            parts = ["Task updated"]
+            if result.get("attachments"):
+                n = result["attachments"]
+                noun = "file" if n == 1 else "files"
+                parts.append(f"{n} {noun} uploaded")
+            _reply_in_thread(
+                channel, thread_ts,
+                f"{' | '.join(parts)}:\n"
+                f"{existing['task_url']}",
+            )
+        else:
+            _reply_in_thread(
+                channel, thread_ts,
+                "Couldn't update the task — try again.",
+            )
+        return
 
     # Resolve destination
     explicit_dest = _extract_explicit_destination(stripped)
@@ -627,8 +827,9 @@ def handle_agent_mention(event: dict) -> None:
     if not task_data:
         _reply_in_thread(
             channel, thread_ts,
-            "Couldn't create the task -- I wasn't able to extract task details "
-            "from the conversation. Try again with more detail.",
+            "Couldn't create the task — I wasn't able to"
+            " extract task details from the conversation."
+            " Try again with more detail.",
         )
         return
 
@@ -670,26 +871,53 @@ def handle_agent_mention(event: dict) -> None:
     if not result:
         _reply_in_thread(
             channel, thread_ts,
-            "Couldn't create the task -- ClickUp API returned an error. "
-            "Try again or create it manually.",
+            "Couldn't create the task — ClickUp API error."
+            " Try again or create it manually.",
         )
         return
 
+    task_id = result["task_id"]
+    task_url = result["task_url"]
+
+    # Track this thread -> task mapping
+    _thread_tasks[thread_ts] = {
+        "task_id": task_id,
+        "task_url": task_url,
+    }
+
+    # Upload all thread attachments to the new task
+    n_uploaded = _upload_attachments_to_task(
+        task_id, all_files
+    )
+
     # Build reply
-    space_name, list_name = LIST_NAMES.get(list_id, ("Unknown", "Unknown"))
+    space_name, list_name = LIST_NAMES.get(
+        list_id, ("Unknown", "Unknown")
+    )
     label = "Note" if is_note else "Task"
 
-    reply = (
-        f"{label} created in {space_name} / {list_name}:\n"
-        f"*{title}*\n"
-        f"{result['task_url']}"
-    )
+    reply_parts = [
+        f"{label} created in {space_name} / {list_name}:",
+        f"*{title}*",
+        task_url,
+    ]
+    if n_uploaded:
+        noun = "file" if n_uploaded == 1 else "files"
+        reply_parts.append(
+            f"📎 {n_uploaded} {noun} attached"
+        )
+
+    reply = "\n".join(reply_parts)
 
     if was_defaulted:
         reply += (
-            "\n\n_(defaulted to Operations / Admin Stuff -- "
+            "\n\n_(defaulted to Priority Queue — "
             "reply with a different destination to move it)_"
         )
 
     _reply_in_thread(channel, thread_ts, reply)
-    print(f"[MENTION] Done -- task {result['task_id']} in {space_name} / {list_name}")
+    print(
+        f"[MENTION] Done — task {task_id}"
+        f" in {space_name} / {list_name}"
+        f" ({n_uploaded} attachments)"
+    )
