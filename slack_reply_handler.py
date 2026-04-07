@@ -396,6 +396,77 @@ def _reply(channel: str, thread_ts: str, text: str):
 
 
 # ---------------------------------------------------------------------------
+# Orphaned thread recovery
+# ---------------------------------------------------------------------------
+
+def _recover_orphaned_thread(
+    channel: str, thread_ts: str
+) -> dict | None:
+    """Try to recover a thread that isn't in the DB.
+
+    Reads the parent message, extracts a Zoho ticket ID from
+    the text, finds the original thread data by ticket ID, and
+    re-saves the thread mapping with the new thread_ts so future
+    commands work.
+    """
+    try:
+        resp = _slack.conversations_replies(
+            channel=channel, ts=thread_ts, limit=1,
+        )
+        parent_msgs = resp.get("messages", [])
+        if not parent_msgs:
+            return None
+        parent_text = parent_msgs[0].get("text", "")
+
+        # Extract ticket ID from Zoho URL in parent message
+        m = re.search(r"/dv/(\d+)", parent_text)
+        if not m:
+            return None
+        ticket_id = m.group(1)
+
+        # Find the original thread data by ticket ID
+        from database import (
+            get_thread_by_ticket_id, save_thread,
+        )
+        info = get_thread_by_ticket_id(ticket_id)
+        if not info:
+            return None
+        _, original_data = info
+
+        # Re-save under the new thread_ts so it works going
+        # forward (preserves pending_send, classification, etc.)
+        save_thread(
+            thread_ts=thread_ts,
+            ticket_id=ticket_id,
+            ticket_number=original_data.get(
+                "ticket_number", ""
+            ),
+            subject=original_data.get("subject", ""),
+            channel=channel,
+            clickup_task_id=original_data.get(
+                "clickup_task_id"
+            ),
+            classification=original_data.get(
+                "classification"
+            ),
+            crm=original_data.get("crm"),
+        )
+        # Copy over pending_send if it exists on original
+        pending = original_data.get("pending_send")
+        if pending:
+            update_thread(thread_ts, pending_send=pending)
+
+        print(
+            f"[RECOVER] Orphaned thread {thread_ts}"
+            f" linked to ticket {ticket_id}"
+        )
+        return get_thread(thread_ts)
+    except Exception as e:
+        print(f"[RECOVER] Failed: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Thread map status
 # ---------------------------------------------------------------------------
 
@@ -1670,6 +1741,12 @@ def handle_reply(event: dict):
         return
 
     thread_data = get_thread(thread_ts)
+    if not thread_data:
+        # Fallback: try to recover by reading the parent message
+        # and extracting a ticket ID (handles pre-fix orphaned threads)
+        thread_data = _recover_orphaned_thread(
+            channel, thread_ts
+        )
     if not thread_data:
         return  # Not a known ticket brief thread — ignore
 
