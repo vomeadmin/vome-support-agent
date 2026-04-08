@@ -28,6 +28,7 @@ from agent import (
     fetch_crm_account,
     fetch_ticket_conversations,
     fetch_ticket_from_zoho,
+    get_last_mcp_error,
 )
 from clickup_tasks import (
     _map_type_option,
@@ -579,18 +580,28 @@ def _send_client_reply(
     })
 
     if not result:
-        print(f"[SEND] FAILED — Zoho ticket {ticket_id}, no result")
+        err = get_last_mcp_error()
+        print(
+            f"[SEND] FAILED — ticket {ticket_id},"
+            f" no result. MCP error: {err}"
+        )
         return False
 
-    # Check for MCP-level isError flag (Zoho returns errors as content)
+    # Check for MCP-level isError flag
     if isinstance(result, dict) and result.get("isError"):
-        print(f"[SEND] FAILED — Zoho ticket {ticket_id}: {result}")
+        print(
+            f"[SEND] FAILED — ticket {ticket_id}:"
+            f" {result}"
+        )
         return False
 
     # Also check unwrapped content for Zoho error codes
     data = _unwrap_mcp_result(result)
     if isinstance(data, dict) and data.get("errorCode"):
-        print(f"[SEND] FAILED — Zoho ticket {ticket_id}: {data}")
+        print(
+            f"[SEND] FAILED — ticket {ticket_id}:"
+            f" {data}"
+        )
         return False
 
     print(f"[SEND] Success — Zoho ticket {ticket_id}")
@@ -2065,9 +2076,14 @@ def handle_reply(event: dict):
         if not sent_ok:
             # Re-store the pending message so Sam can retry
             _store_pending_send(thread_ts, pending, close_after=close_after)
+            mcp_err = get_last_mcp_error()
+            err_detail = (
+                f"\n```{mcp_err[:300]}```"
+                if mcp_err else ""
+            )
             _reply(
                 channel, thread_ts,
-                "Failed to send — Zoho API error.\n"
+                f"Failed to send — Zoho API error.{err_detail}\n"
                 f"Please send manually in Zoho: {zoho_url}\n\n"
                 "The draft is still pending. "
                 "Reply `confirm` to retry.",

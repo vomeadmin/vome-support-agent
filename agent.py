@@ -68,15 +68,52 @@ def _mcp_post(url: str, tool_name: str, arguments: dict) -> dict | None:
     }
     try:
         resp = httpx.post(url, json=payload, timeout=30)
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            body_preview = resp.text[:500]
+            print(
+                f"MCP HTTP {resp.status_code}"
+                f" ({tool_name}): {body_preview}"
+            )
+            _last_mcp_error[0] = (
+                f"HTTP {resp.status_code}: {body_preview}"
+            )
+            return None
         result = resp.json()
         if "error" in result:
-            print(f"MCP error ({tool_name}): {result['error']}")
+            print(
+                f"MCP error ({tool_name}): {result['error']}"
+            )
+            _last_mcp_error[0] = str(result["error"])
             return None
-        return result.get("result", result)
+        # Check for isError in the result content
+        res = result.get("result", result)
+        if isinstance(res, dict) and res.get("isError"):
+            content = res.get("content", [])
+            err_text = ""
+            for block in content:
+                if block.get("type") == "text":
+                    err_text = block.get("text", "")
+                    break
+            print(
+                f"MCP tool error ({tool_name}): {err_text}"
+            )
+            _last_mcp_error[0] = err_text or str(res)
+            return res  # Return so caller can inspect
+        _last_mcp_error[0] = ""
+        return res
     except Exception as e:
         print(f"MCP request failed ({tool_name}): {e}")
+        _last_mcp_error[0] = str(e)
         return None
+
+
+# Stores the last MCP error message for surfacing in Slack
+_last_mcp_error: list[str] = [""]
+
+
+def get_last_mcp_error() -> str:
+    """Return the last MCP error message (for Slack display)."""
+    return _last_mcp_error[0]
 
 
 def _zoho_desk_call(tool_name: str, arguments: dict) -> dict | None:
