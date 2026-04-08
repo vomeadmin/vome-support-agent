@@ -1384,31 +1384,33 @@ def process_ticket(ticket_data: dict) -> str | None:
             f"tier={new_class['client_tier']} flags={new_class['flags']}"
         )
 
-        # 2. Apply Zoho assignee + status (In Progress if routed to engineer)
+        # 2. Determine routing
         routing = _get_routing(new_class)
-        update_zoho_ticket_assignment(ticket_id, routing["assignee_id"])
 
-        # 3. Auto-ack: only for low/medium tier bug/investigation tickets
-        #    Skip for: high-tier clients (Sam gives personal response),
-        #    feature requests, how-to, billing
-        _skip_ack = False
-        if not routing["assignee_id"]:
-            _skip_ack = True
-            _skip_reason = "no engineer assigned, Sam will handle"
-        elif new_class["client_tier"] in ("high", "very-high"):
-            _skip_ack = True
-            _skip_reason = (
-                f"high-tier client ({new_class['client_tier']})"
-                " — Sam should respond personally"
-            )
-        elif new_class["category"] in ("feature", "how-to", "billing"):
-            _skip_ack = True
-            _skip_reason = (
-                f"category={new_class['category']}"
-                " — not a bug/investigation"
+        # 3. High-tier clients: Sam responds personally.
+        #    Don't assign to engineer, don't change status,
+        #    don't auto-ack. Leave ticket as New.
+        _sam_handles = (
+            new_class["client_tier"] in ("high", "very-high")
+            and routing["assignee_id"] is not None
+        )
+        if _sam_handles:
+            # Override: don't assign to engineer
+            routing["assignee_id"] = None
+            print(
+                f"High-tier client"
+                f" ({new_class['client_tier']})"
+                f" on ticket {ticket_id}"
+                " — leaving as New for Sam"
             )
 
-        if not _skip_ack:
+        # Apply Zoho assignee + status
+        update_zoho_ticket_assignment(
+            ticket_id, routing["assignee_id"]
+        )
+
+        # 4. Auto-ack: only for tickets assigned to engineers
+        if routing["assignee_id"]:
             send_auto_acknowledgment(
                 ticket_id=ticket_id,
                 contact_name=contact_name,
@@ -1416,10 +1418,20 @@ def process_ticket(ticket_data: dict) -> str | None:
                 body=body,
                 client_tier=new_class["client_tier"],
                 detected_lang=detected_lang,
-                has_attachments=attachment_info["has_attachments"],
+                has_attachments=attachment_info[
+                    "has_attachments"
+                ],
             )
         else:
-            print(f"Auto-ack skipped for ticket {ticket_id} -- {_skip_reason}")
+            reason = (
+                "high-tier, Sam handles"
+                if _sam_handles
+                else "no engineer assigned"
+            )
+            print(
+                f"Auto-ack skipped for ticket"
+                f" {ticket_id} — {reason}"
+            )
 
         # 4. Slack ping to Sam if flag:ping-sam is set
         if "ping-sam" in new_class["flags"]:
@@ -1451,13 +1463,16 @@ def process_ticket(ticket_data: dict) -> str | None:
             slack_channel = os.environ.get("SLACK_CHANNEL_VOME_TICKETS", "")
 
         # 5. Create ClickUp task BEFORE Slack brief so we can include the link
-        cu_result = create_clickup_task(
-            ticket_data=ticket_data,
-            agent_response=result,
-            crm=crm,
-            zoho_url=zoho_url,
-            analysis=new_class,
-        )
+        #    Skip for high-tier clients that Sam handles personally
+        cu_result = None
+        if not _sam_handles:
+            cu_result = create_clickup_task(
+                ticket_data=ticket_data,
+                agent_response=result,
+                crm=crm,
+                zoho_url=zoho_url,
+                analysis=new_class,
+            )
         clickup_task_url = None
         clickup_task_id = None
         if cu_result:
@@ -1808,45 +1823,83 @@ def process_ticket_update(ticket_id: str) -> str | None:
         thread_ts = None
         thread_data = {}
         was_waiting = False
+        was_closed = False
         if thread_info:
             thread_ts, thread_data = thread_info
             clickup_task_id = thread_data.get("clickup_task_id")
-            was_waiting = (
-                thread_data.get("status") == "waiting-client"
+            thread_status = thread_data.get("status", "")
+            was_waiting = thread_status == "waiting-client"
+            was_closed = thread_status in (
+                "handled", "closed", "on_prod_sent"
             )
 
         if reply_type == "ack":
-            # Simple acknowledgment — restore status, skip reprocessing
-            correct_status = _get_zoho_assignee_status(ticket_id)
-            _set_zoho_ticket_status(ticket_id, correct_status)
-            print(
-                f"Ack reply on ticket {ticket_id}"
-                f" — Zoho status restored to {correct_status}"
-            )
+            if was_closed:
+                # Client said "thanks" after resolution — re-close
+                _set_zoho_ticket_status(ticket_id, "Closed")
+                print(
+                    f"Ack reply on closed ticket {ticket_id}"
+                    " — re-closed"
+                )
+            else:
+                correct_status = _get_zoho_assignee_status(
+                    ticket_id
+                )
+                _set_zoho_ticket_status(
+                    ticket_id, correct_status
+                )
+                print(
+                    f"Ack reply on ticket {ticket_id}"
+                    f" — Zoho status restored to"
+                    f" {correct_status}"
+                )
             if was_waiting and thread_ts:
                 update_thread(thread_ts, status="open")
             return None
 
-        # Substantive reply — update ClickUp + Zoho
-        if clickup_task_id:
-            if was_waiting:
-                # Re-queue the task for the engineer
-                _update_clickup_task_status(
-                    clickup_task_id, "QUEUED"
-                )
-                print(
-                    f"ClickUp task {clickup_task_id}"
-                    " re-queued (was waiting on client)"
-                )
-            # Append the client's reply context
+        # Substantive reply on a closed ticket — treat as new
+        if was_closed:
+            print(
+                f"Substantive reply on closed ticket"
+                f" {ticket_id} — treating as new ticket"
+            )
+            # Re-open on Zoho so it gets full processing
+            _set_zoho_ticket_status(ticket_id, "Open")
+            if thread_ts:
+                update_thread(thread_ts, status="open")
+            # Fall through to full reprocessing below, which
+            # will create a new ClickUp task via the normal
+            # new-ticket classification + routing flow
+
+        # Substantive reply on waiting-client — re-queue
+        elif clickup_task_id and was_waiting:
+            _update_clickup_task_status(
+                clickup_task_id, "QUEUED"
+            )
+            _append_clickup_task_context(
+                clickup_task_id,
+                reply_summary or reply_content_clean[:500],
+            )
+            print(
+                f"ClickUp task {clickup_task_id}"
+                " re-queued (was waiting on client)"
+            )
+
+        # Substantive reply on open ticket — append context
+        elif clickup_task_id:
             _append_clickup_task_context(
                 clickup_task_id,
                 reply_summary or reply_content_clean[:500],
             )
 
-        # Set Zoho back to the correct status
-        correct_status = _get_zoho_assignee_status(ticket_id)
-        _set_zoho_ticket_status(ticket_id, correct_status)
+        # Set Zoho back to the correct status (unless closed)
+        if not was_closed:
+            correct_status = _get_zoho_assignee_status(
+                ticket_id
+            )
+            _set_zoho_ticket_status(
+                ticket_id, correct_status
+            )
 
         if was_waiting and thread_ts:
             update_thread(thread_ts, status="open")

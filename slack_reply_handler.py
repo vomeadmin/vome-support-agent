@@ -434,6 +434,14 @@ def _recover_orphaned_thread(
             return None
         _, original_data = info
 
+        # Detect status from parent message text if the
+        # original status was overwritten
+        original_status = original_data.get("status", "open")
+        if "On Prod" in parent_text:
+            original_status = "on_prod_pending"
+        elif "Waiting on Client" in parent_text:
+            original_status = "waiting-client"
+
         # Re-save under the new thread_ts so it works going
         # forward (preserves pending_send, classification, etc.)
         save_thread(
@@ -452,7 +460,8 @@ def _recover_orphaned_thread(
             ),
             crm=original_data.get("crm"),
         )
-        # Copy over pending_send if it exists on original
+        # Copy over status and pending_send from original
+        update_thread(thread_ts, status=original_status)
         pending = original_data.get("pending_send")
         if pending:
             update_thread(thread_ts, pending_send=pending)
