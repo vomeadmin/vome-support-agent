@@ -397,6 +397,46 @@ async def chat_intake(request: Request):
     return result
 
 
+@app.get("/chat/tickets")
+async def chat_tickets(request: Request):
+    """Fetch Zoho Desk tickets for a given email address."""
+    email = request.query_params.get("email", "")
+    if not email:
+        return {"tickets": []}
+
+    from agent import _zoho_desk_call, _unwrap_mcp_result, ZOHO_ORG_ID
+
+    result = _zoho_desk_call("ZohoDesk_searchTickets", {
+        "query_params": {
+            "orgId": str(ZOHO_ORG_ID),
+            "email": email,
+            "limit": 25,
+            "sortBy": "createdTime",
+        },
+    })
+
+    raw = _unwrap_mcp_result(result)
+    if not raw:
+        return {"tickets": []}
+
+    ticket_list = []
+    items = raw.get("data", raw) if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
+        items = []
+
+    for t in items:
+        ticket_list.append({
+            "ticket_id": str(t.get("id", "")),
+            "ticket_number": str(t.get("ticketNumber", "")),
+            "subject": t.get("subject", ""),
+            "status": t.get("status", ""),
+            "created_time": t.get("createdTime", ""),
+            "channel": t.get("channel", ""),
+        })
+
+    return {"tickets": ticket_list}
+
+
 @app.get("/health")
 async def health():
     env_status = {v: bool(os.environ.get(v)) for v in REQUIRED_ENV}
