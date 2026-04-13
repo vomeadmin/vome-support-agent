@@ -437,6 +437,63 @@ async def chat_tickets(request: Request):
     return {"tickets": ticket_list}
 
 
+# ---------------------------------------------------------------------------
+# Knowledge Book builder
+# ---------------------------------------------------------------------------
+
+_analysis_running = False
+_analysis_status = {"status": "idle", "started": None, "last_update": None}
+
+
+@app.post("/knowledge-book/run")
+async def run_knowledge_book(request: Request):
+    """Trigger the ticket analysis pipeline.
+    Runs in a background thread so it doesn't block the server.
+    """
+    global _analysis_running, _analysis_status
+    if _analysis_running:
+        return {"status": "already_running", "info": _analysis_status}
+
+    import threading
+
+    def _run():
+        global _analysis_running, _analysis_status
+        _analysis_running = True
+        _analysis_status = {
+            "status": "running",
+            "started": datetime.now(timezone.utc).isoformat(),
+            "last_update": None,
+        }
+        try:
+            from ticket_analyzer import run_full_analysis
+            run_full_analysis()
+            _analysis_status["status"] = "completed"
+        except Exception as e:
+            _analysis_status["status"] = f"failed: {e}"
+        finally:
+            _analysis_status["last_update"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
+            _analysis_running = False
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return {"status": "started", "info": _analysis_status}
+
+
+@app.get("/knowledge-book/status")
+async def knowledge_book_status():
+    """Check the status of the ticket analysis pipeline."""
+    from ticket_analyzer import get_analysis_stats
+    stats = get_analysis_stats()
+    return {
+        "pipeline": _analysis_status,
+        "running": _analysis_running,
+        "analyzed_tickets": stats,
+        "total_analyzed": sum(stats.values()),
+    }
+
+
 @app.get("/health")
 async def health():
     env_status = {v: bool(os.environ.get(v)) for v in REQUIRED_ENV}

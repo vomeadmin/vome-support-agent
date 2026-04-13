@@ -67,6 +67,40 @@ kb_deflection_log = Table(
     Column("created_at", DateTime, default=datetime.now(timezone.utc)),
 )
 
+# Ticket analysis tracking -- records which tickets have been
+# processed by the knowledge book builder
+analyzed_tickets = Table(
+    "analyzed_tickets",
+    _metadata,
+    Column("ticket_id", String, primary_key=True),
+    Column("ticket_number", String, default=""),
+    Column("subject", String, default=""),
+    Column("category", String, default=""),
+    Column("module", String, default=""),
+    Column("language", String, default="en"),
+    Column("turn_count", Integer, default=0),
+    Column("has_sam_response", String, default="false"),
+    Column("analysis", JSONB, default={}),
+    Column("analyzed_at", DateTime, default=datetime.now(timezone.utc)),
+)
+
+# Knowledge book sections -- versioned training content
+# generated from ticket analysis
+knowledge_sections = Table(
+    "knowledge_sections",
+    _metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("section_key", String, nullable=False, index=True),
+    Column("title", String, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("version", Integer, default=1),
+    Column("ticket_count", Integer, default=0),
+    Column("last_ticket_date", String, default=""),
+    Column("is_current", String, default="true"),
+    Column("created_at", DateTime, default=datetime.now(timezone.utc)),
+    Column("updated_at", DateTime, default=datetime.now(timezone.utc)),
+)
+
 
 def _get_engine():
     global _engine
