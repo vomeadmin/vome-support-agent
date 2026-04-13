@@ -356,20 +356,13 @@ def fetch_active_tickets(
 def _unwrap_batch(result) -> list[dict]:
     """Try to extract a list of tickets from an MCP result."""
     if not result:
-        print("[OPS] _unwrap_batch: result is None/empty")
         return []
-    # Skip error results
     if isinstance(result, dict) and result.get("isError"):
-        print(f"[OPS] _unwrap_batch: isError=true")
         return []
     data = _unwrap_mcp_result(result)
-    print(f"[OPS] _unwrap_batch: unwrapped type={type(data).__name__}, keys={list(data.keys()) if isinstance(data, dict) else 'n/a'}")
     if isinstance(data, dict):
-        tickets = data.get("data", [])
-        print(f"[OPS] _unwrap_batch: found {len(tickets)} tickets in data")
-        return tickets
+        return data.get("data", [])
     if isinstance(data, list):
-        print(f"[OPS] _unwrap_batch: found {len(data)} tickets as list")
         return data
     return []
 
@@ -384,7 +377,6 @@ def _fetch_zoho_active_tickets() -> list[dict]:
         batch = []
 
         # Try getTickets first (known to work from debug endpoint)
-        print(f"[OPS] Calling ZohoDesk_getTickets offset={offset}, MCP_URL={'set' if ZOHO_DESK_MCP_URL else 'EMPTY'}")
         result = _zoho_desk_call("ZohoDesk_getTickets", {
             "query_params": {
                 "orgId": str(ZOHO_ORG_ID),
@@ -393,7 +385,6 @@ def _fetch_zoho_active_tickets() -> list[dict]:
                 "sortBy": "modifiedTime",
             },
         })
-        print(f"[OPS] getTickets result: type={type(result).__name__}, truthy={bool(result)}")
         batch = _unwrap_batch(result)
 
         if not batch:
