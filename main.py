@@ -500,6 +500,35 @@ async def chat_auth_bypass(request: Request):
         return {"bypassed": False, "reason": str(e)}
 
 
+@app.get("/debug/mcp-tools")
+async def debug_mcp_tools():
+    """List available tools from the Zoho Desk MCP server."""
+    from agent import ZOHO_DESK_MCP_URL
+    if not ZOHO_DESK_MCP_URL:
+        return {"error": "ZOHO_DESK_MCP_URL not set"}
+    try:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {},
+        }
+        resp = httpx.post(ZOHO_DESK_MCP_URL, json=payload, timeout=15)
+        data = resp.json()
+        tools = data.get("result", data)
+        if isinstance(tools, dict) and "tools" in tools:
+            names = [t.get("name", "") for t in tools["tools"]]
+            ticket_tools = [n for n in names if "ticket" in n.lower() or "Ticket" in n]
+            return {
+                "total_tools": len(names),
+                "ticket_related": ticket_tools,
+                "all_tools": names,
+            }
+        return {"raw": data}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ---------------------------------------------------------------------------
 # Knowledge Book builder
 # ---------------------------------------------------------------------------
