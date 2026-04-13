@@ -84,7 +84,8 @@ def fetch_all_ticket_ids() -> list[dict]:
     while True:
         print(f"[FETCH] Fetching tickets offset={offset}...")
 
-        result = _zoho_desk_call("ZohoDesk_getTickets", {
+        # Try listOfTickets first (Zoho MCP standard), fall back to getTickets
+        result = _zoho_desk_call("ZohoDesk_listOfTickets", {
             "query_params": {
                 "orgId": str(ZOHO_ORG_ID),
                 "from": offset,
@@ -92,6 +93,15 @@ def fetch_all_ticket_ids() -> list[dict]:
                 "sortBy": "createdTime",
             },
         })
+        if not result:
+            result = _zoho_desk_call("ZohoDesk_getTickets", {
+                "query_params": {
+                    "orgId": str(ZOHO_ORG_ID),
+                    "from": offset,
+                    "limit": 100,
+                    "sortBy": "createdTime",
+                },
+            })
 
         raw = _unwrap_mcp_result(result)
         if not raw:

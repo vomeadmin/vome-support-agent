@@ -412,6 +412,7 @@ async def chat_tickets(request: Request):
 
     from agent import _zoho_desk_call, _unwrap_mcp_result, ZOHO_ORG_ID
 
+    # Search for tickets by contact email
     result = _zoho_desk_call("ZohoDesk_searchTickets", {
         "query_params": {
             "orgId": str(ZOHO_ORG_ID),
@@ -420,6 +421,15 @@ async def chat_tickets(request: Request):
             "sortBy": "createdTime",
         },
     })
+    if not result:
+        # Fallback: try getTicketsByContact
+        result = _zoho_desk_call("ZohoDesk_getTicketsByContact", {
+            "query_params": {
+                "orgId": str(ZOHO_ORG_ID),
+                "email": email,
+                "limit": 25,
+            },
+        })
 
     raw = _unwrap_mcp_result(result)
     if not raw:
