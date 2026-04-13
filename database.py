@@ -128,15 +128,28 @@ def init_db():
     try:
         engine = _get_engine()
         _metadata.create_all(engine)
-        # Migrate: add pending_draft column if missing
+        # Migrate: add columns if missing
         with engine.begin() as conn:
-            try:
-                conn.execute(text(
-                    "ALTER TABLE ticket_threads "
-                    "ADD COLUMN IF NOT EXISTS pending_draft TEXT"
-                ))
-            except Exception:
-                pass  # Column already exists or DB doesn't support IF NOT EXISTS
+            migrations = [
+                "ADD COLUMN IF NOT EXISTS pending_draft TEXT",
+                "ADD COLUMN IF NOT EXISTS zoho_assignee_id VARCHAR",
+                "ADD COLUMN IF NOT EXISTS clickup_assignee_id INTEGER",
+                "ADD COLUMN IF NOT EXISTS priority_score INTEGER",
+                "ADD COLUMN IF NOT EXISTS missing_info TEXT",
+                "ADD COLUMN IF NOT EXISTS engineer_note TEXT",
+                "ADD COLUMN IF NOT EXISTS pending_info BOOLEAN DEFAULT FALSE",
+                "ADD COLUMN IF NOT EXISTS parked BOOLEAN DEFAULT FALSE",
+                "ADD COLUMN IF NOT EXISTS wake_date DATE",
+                "ADD COLUMN IF NOT EXISTS last_action VARCHAR",
+                "ADD COLUMN IF NOT EXISTS last_action_at TIMESTAMP",
+            ]
+            for m in migrations:
+                try:
+                    conn.execute(text(
+                        f"ALTER TABLE ticket_threads {m}"
+                    ))
+                except Exception:
+                    pass
         print("Database initialized — ticket_threads table ready")
     except Exception as e:
         print(f"WARNING: Database connection failed — {e}")

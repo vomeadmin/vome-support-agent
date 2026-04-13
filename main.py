@@ -16,6 +16,7 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request, Response
 
 from agent import process_ticket, process_ticket_update, sync_zoho_to_clickup
+from ops.router import ops_router
 from intake import run_intake_turn
 from kb_search import run_kb_health_scan
 from kb_sync import run_kb_sync
@@ -97,6 +98,11 @@ _check_env()
 init_db()
 
 app = FastAPI(title="Vome Support Agent")
+
+# ---------------------------------------------------------------------------
+# Ticket Command Center (ops/) router
+# ---------------------------------------------------------------------------
+app.include_router(ops_router, prefix="/ops")
 
 # ---------------------------------------------------------------------------
 # APScheduler — daily digest at 17:00 ET (America/Montreal)
@@ -498,6 +504,38 @@ async def chat_auth_bypass(request: Request):
         return resp.json()
     except Exception as e:
         return {"bypassed": False, "reason": str(e)}
+
+
+@app.get("/debug/test-ticket-fetch")
+async def debug_test_ticket_fetch():
+    """Test fetching tickets -- shows raw MCP response."""
+    from agent import _zoho_desk_call, _unwrap_mcp_result, ZOHO_ORG_ID
+    results = {}
+    raw1 = _zoho_desk_call("ZohoDesk_getTickets", {
+        "query_params": {
+            "orgId": str(ZOHO_ORG_ID),
+            "from": "0",
+            "limit": "5",
+        },
+    })
+    results["getTickets_type"] = str(type(raw1))
+    results["getTickets_isError"] = bool(
+        isinstance(raw1, dict) and raw1.get("isError")
+    ) if raw1 else "null"
+    unwrapped1 = _unwrap_mcp_result(raw1)
+    if unwrapped1:
+        if isinstance(unwrapped1, dict):
+            results["getTickets_keys"] = list(unwrapped1.keys())[:10]
+            results["getTickets_count"] = len(unwrapped1.get("data", []))
+        elif isinstance(unwrapped1, list):
+            results["getTickets_count"] = len(unwrapped1)
+    else:
+        results["getTickets_unwrapped"] = "None"
+        if isinstance(raw1, dict):
+            c = raw1.get("content", [])
+            if c:
+                results["getTickets_raw"] = str(c[0])[:500]
+    return results
 
 
 @app.get("/debug/mcp-tools")
