@@ -376,28 +376,15 @@ def _fetch_zoho_active_tickets() -> list[dict]:
     for offset in (0, 100):
         batch = []
 
-        # Try getTickets first (known to work from debug endpoint)
+        # Match the working debug endpoint pattern exactly
         result = _zoho_desk_call("ZohoDesk_getTickets", {
             "query_params": {
                 "orgId": str(ZOHO_ORG_ID),
                 "from": str(offset),
-                "limit": "100",
-                "sortBy": "modifiedTime",
+                "limit": "99",
             },
         })
         batch = _unwrap_batch(result)
-
-        if not batch:
-            # Fallback to listOfTickets
-            result = _zoho_desk_call("ZohoDesk_listOfTickets", {
-                "query_params": {
-                    "orgId": str(ZOHO_ORG_ID),
-                    "from": str(offset),
-                    "limit": "100",
-                    "sortBy": "modifiedTime",
-                },
-            })
-            batch = _unwrap_batch(result)
 
         print(f"[OPS] Zoho batch offset={offset}: {len(batch)} tickets")
         if not batch:

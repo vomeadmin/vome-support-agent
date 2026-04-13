@@ -57,6 +57,33 @@ class ParkRequest(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 
+@ops_router.get("/debug-zoho")
+def debug_zoho():
+    """Debug: test Zoho call from ops module."""
+    from agent import _zoho_desk_call, _unwrap_mcp_result, ZOHO_ORG_ID
+    raw = _zoho_desk_call("ZohoDesk_getTickets", {
+        "query_params": {
+            "orgId": str(ZOHO_ORG_ID),
+            "from": "0",
+            "limit": "5",
+        },
+    })
+    info = {
+        "raw_type": str(type(raw)),
+        "raw_truthy": bool(raw),
+    }
+    if isinstance(raw, dict):
+        info["raw_keys"] = list(raw.keys())
+        content = raw.get("content", [])
+        info["content_len"] = len(content)
+        if content:
+            first = content[0]
+            info["first_type"] = first.get("type", "?")
+            text_val = first.get("text", "")
+            info["text_preview"] = text_val[:200]
+    return info
+
+
 @ops_router.get("/tickets")
 def get_tickets(
     filter: str = Query("all", alias="filter"),
