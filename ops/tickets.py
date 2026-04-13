@@ -27,6 +27,7 @@ from ops.zoho_sync import (
     get_clickup_task,
     get_clickup_comments,
     extract_custom_field_value,
+    extract_zoho_ticket_id_from_task,
     TEAM,
 )
 
@@ -103,7 +104,7 @@ def _get_clickup_priority_name(priority_val) -> str:
 
 def fetch_active_tickets(
     filter_type: str = "all",
-    limit: int = 50,
+    limit: int = 100,
 ) -> list[dict]:
     """
     Build the full prioritized ticket list for the dashboard.
@@ -189,6 +190,64 @@ def fetch_active_tickets(
             }
 
     # -----------------------------------------------------------------------
+    # Step 2b: Fetch active ClickUp tasks independently
+    # Query the Priority Queue for tasks that need attention, and
+    # cross-reference them with Zoho tickets via the Zoho Ticket Link field.
+    # -----------------------------------------------------------------------
+    clickup_tasks_by_zoho_id: dict[str, dict] = {}
+    cu_tasks = _fetch_clickup_active_tasks()
+    for cu_task in cu_tasks:
+        # Extract Zoho ticket ID from custom field
+        zoho_tid = extract_zoho_ticket_id_from_task(cu_task)
+        cu_task_id = cu_task.get("id", "")
+
+        task_info = {
+            "_cu_task": cu_task,
+            "clickup_task_id": cu_task_id,
+        }
+
+        if zoho_tid:
+            clickup_tasks_by_zoho_id[zoho_tid] = task_info
+            # Ensure this ticket exists in our map
+            if zoho_tid not in tickets_by_zoho_id:
+                tickets_by_zoho_id[zoho_tid] = {
+                    "zoho_ticket_id": zoho_tid,
+                    "zoho_ticket_number": "",
+                    "subject": cu_task.get("name", ""),
+                    "clickup_task_id": cu_task_id,
+                    "crm_data": {},
+                    "classification": {},
+                    "db_status": "open",
+                    "pending_info": False,
+                    "missing_info": "",
+                    "engineer_note": "",
+                    "parked": False,
+                }
+            else:
+                # Link ClickUp task to existing ticket
+                tickets_by_zoho_id[zoho_tid]["clickup_task_id"] = cu_task_id
+        else:
+            # ClickUp task with no Zoho link — show it with task ID as key
+            fake_key = f"cu_{cu_task_id}"
+            tickets_by_zoho_id[fake_key] = {
+                "zoho_ticket_id": "",
+                "zoho_ticket_number": "",
+                "subject": cu_task.get("name", ""),
+                "clickup_task_id": cu_task_id,
+                "crm_data": {},
+                "classification": {},
+                "db_status": "open",
+                "pending_info": False,
+                "missing_info": "",
+                "engineer_note": "",
+                "parked": False,
+            }
+            clickup_tasks_by_zoho_id[fake_key] = task_info
+
+    linked = sum(1 for k in clickup_tasks_by_zoho_id if not k.startswith("cu_"))
+    print(f"[OPS] ClickUp active tasks: {len(cu_tasks)}, linked to Zoho: {linked}")
+
+    # -----------------------------------------------------------------------
     # Step 3: Enrich each ticket with Zoho + ClickUp data, score
     # -----------------------------------------------------------------------
     result_list = []
@@ -226,7 +285,7 @@ def fetch_active_tickets(
         )
         days_since_update = _days_since(last_activity)
 
-        # ClickUp data
+        # ClickUp data — use pre-fetched task if available
         cu_task_id = t.get("clickup_task_id", "")
         cu_status = ""
         cu_priority = "normal"
@@ -236,29 +295,36 @@ def fetch_active_tickets(
         auto_score = 0
         engineer_comment = t.get("engineer_note", "")
 
-        if cu_task_id:
+        # Check pre-fetched ClickUp tasks first
+        cu_info = clickup_tasks_by_zoho_id.get(tid)
+        cu_task = cu_info.get("_cu_task") if cu_info else None
+
+        # If not in pre-fetched set but we have a task ID, fetch individually
+        if not cu_task and cu_task_id:
             cu_task = get_clickup_task(cu_task_id)
-            if cu_task:
-                cu_status = (cu_task.get("status", {}).get("status") or "").lower()
-                cu_priority = _get_clickup_priority_name(cu_task.get("priority"))
-                cu_link = cu_task.get("url", f"https://app.clickup.com/t/{cu_task_id}")
 
-                # Assignee
-                assignees = cu_task.get("assignees") or []
-                if assignees:
-                    cu_assignee_id = assignees[0].get("id")
-                    cu_assignee_name = (
-                        assignees[0].get("username")
-                        or CLICKUP_USER_NAMES.get(cu_assignee_id, "")
-                    )
+        if cu_task:
+            cu_task_id = cu_task.get("id", cu_task_id)
+            cu_status = (cu_task.get("status", {}).get("status") or "").lower()
+            cu_priority = _get_clickup_priority_name(cu_task.get("priority"))
+            cu_link = cu_task.get("url", f"https://app.clickup.com/t/{cu_task_id}")
 
-                # Auto score from custom field
-                auto_score_val = extract_custom_field_value(cu_task, FIELD_AUTO_SCORE)
-                if auto_score_val:
-                    try:
-                        auto_score = int(float(str(auto_score_val)))
-                    except (ValueError, TypeError):
-                        pass
+            # Assignee
+            assignees = cu_task.get("assignees") or []
+            if assignees:
+                cu_assignee_id = assignees[0].get("id")
+                cu_assignee_name = (
+                    assignees[0].get("username")
+                    or CLICKUP_USER_NAMES.get(cu_assignee_id, "")
+                )
+
+            # Auto score from custom field
+            auto_score_val = extract_custom_field_value(cu_task, FIELD_AUTO_SCORE)
+            if auto_score_val:
+                try:
+                    auto_score = int(float(str(auto_score_val)))
+                except (ValueError, TypeError):
+                    pass
 
                 # Fetch latest engineer comment if status needs it
                 if cu_status in ("needs review", "waiting on client") and not engineer_comment:
@@ -402,6 +468,56 @@ def _fetch_zoho_active_tickets() -> list[dict]:
             deduped.append(t)
 
     print(f"[OPS] Fetched {len(all_tickets)} Zoho tickets, {len(deduped)} active")
+    return deduped
+
+
+def _fetch_clickup_active_tasks() -> list[dict]:
+    """Fetch ClickUp tasks from the Priority Queue that need attention.
+
+    Queries tasks with statuses: queued, in progress, needs review,
+    waiting on client, on dev, on prod. Includes custom fields so we
+    can extract the Zoho Ticket Link.
+    """
+    if not CLICKUP_API_TOKEN:
+        print("[OPS] CLICKUP_API_TOKEN not set, skipping ClickUp fetch")
+        return []
+
+    all_tasks = []
+    # Fetch from Priority Queue list
+    list_id = LIST_PRIORITY_QUEUE
+    active_statuses = [
+        "queued", "in progress", "needs review",
+        "waiting on client", "on dev", "on prod",
+    ]
+
+    for status in active_statuses:
+        try:
+            r = httpx.get(
+                f"{CLICKUP_BASE}/list/{list_id}/task",
+                params={
+                    "statuses[]": status,
+                    "include_closed": "false",
+                    "subtasks": "true",
+                },
+                headers={"Authorization": CLICKUP_API_TOKEN},
+                timeout=15,
+            )
+            r.raise_for_status()
+            tasks = r.json().get("tasks", [])
+            all_tasks.extend(tasks)
+        except Exception as e:
+            print(f"[OPS] ClickUp fetch failed for status '{status}': {e}")
+
+    # Deduplicate by task ID
+    seen = set()
+    deduped = []
+    for t in all_tasks:
+        tid = t.get("id", "")
+        if tid and tid not in seen:
+            seen.add(tid)
+            deduped.append(t)
+
+    print(f"[OPS] ClickUp: {len(deduped)} active tasks from Priority Queue")
     return deduped
 
 
