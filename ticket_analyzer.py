@@ -195,7 +195,7 @@ def extract_conversation_thread(detail: dict) -> dict:
         entries = conversations
 
     # Add original ticket body as first message
-    raw_desc = ticket.get("description", "")
+    raw_desc = ticket.get("description") or ""
     clean_desc = re.sub(r"<[^>]+>", "", raw_desc).strip()
     if clean_desc:
         messages.append({
@@ -212,7 +212,7 @@ def extract_conversation_thread(detail: dict) -> dict:
         if entry.get("isDescriptionThread"):
             continue
 
-        content = entry.get("content", "")
+        content = entry.get("content") or ""
         clean_content = re.sub(r"<[^>]+>", "", content).strip()
         if not clean_content:
             continue
@@ -908,48 +908,53 @@ def run_full_analysis():
             f"Ticket #{ticket_num}: {subject[:60]}"
         )
 
-        # Fetch full detail
-        detail = fetch_ticket_detail(ticket_id)
-        if not detail:
-            print(f"  -> SKIP: Failed to fetch detail")
+        try:
+            # Fetch full detail
+            detail = fetch_ticket_detail(ticket_id)
+            if not detail:
+                print(f"  -> SKIP: Failed to fetch detail")
+                failed += 1
+                continue
+
+            # Extract thread
+            thread = extract_conversation_thread(detail)
+            if thread["turn_count"] == 0:
+                print(f"  -> SKIP: Empty conversation")
+                failed += 1
+                continue
+
+            # Analyze with Claude
+            analysis = analyze_ticket(thread)
+            if not analysis:
+                print(f"  -> SKIP: Analysis failed")
+                failed += 1
+                continue
+
+            # Save
+            save_analysis(
+                ticket_id=ticket_id,
+                ticket_number=ticket_num,
+                subject=subject,
+                thread=thread,
+                analysis=analysis,
+            )
+
+            processed += 1
+            training_val = analysis.get("training_value", "?")
+            category = analysis.get("category", "?")
+            print(
+                f"  -> OK: {category} "
+                f"(training: {training_val}, "
+                f"turns: {thread['turn_count']}, "
+                f"sam: {'yes' if thread['has_sam_response'] else 'no'})"
+            )
+
+            # Rate limiting
+            time.sleep(CLAUDE_DELAY)
+        except Exception as e:
+            print(f"  -> ERROR: {e}")
             failed += 1
             continue
-
-        # Extract thread
-        thread = extract_conversation_thread(detail)
-        if thread["turn_count"] == 0:
-            print(f"  -> SKIP: Empty conversation")
-            failed += 1
-            continue
-
-        # Analyze with Claude
-        analysis = analyze_ticket(thread)
-        if not analysis:
-            print(f"  -> SKIP: Analysis failed")
-            failed += 1
-            continue
-
-        # Save
-        save_analysis(
-            ticket_id=ticket_id,
-            ticket_number=ticket_num,
-            subject=subject,
-            thread=thread,
-            analysis=analysis,
-        )
-
-        processed += 1
-        training_val = analysis.get("training_value", "?")
-        category = analysis.get("category", "?")
-        print(
-            f"  -> OK: {category} "
-            f"(training: {training_val}, "
-            f"turns: {thread['turn_count']}, "
-            f"sam: {'yes' if thread['has_sam_response'] else 'no'})"
-        )
-
-        # Rate limiting
-        time.sleep(CLAUDE_DELAY)
 
         # Progress update every 25 tickets
         if (i + 1) % 25 == 0:

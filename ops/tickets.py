@@ -115,13 +115,13 @@ def fetch_active_tickets(
     4. Fetch ClickUp task data for each ticket (status, assignee, comments)
     5. Score and sort
     """
-    engine = _get_engine()
     tickets_by_zoho_id: dict[str, dict] = {}
 
     # -----------------------------------------------------------------------
     # Step 1: Load ticket_threads from PostgreSQL
     # -----------------------------------------------------------------------
     try:
+        engine = _get_engine()
         with engine.connect() as conn:
             rows = conn.execute(
                 text(
@@ -353,38 +353,77 @@ def fetch_active_tickets(
     return result_list[:limit]
 
 
+def _unwrap_batch(result) -> list[dict]:
+    """Try to extract a list of tickets from an MCP result."""
+    if not result:
+        print("[OPS] _unwrap_batch: result is None/empty")
+        return []
+    # Skip error results
+    if isinstance(result, dict) and result.get("isError"):
+        print(f"[OPS] _unwrap_batch: isError=true")
+        return []
+    data = _unwrap_mcp_result(result)
+    print(f"[OPS] _unwrap_batch: unwrapped type={type(data).__name__}, keys={list(data.keys()) if isinstance(data, dict) else 'n/a'}")
+    if isinstance(data, dict):
+        tickets = data.get("data", [])
+        print(f"[OPS] _unwrap_batch: found {len(tickets)} tickets in data")
+        return tickets
+    if isinstance(data, list):
+        print(f"[OPS] _unwrap_batch: found {len(data)} tickets as list")
+        return data
+    return []
+
+
 def _fetch_zoho_active_tickets() -> list[dict]:
-    """Fetch tickets from Zoho Desk with active statuses."""
+    """Fetch tickets from Zoho Desk, then filter to active statuses client-side."""
+    active_statuses = {"new", "open", "processing", "on hold", "in progress", "final review"}
     all_tickets = []
 
-    for status in ("New", "Open", "Processing", "On Hold", "Final Review"):
+    # Fetch in batches — try both MCP tool names since servers differ
+    for offset in (0, 100):
+        batch = []
+
+        # Try getTickets first (known to work from debug endpoint)
+        print(f"[OPS] Calling ZohoDesk_getTickets offset={offset}, MCP_URL={'set' if ZOHO_DESK_MCP_URL else 'EMPTY'}")
         result = _zoho_desk_call("ZohoDesk_getTickets", {
             "query_params": {
                 "orgId": str(ZOHO_ORG_ID),
-                "status": status,
-                "from": 0,
-                "limit": 100,
+                "from": str(offset),
+                "limit": "100",
                 "sortBy": "modifiedTime",
-                "include": "contacts",
             },
         })
-        if not result:
-            continue
-        data = _unwrap_mcp_result(result)
-        if isinstance(data, dict):
-            all_tickets.extend(data.get("data", []))
-        elif isinstance(data, list):
-            all_tickets.extend(data)
+        print(f"[OPS] getTickets result: type={type(result).__name__}, truthy={bool(result)}")
+        batch = _unwrap_batch(result)
 
-    # Deduplicate by ticket ID
+        if not batch:
+            # Fallback to listOfTickets
+            result = _zoho_desk_call("ZohoDesk_listOfTickets", {
+                "query_params": {
+                    "orgId": str(ZOHO_ORG_ID),
+                    "from": str(offset),
+                    "limit": "100",
+                    "sortBy": "modifiedTime",
+                },
+            })
+            batch = _unwrap_batch(result)
+
+        print(f"[OPS] Zoho batch offset={offset}: {len(batch)} tickets")
+        if not batch:
+            break
+        all_tickets.extend(batch)
+
+    # Filter to active statuses and deduplicate
     seen = set()
     deduped = []
     for t in all_tickets:
         tid = str(t.get("id", ""))
-        if tid and tid not in seen:
+        status = (t.get("status") or "").lower().strip()
+        if tid and tid not in seen and status in active_statuses:
             seen.add(tid)
             deduped.append(t)
 
+    print(f"[OPS] Fetched {len(all_tickets)} Zoho tickets, {len(deduped)} active")
     return deduped
 
 
