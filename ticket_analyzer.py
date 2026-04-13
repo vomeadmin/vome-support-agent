@@ -84,27 +84,16 @@ def fetch_all_ticket_ids() -> list[dict]:
     while True:
         print(f"[FETCH] Fetching tickets offset={offset}...")
 
-        # Try multiple parameter formats -- Zoho MCP tools
-        # can be picky about parameter structure
+        # Zoho MCP requires departmentId to list tickets
         result = _zoho_desk_call("ZohoDesk_getTickets", {
             "query_params": {
                 "orgId": str(ZOHO_ORG_ID),
+                "departmentId": "569440000000006907",
                 "from": str(offset),
                 "limit": "100",
                 "sortBy": "createdTime",
             },
         })
-        if not result or (
-            isinstance(result, dict) and result.get("isError")
-        ):
-            print("[FETCH] getTickets failed, trying listOfTickets...")
-            result = _zoho_desk_call("ZohoDesk_listOfTickets", {
-                "query_params": {
-                    "orgId": str(ZOHO_ORG_ID),
-                    "from": str(offset),
-                    "limit": "100",
-                },
-            })
 
         raw = _unwrap_mcp_result(result)
         if not raw:

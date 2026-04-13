@@ -418,22 +418,23 @@ async def chat_tickets(request: Request):
 
     from agent import _zoho_desk_call, _unwrap_mcp_result, ZOHO_ORG_ID
 
-    # Search for tickets by contact email
-    result = _zoho_desk_call("ZohoDesk_searchTickets", {
+    # Search tickets by contact email using doSearch
+    result = _zoho_desk_call("ZohoDesk_doSearch", {
         "query_params": {
             "orgId": str(ZOHO_ORG_ID),
-            "email": email,
-            "limit": 25,
-            "sortBy": "createdTime",
+            "module": "tickets",
+            "searchStr": email,
+            "limit": "25",
         },
     })
     if not result:
-        # Fallback: try getTicketsByContact
-        result = _zoho_desk_call("ZohoDesk_getTicketsByContact", {
+        # Fallback: try searchTickets with departmentId
+        result = _zoho_desk_call("ZohoDesk_searchTickets", {
             "query_params": {
                 "orgId": str(ZOHO_ORG_ID),
+                "departmentId": "569440000000006907",
                 "email": email,
-                "limit": 25,
+                "limit": "25",
             },
         })
 
@@ -514,6 +515,7 @@ async def debug_test_ticket_fetch():
     raw1 = _zoho_desk_call("ZohoDesk_getTickets", {
         "query_params": {
             "orgId": str(ZOHO_ORG_ID),
+            "departmentId": "569440000000006907",
             "from": "0",
             "limit": "5",
         },
