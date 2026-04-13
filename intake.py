@@ -502,6 +502,36 @@ def run_intake_turn(
     status = parsed.get("status", "collecting")
     kb_query = parsed.get("kb_query")
     issue_fingerprint = parsed.get("issue_fingerprint")
+    auth_check_email = parsed.get("auth_check")
+
+    # Step 2b: Handle auth check if Claude requested one
+    if auth_check_email:
+        auth_result = _run_auth_check(auth_check_email)
+        if auth_result:
+            # If bypassable, auto-activate
+            if auth_result.get("is_bypassable"):
+                bypass_result = _run_auth_bypass(auth_check_email)
+                if bypass_result and bypass_result.get("bypassed"):
+                    reply_text += (
+                        "\n\nI've activated your account. "
+                        "You should be able to log in now! "
+                        "If you have any trouble, try resetting "
+                        "your password here: "
+                        "https://www.vomevolunteer.com/forgot"
+                    )
+                    status = "complete"
+            elif auth_result.get("is_active"):
+                reply_text += (
+                    "\n\nI can see your account is already "
+                    "active. Try resetting your password here: "
+                    "https://www.vomevolunteer.com/forgot"
+                )
+            elif not auth_result.get("found"):
+                reply_text += (
+                    "\n\nI couldn't find an account with that "
+                    "email. You may need to register first: "
+                    "https://www.vomevolunteer.com/register-volunteer"
+                )
 
     # Step 3: If this is the first turn and Claude generated a kb_query, search now
     if kb_query and not prior_kb_query and not kb_article_response:
@@ -585,6 +615,65 @@ def _extract_prior_kb_query(conversation_history: list) -> str | None:
             _, parsed = _parse_intake_response(content)
             return parsed.get("kb_query")
     return None
+
+
+def _run_auth_check(email: str) -> dict | None:
+    """Check user auth status via the Django API."""
+    import os
+    import httpx
+
+    django_url = os.environ.get("DJANGO_API_URL", "")
+    api_key = os.environ.get("SUPPORT_API_KEY", "")
+    if not django_url or not api_key:
+        print("[AUTH] DJANGO_API_URL or SUPPORT_API_KEY not set")
+        return None
+
+    try:
+        resp = httpx.get(
+            f"{django_url}/api/support/auth-check/",
+            params={"email": email.strip()},
+            headers={"X-Support-Api-Key": api_key},
+            timeout=10,
+        )
+        result = resp.json()
+        print(
+            f"[AUTH] Check {email}: "
+            f"found={result.get('found')}, "
+            f"active={result.get('is_active')}, "
+            f"bypassable={result.get('is_bypassable')}"
+        )
+        return result
+    except Exception as e:
+        print(f"[AUTH] Check failed for {email}: {e}")
+        return None
+
+
+def _run_auth_bypass(email: str) -> dict | None:
+    """Activate a user's account via the Django API."""
+    import os
+    import httpx
+
+    django_url = os.environ.get("DJANGO_API_URL", "")
+    api_key = os.environ.get("SUPPORT_API_KEY", "")
+    if not django_url or not api_key:
+        return None
+
+    try:
+        resp = httpx.post(
+            f"{django_url}/api/support/auth-check/",
+            json={"email": email.strip(), "action": "bypass"},
+            headers={"X-Support-Api-Key": api_key},
+            timeout=10,
+        )
+        result = resp.json()
+        print(
+            f"[AUTH] Bypass {email}: "
+            f"bypassed={result.get('bypassed')}"
+        )
+        return result
+    except Exception as e:
+        print(f"[AUTH] Bypass failed for {email}: {e}")
+        return None
 
 
 def _search_kb_combined(

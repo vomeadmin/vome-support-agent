@@ -10,6 +10,7 @@ import json
 import re
 from datetime import datetime, timezone
 
+import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request, Response
@@ -440,6 +441,53 @@ async def chat_tickets(request: Request):
         })
 
     return {"tickets": ticket_list}
+
+
+# ---------------------------------------------------------------------------
+# Auth check (calls Django server-to-server)
+# ---------------------------------------------------------------------------
+
+DJANGO_API_URL = os.environ.get("DJANGO_API_URL", "")
+SUPPORT_API_KEY = os.environ.get("SUPPORT_API_KEY", "")
+
+
+@app.get("/chat/auth-check")
+async def chat_auth_check(request: Request):
+    """Check a user's auth status via Django."""
+    email = request.query_params.get("email", "")
+    if not email or not DJANGO_API_URL:
+        return {"found": False, "reason": "Not configured"}
+
+    try:
+        resp = httpx.get(
+            f"{DJANGO_API_URL}/api/support/auth-check/",
+            params={"email": email},
+            headers={"X-Support-Api-Key": SUPPORT_API_KEY},
+            timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        return {"found": False, "reason": str(e)}
+
+
+@app.post("/chat/auth-bypass")
+async def chat_auth_bypass(request: Request):
+    """Bypass authentication for a user via Django."""
+    body = await request.json()
+    email = body.get("email", "")
+    if not email or not DJANGO_API_URL:
+        return {"bypassed": False, "reason": "Not configured"}
+
+    try:
+        resp = httpx.post(
+            f"{DJANGO_API_URL}/api/support/auth-check/",
+            json={"email": email, "action": "bypass"},
+            headers={"X-Support-Api-Key": SUPPORT_API_KEY},
+            timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        return {"bypassed": False, "reason": str(e)}
 
 
 # ---------------------------------------------------------------------------
