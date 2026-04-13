@@ -28,6 +28,7 @@ from kb_search import (
     check_and_create_kb_task,
     flag_stale_article,
 )
+from kb_sync import search_kb_articles
 from slack_ticket_brief import send_ticket_brief
 
 _client = anthropic.Anthropic()
@@ -455,7 +456,10 @@ def run_intake_turn(
     # (We look at the last assistant message's JSON block)
     prior_kb_query = _extract_prior_kb_query(conversation_history)
     if prior_kb_query:
-        kb_match = get_best_kb_match(prior_kb_query)
+        kb_match = _search_kb_combined(
+            prior_kb_query,
+            session_context.get("locale"),
+        )
         if kb_match:
             kb_context = json.dumps(kb_match)
             kb_article_response = {
@@ -501,7 +505,10 @@ def run_intake_turn(
 
     # Step 3: If this is the first turn and Claude generated a kb_query, search now
     if kb_query and not prior_kb_query and not kb_article_response:
-        kb_match = get_best_kb_match(kb_query)
+        kb_match = _search_kb_combined(
+            kb_query,
+            session_context.get("locale"),
+        )
         if kb_match:
             kb_article_response = {
                 "title": kb_match["title"],
@@ -578,3 +585,40 @@ def _extract_prior_kb_query(conversation_history: list) -> str | None:
             _, parsed = _parse_intake_response(content)
             return parsed.get("kb_query")
     return None
+
+
+def _search_kb_combined(
+    query: str,
+    locale: str | None = None,
+) -> dict | None:
+    """Search KB using ChromaDB first (semantic), fall back to Zoho API (keyword).
+
+    Returns a dict with {title, url, days_stale, action} or None.
+    """
+    # Try ChromaDB (nightly-indexed articles)
+    try:
+        chroma_results = search_kb_articles(
+            query, n_results=1, language=locale,
+        )
+        if chroma_results:
+            best = chroma_results[0]
+            # Only use if relevance score is reasonable
+            if best.get("score") and best["score"] > 0.3:
+                days = best.get("days_stale")
+                if days is not None and days > 365:
+                    action = "flag_stale"
+                elif days is not None and days > 90:
+                    action = "suggest_with_caveat"
+                else:
+                    action = "suggest"
+                return {
+                    "title": best["title"],
+                    "url": best["url"],
+                    "days_stale": days,
+                    "action": action,
+                }
+    except Exception as e:
+        print(f"[KB] ChromaDB search failed, falling back: {e}")
+
+    # Fall back to Zoho keyword search
+    return get_best_kb_match(query)

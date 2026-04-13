@@ -17,6 +17,7 @@ from fastapi import FastAPI, Request, Response
 from agent import process_ticket, process_ticket_update, sync_zoho_to_clickup
 from intake import run_intake_turn
 from kb_search import run_kb_health_scan
+from kb_sync import run_kb_sync
 from clickup_assignee_handler import handle_assignee_updated
 from clickup_needs_review_handler import handle_needs_review
 from clickup_waiting_client_handler import handle_waiting_on_client
@@ -108,6 +109,10 @@ _scheduler.add_job(
 _scheduler.add_job(
     run_kb_health_scan,
     CronTrigger(day_of_week="mon", hour=9, minute=0, timezone="America/Montreal"),
+)
+_scheduler.add_job(
+    run_kb_sync,
+    CronTrigger(hour=2, minute=0, timezone="America/Montreal"),
 )
 _scheduler.start()
 
