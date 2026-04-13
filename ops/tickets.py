@@ -376,10 +376,10 @@ def _fetch_zoho_active_tickets() -> list[dict]:
     for offset in (0, 100):
         batch = []
 
-        # Match the working debug endpoint pattern exactly
         result = _zoho_desk_call("ZohoDesk_getTickets", {
             "query_params": {
                 "orgId": str(ZOHO_ORG_ID),
+                "departmentId": "569440000000006907",
                 "from": str(offset),
                 "limit": "99",
             },
