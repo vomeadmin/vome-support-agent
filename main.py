@@ -522,6 +522,17 @@ async def debug_test_ticket_fetch():
     results["getTickets_isError"] = bool(
         isinstance(raw1, dict) and raw1.get("isError")
     ) if raw1 else "null"
+
+    # Show raw content structure for debugging
+    if isinstance(raw1, dict):
+        content = raw1.get("content", [])
+        results["getTickets_content_len"] = len(content)
+        if content:
+            first = content[0]
+            results["getTickets_first_content_type"] = first.get("type", "?")
+            text_val = first.get("text", "")
+            results["getTickets_text_preview"] = text_val[:500] if text_val else "empty"
+
     unwrapped1 = _unwrap_mcp_result(raw1)
     if unwrapped1:
         if isinstance(unwrapped1, dict):
@@ -531,10 +542,6 @@ async def debug_test_ticket_fetch():
             results["getTickets_count"] = len(unwrapped1)
     else:
         results["getTickets_unwrapped"] = "None"
-        if isinstance(raw1, dict):
-            c = raw1.get("content", [])
-            if c:
-                results["getTickets_raw"] = str(c[0])[:500]
     return results
 
 
@@ -628,3 +635,19 @@ async def knowledge_book_status():
 async def health():
     env_status = {v: bool(os.environ.get(v)) for v in REQUIRED_ENV}
     return {"status": "ok", "env": env_status}
+
+
+# ---------------------------------------------------------------------------
+# Serve Command Center frontend (React SPA)
+# Must be LAST — catches all unmatched routes and serves index.html
+# ---------------------------------------------------------------------------
+import pathlib as _pathlib
+
+_frontend_dist = _pathlib.Path(__file__).parent / "frontend" / "dist"
+if _frontend_dist.is_dir():
+    from fastapi.staticfiles import StaticFiles
+    app.mount(
+        "/",
+        StaticFiles(directory=str(_frontend_dist), html=True),
+        name="frontend",
+    )
