@@ -75,6 +75,8 @@ MODULE_IDS = {
 # Source option IDs
 SOURCE_ZOHO_TICKET = "9b678f29-3b49-4842-9305-ada436cfc0b3"
 SOURCE_FIELD_FEEDBACK = "ef5fcb3c-c27d-443c-bef2-32be1521baf1"
+# Support Widget -- uses Internal until a dedicated option is added in ClickUp
+SOURCE_SUPPORT_WIDGET = "ea82838e-f5ee-4cc6-b5d3-da4ef9052343"
 
 # ClickUp user IDs
 CLICKUP_USER_SANJAY = 4434086

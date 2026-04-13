@@ -87,11 +87,11 @@ def _extract_zoho_ticket_id(task: dict) -> str | None:
 
 
 def update_clickup_status_finished(task_id: str) -> bool:
-    """Set ClickUp task status to FINISHED."""
+    """Set ClickUp task status to Closed."""
     try:
         r = httpx.put(
             f"{CLICKUP_BASE}/task/{task_id}",
-            json={"status": "FINISHED"},
+            json={"status": "Closed"},
             headers={
                 "Authorization": CLICKUP_API_TOKEN,
                 "Content-Type": "application/json",

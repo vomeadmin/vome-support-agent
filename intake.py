@@ -1,0 +1,556 @@
+"""
+intake.py
+
+Support widget intake conversation handler.
+Processes multi-turn conversations from the Django widget,
+searches KB, enforces completeness gate, and creates tickets.
+"""
+
+import json
+import re
+from pathlib import Path
+
+import anthropic
+
+from agent import (
+    _zoho_desk_call,
+    _unwrap_mcp_result,
+    fetch_crm_account,
+    post_to_zoho,
+    ZOHO_ORG_ID,
+)
+from clickup_tasks import (
+    create_clickup_task,
+    SOURCE_SUPPORT_WIDGET,
+)
+from kb_search import (
+    get_best_kb_match,
+    check_and_create_kb_task,
+    flag_stale_article,
+)
+from slack_ticket_brief import send_ticket_brief
+
+_client = anthropic.Anthropic()
+
+INTAKE_PROMPT = (Path(__file__).parent / "intake_prompt.md").read_text(encoding="utf-8")
+
+# Page path prefix -> module name mapping for auto-inference
+_PAGE_MODULE_MAP = {
+    "/admin/scheduling": "admin scheduling",
+    "/admin/settings": "admin settings",
+    "/admin/permissions": "admin permissions",
+    "/admin/dashboard": "admin dashboard",
+    "/opportunities": "opportunities",
+    "/reserve": "reserve schedule",
+    "/forms": "forms",
+    "/groups": "groups",
+    "/sites": "sites",
+    "/kiosk": "kiosk",
+    "/reports": "reports",
+    "/chat": "chat",
+    "/sequences": "sequences",
+    "/hours": "hour tracking",
+    "/kpi": "kpi dashboards",
+    "/integrations": "integrations",
+    "/categories": "categories",
+    "/email": "email communications",
+}
+
+REQUIRED_FIELDS = {
+    "affected_user_email": "Who is affected? Is this your own account or a specific volunteer's?",
+    "module": "Which part of Vome is this about?",
+    "description": "Can you describe what happened and what you expected to happen?",
+    "platform": "Is this on web, mobile, or both?",
+}
+
+
+# ---------------------------------------------------------------------------
+# Completeness gate
+# ---------------------------------------------------------------------------
+
+def check_completeness(
+    extracted: dict,
+    session_context: dict,
+) -> tuple[bool, list[str]]:
+    """Check if enough fields are present to create a ticket.
+
+    Returns (is_complete, list_of_missing_field_names).
+    Rule: 2+ missing = incomplete. 0-1 missing = complete (infer the rest).
+    """
+    missing = []
+
+    for field in REQUIRED_FIELDS:
+        val = extracted.get(field)
+        if not val or val == "null":
+            missing.append(field)
+
+    # Auto-fill from session context where possible
+    if "affected_user_email" in missing:
+        # If user_role is admin and no volunteer mentioned, default to self
+        if session_context.get("user_role") == "admin":
+            pass  # Let Claude ask, but don't count as hard missing
+    if extracted.get("affected_user_email") == "self":
+        extracted["affected_user_email"] = session_context.get("user_email", "self")
+        if "affected_user_email" in missing:
+            missing.remove("affected_user_email")
+
+    if "platform" in missing and session_context.get("platform"):
+        extracted["platform"] = session_context["platform"]
+        missing.remove("platform")
+
+    if "module" in missing:
+        inferred = _infer_module_from_page(session_context.get("current_page", ""))
+        if inferred:
+            extracted["module"] = inferred
+            missing.remove("module")
+
+    is_complete = len(missing) <= 1
+    return is_complete, missing
+
+
+def _infer_module_from_page(current_page: str) -> str | None:
+    """Try to infer the module from the current page URL path."""
+    if not current_page:
+        return None
+    page_lower = current_page.lower()
+    for prefix, module in _PAGE_MODULE_MAP.items():
+        if page_lower.startswith(prefix):
+            return module
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Message building
+# ---------------------------------------------------------------------------
+
+def _build_intake_messages(
+    message: str,
+    session_context: dict,
+    conversation_history: list,
+    attachments: list,
+    kb_context: str | None = None,
+) -> list[dict]:
+    """Build the Claude messages array from conversation history + new message."""
+    messages = []
+
+    # Replay conversation history as alternating user/assistant turns
+    for turn in conversation_history:
+        role = turn.get("role", "user")
+        content = turn.get("content", "")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+
+    # Build the new user message with context
+    user_content = message
+
+    # Inject session context on first turn
+    if not conversation_history:
+        ctx_lines = []
+        for key in ("user_email", "user_role", "org_name", "tier", "current_page", "platform"):
+            val = session_context.get(key)
+            if val:
+                ctx_lines.append(f"{key}: {val}")
+        if ctx_lines:
+            user_content = (
+                f"[Session context: {', '.join(ctx_lines)}]\n\n"
+                f"{message}"
+            )
+
+    # Include attachment info
+    if attachments:
+        att_note = f"\n\n[User attached {len(attachments)} file(s): {', '.join(attachments)}]"
+        user_content += att_note
+
+    # Include KB search results if available
+    if kb_context:
+        user_content += f"\n\n[KB search results: {kb_context}]"
+
+    messages.append({"role": "user", "content": user_content})
+
+    return messages
+
+
+def _build_system_prompt(session_context: dict) -> str:
+    """Build the system prompt with session context summary."""
+    return INTAKE_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Response parsing
+# ---------------------------------------------------------------------------
+
+def _parse_intake_response(response_text: str) -> tuple[str, dict]:
+    """Split Claude's response into reply text and structured JSON.
+
+    Returns (reply_text, parsed_json).
+    The JSON block is expected at the end of the response in a fenced block.
+    """
+    # Find the last ```json ... ``` block
+    pattern = r"```json\s*\n(.*?)\n\s*```"
+    matches = list(re.finditer(pattern, response_text, re.DOTALL))
+
+    if not matches:
+        # No JSON block found -- return full text with defaults
+        return response_text.strip(), {
+            "status": "collecting",
+            "extracted": {
+                "affected_user_email": None,
+                "module": None,
+                "platform": None,
+                "description": None,
+            },
+            "kb_query": None,
+            "issue_fingerprint": None,
+        }
+
+    last_match = matches[-1]
+    json_str = last_match.group(1)
+
+    # Reply text is everything before the JSON block
+    reply_text = response_text[:last_match.start()].strip()
+
+    try:
+        parsed = json.loads(json_str)
+    except json.JSONDecodeError:
+        parsed = {
+            "status": "collecting",
+            "extracted": {},
+            "kb_query": None,
+            "issue_fingerprint": None,
+        }
+
+    # Ensure extracted has all expected keys
+    extracted = parsed.get("extracted", {})
+    for key in ("affected_user_email", "module", "platform", "description"):
+        if key not in extracted:
+            extracted[key] = None
+    parsed["extracted"] = extracted
+
+    return reply_text, parsed
+
+
+# ---------------------------------------------------------------------------
+# Ticket creation
+# ---------------------------------------------------------------------------
+
+def _create_ticket_from_intake(
+    extracted: dict,
+    session_context: dict,
+    conversation_history: list,
+    attachments: list,
+) -> dict:
+    """Create a Zoho Desk ticket + ClickUp task from the completed intake.
+
+    Returns {"ticket_created": bool, "ticket_id": str | None}.
+    """
+    user_email = session_context.get("user_email", "")
+    org_name = session_context.get("org_name", "")
+    description = extracted.get("description", "No description provided")
+    module = extracted.get("module", "other")
+    platform = extracted.get("platform", session_context.get("platform", "web"))
+    affected_email = extracted.get("affected_user_email", user_email)
+
+    # Build conversation transcript for the ticket body
+    transcript_lines = []
+    for turn in conversation_history:
+        role = turn.get("role", "user")
+        content = turn.get("content", "")
+        label = "Customer" if role == "user" else "Support"
+        transcript_lines.append(f"{label}: {content}")
+    transcript = "\n\n".join(transcript_lines)
+
+    # Build ticket subject
+    subject = description[:120] if description else "Support request via widget"
+
+    # Create Zoho Desk ticket
+    ticket_body = {
+        "body": {
+            "subject": subject,
+            "description": (
+                f"Submitted via Support Widget\n\n"
+                f"Affected user: {affected_email}\n"
+                f"Module: {module}\n"
+                f"Platform: {platform}\n"
+                f"Organization: {org_name}\n\n"
+                f"--- Conversation Transcript ---\n\n"
+                f"{transcript}"
+            ),
+            "contactId": None,  # Will be resolved by email
+            "email": affected_email if affected_email != "self" else user_email,
+            "channel": "CHAT",
+            "status": "Open",
+        },
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    }
+
+    result = _zoho_desk_call("ZohoDesk_createTicket", ticket_body)
+    ticket_data_raw = _unwrap_mcp_result(result)
+
+    if not ticket_data_raw or not isinstance(ticket_data_raw, dict):
+        print("[INTAKE] Failed to create Zoho ticket")
+        return {"ticket_created": False, "ticket_id": None}
+
+    ticket_id = str(ticket_data_raw.get("id", ""))
+    ticket_number = str(
+        ticket_data_raw.get("ticketNumber", "")
+    )
+
+    if not ticket_id:
+        print("[INTAKE] Zoho ticket creation returned no ID")
+        return {"ticket_created": False, "ticket_id": None}
+
+    print(f"[INTAKE] Zoho ticket created: #{ticket_number} (ID: {ticket_id})")
+
+    # Attach files if any
+    # (Attachments are S3 URLs -- Zoho will need them linked, but for now
+    #  we include them in the description. Full attachment API integration
+    #  can be added later.)
+
+    # CRM enrichment
+    crm = fetch_crm_account(user_email)
+
+    # Build ticket_data dict for ClickUp task creation
+    ticket_data = {
+        "ticket_id": ticket_id,
+        "ticket_number": ticket_number,
+        "subject": subject,
+        "body": description,
+        "contact_email": user_email,
+        "contact_name": "",  # Not always available from widget
+    }
+
+    # Build agent_response string for ClickUp parsing
+    # Format it in the way _parse_agent_response expects
+    agent_response = (
+        f"CLASSIFICATION: Bug\n"
+        f"MODULE: {module}\n"
+        f"PLATFORM: {platform}\n"
+        f"PRIORITY: P3\n"
+        f"ISSUE SUMMARY: {description}\n"
+        f"SUGGESTED OWNER: Backend\n"
+    )
+
+    # Use analysis-based routing for ClickUp
+    analysis = {
+        "category": "bug",  # Default; could be refined with a classification call
+        "complexity": "medium",
+        "client_tier": _map_tier_to_score(session_context.get("tier", "")),
+        "engineer_type": "backend",
+    }
+
+    zoho_url = f"https://desk.zoho.com/agent/vomevolunteer/tickets/{ticket_id}"
+
+    # Create ClickUp task
+    clickup_result = create_clickup_task(
+        ticket_data=ticket_data,
+        agent_response=agent_response,
+        crm=crm,
+        zoho_url=zoho_url,
+        source_option_id=SOURCE_SUPPORT_WIDGET,
+        analysis=analysis,
+    )
+
+    clickup_task_id = None
+    if clickup_result:
+        clickup_task_id = clickup_result.get("task_id")
+        print(f"[INTAKE] ClickUp task created: {clickup_task_id}")
+
+    # Post Slack ticket brief
+    try:
+        clickup_task_url = None
+        if clickup_result:
+            clickup_task_url = clickup_result.get("task_url")
+        send_ticket_brief(
+            ticket_id=ticket_id,
+            ticket_number=ticket_number,
+            subject=subject,
+            crm=crm,
+            agent_response=agent_response,
+            clickup_task_url=clickup_task_url,
+            zoho_ticket_url=zoho_url,
+            clickup_task_id=clickup_task_id,
+            contact_email=user_email,
+            issue_summary=description,
+            new_classification=analysis,
+        )
+    except Exception as e:
+        print(f"[INTAKE] Slack brief failed: {e}")
+
+    # Post internal note on Zoho ticket
+    try:
+        note = (
+            f"Ticket created via Support Widget\n\n"
+            f"Module: {module}\n"
+            f"Platform: {platform}\n"
+            f"Affected user: {affected_email}\n"
+            f"Org: {org_name} ({session_context.get('tier', 'unknown')} tier)\n"
+            f"Source page: {session_context.get('current_page', 'unknown')}\n"
+        )
+        if attachments:
+            note += f"\nAttachments: {', '.join(attachments)}\n"
+        post_to_zoho(ticket_id, note)
+    except Exception as e:
+        print(f"[INTAKE] Internal note failed: {e}")
+
+    return {"ticket_created": True, "ticket_id": ticket_id}
+
+
+def _map_tier_to_score(tier: str) -> str:
+    """Map plan tier name to the client_tier scoring label."""
+    tier_lower = (tier or "").strip().lower()
+    tier_map = {
+        "ultimate": "very-high",
+        "enterprise": "high",
+        "pro": "medium",
+        "recruit": "low",
+    }
+    return tier_map.get(tier_lower, "low")
+
+
+# ---------------------------------------------------------------------------
+# Main orchestrator
+# ---------------------------------------------------------------------------
+
+def run_intake_turn(
+    message: str,
+    session_context: dict,
+    conversation_history: list,
+    attachments: list | None = None,
+) -> dict:
+    """Process one turn of the intake conversation.
+
+    Returns the response dict to send back to Django:
+    {
+        "reply": str,
+        "status": "collecting" | "deflecting" | "confirming" | "complete",
+        "kb_article": {...} | None,
+        "ticket_created": bool,
+        "ticket_id": str | None,
+    }
+    """
+    attachments = attachments or []
+
+    # Step 1: Run Claude to get the conversational reply + structured data
+    kb_context = None
+    kb_article_response = None
+
+    # Check if previous turn had a kb_query we should search
+    # (We look at the last assistant message's JSON block)
+    prior_kb_query = _extract_prior_kb_query(conversation_history)
+    if prior_kb_query:
+        kb_match = get_best_kb_match(prior_kb_query)
+        if kb_match:
+            kb_context = json.dumps(kb_match)
+            kb_article_response = {
+                "title": kb_match["title"],
+                "url": kb_match["url"],
+                "days_stale": kb_match["days_stale"],
+            }
+
+    messages = _build_intake_messages(
+        message=message,
+        session_context=session_context,
+        conversation_history=conversation_history,
+        attachments=attachments,
+        kb_context=kb_context,
+    )
+
+    system_prompt = _build_system_prompt(session_context)
+
+    try:
+        response = _client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            system=system_prompt,
+            messages=messages,
+        )
+        response_text = response.content[0].text
+    except Exception as e:
+        print(f"[INTAKE] Claude call failed: {e}")
+        return {
+            "reply": "I'm having trouble processing your request right now. Please try again in a moment.",
+            "status": "collecting",
+            "kb_article": None,
+            "ticket_created": False,
+            "ticket_id": None,
+        }
+
+    # Step 2: Parse the response
+    reply_text, parsed = _parse_intake_response(response_text)
+    extracted = parsed.get("extracted", {})
+    status = parsed.get("status", "collecting")
+    kb_query = parsed.get("kb_query")
+    issue_fingerprint = parsed.get("issue_fingerprint")
+
+    # Step 3: If this is the first turn and Claude generated a kb_query, search now
+    if kb_query and not prior_kb_query and not kb_article_response:
+        kb_match = get_best_kb_match(kb_query)
+        if kb_match:
+            kb_article_response = {
+                "title": kb_match["title"],
+                "url": kb_match["url"],
+                "days_stale": kb_match["days_stale"],
+            }
+            # If stale, flag it
+            if kb_match["action"] == "flag_stale":
+                flag_stale_article(kb_match)
+                kb_article_response = None  # Don't show stale articles
+
+    # Step 4: Apply completeness gate
+    is_complete, missing = check_completeness(extracted, session_context)
+
+    # Override status based on completeness
+    if status == "complete":
+        # User confirmed -- create the ticket
+        ticket_result = _create_ticket_from_intake(
+            extracted=extracted,
+            session_context=session_context,
+            conversation_history=conversation_history,
+            attachments=attachments,
+        )
+
+        # Log unmatched issue for KB gap tracking
+        if issue_fingerprint and not kb_article_response:
+            check_and_create_kb_task(
+                fingerprint=issue_fingerprint,
+                org_id=session_context.get("org_id"),
+                user_email=session_context.get("user_email"),
+            )
+
+        return {
+            "reply": reply_text,
+            "status": "complete",
+            "kb_article": kb_article_response,
+            "ticket_created": ticket_result.get("ticket_created", False),
+            "ticket_id": ticket_result.get("ticket_id"),
+        }
+
+    elif status == "confirming" and not is_complete:
+        # Claude thinks we're ready but completeness gate says no
+        status = "collecting"
+
+    # Log unmatched issues on each turn where we have a fingerprint
+    if issue_fingerprint and not kb_article_response and status not in ("deflecting",):
+        check_and_create_kb_task(
+            fingerprint=issue_fingerprint,
+            org_id=session_context.get("org_id"),
+            user_email=session_context.get("user_email"),
+        )
+
+    return {
+        "reply": reply_text,
+        "status": status,
+        "kb_article": kb_article_response,
+        "ticket_created": False,
+        "ticket_id": None,
+    }
+
+
+def _extract_prior_kb_query(conversation_history: list) -> str | None:
+    """Extract the kb_query from the last assistant message's JSON block."""
+    for turn in reversed(conversation_history):
+        if turn.get("role") == "assistant":
+            content = turn.get("content", "")
+            _, parsed = _parse_intake_response(content)
+            return parsed.get("kb_query")
+    return None

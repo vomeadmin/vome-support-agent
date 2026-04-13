@@ -2113,12 +2113,12 @@ def handle_reply(event: dict):
             # Close Zoho ticket and finish ClickUp task
             _zoho_set_status(ticket_id, "Closed")
             if clickup_task_id:
-                _cu_update_task(clickup_task_id, {"status": "FINISHED"})
+                _cu_update_task(clickup_task_id, {"status": "Closed"})
             _reply(
                 channel, thread_ts,
                 "✓ Sent to client\n"
                 "✓ Zoho ticket closed\n"
-                "✓ ClickUp marked FINISHED",
+                "✓ ClickUp marked Closed",
             )
         elif clickup_task_id:
             if is_on_prod:
@@ -2140,7 +2140,7 @@ def handle_reply(event: dict):
                     channel, thread_ts,
                     "✓ Sent to client\n"
                     "✓ Zoho ticket closed\n"
-                    "✓ ClickUp marked FINISHED",
+                    "✓ ClickUp marked Closed",
                 )
             else:
                 _reply(
@@ -2721,11 +2721,11 @@ def handle_reply(event: dict):
         zoho_url = f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
         status_ok = _zoho_set_status(ticket_id, "Closed")
         if clickup_task_id:
-            _cu_update_task(clickup_task_id, {"status": "FINISHED"})
+            _cu_update_task(clickup_task_id, {"status": "Closed"})
         _set_thread_status(thread_ts, "handled")
         if status_ok:
             cu_line = (
-                "\n✓ ClickUp marked FINISHED"
+                "\n✓ ClickUp marked Closed"
                 if clickup_task_id else ""
             )
             _reply(

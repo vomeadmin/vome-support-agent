@@ -789,50 +789,68 @@ def update_zoho_ticket_assignment(
 
 # -- Auto-acknowledgment reply templates --
 
+_WIDGET_TIP_EN = (
+    "\n\nTip: For faster support, use the help widget inside your "
+    "Vome dashboard. It can often resolve issues instantly!"
+)
+
 _ACK_TEMPLATES_EN = [
     (
         "Hi {name}, thanks for reaching out. We've received your message "
-        "and our team is reviewing it. We'll follow up shortly.\n"
+        "and our team is reviewing it. We'll follow up shortly."
+        "{widget_tip}\n\n"
         "Best,\n\nVome team\nsupport.vomevolunteer.com"
     ),
     (
         "Hi {name}, we've got this and are looking into it. "
-        "You'll hear from us soon.\n"
+        "You'll hear from us soon."
+        "{widget_tip}\n\n"
         "Best,\n\nVome team\nsupport.vomevolunteer.com"
     ),
     (
         "Hi {name}, thanks for flagging this. Our team is on it "
-        "and we'll get back to you with an update.\n"
+        "and we'll get back to you with an update."
+        "{widget_tip}\n\n"
         "Best,\n\nVome team\nsupport.vomevolunteer.com"
     ),
     (
         "Hi {name}, this has been received and is being reviewed "
-        "by our team. We'll be in touch shortly.\n"
+        "by our team. We'll be in touch shortly."
+        "{widget_tip}\n\n"
         "Best,\n\nVome team\nsupport.vomevolunteer.com"
     ),
 ]
+
+_WIDGET_TIP_FR = (
+    "\n\nAstuce: Pour un support plus rapide, utilisez le widget d'aide "
+    "dans votre tableau de bord Vome!"
+)
 
 _ACK_TEMPLATES_FR = [
     (
         "Bonjour {name}, merci de nous avoir contactes. Nous avons bien "
         "recu votre message et notre equipe l'examine. Nous reviendrons "
-        "vers vous sous peu.\n"
+        "vers vous sous peu."
+        "{widget_tip}\n\n"
         "Cordialement,\n\nVome team\nsupport.vomevolunteer.com"
     ),
     (
         "Bonjour {name}, nous avons bien pris note de votre demande "
-        "et notre equipe s'en occupe. Vous aurez de nos nouvelles bientot.\n"
+        "et notre equipe s'en occupe. Vous aurez de nos nouvelles bientot."
+        "{widget_tip}\n\n"
         "Cordialement,\n\nVome team\nsupport.vomevolunteer.com"
     ),
     (
         "Bonjour {name}, merci d'avoir signale ceci. Notre equipe "
-        "examine la situation et nous vous tiendrons informe.\n"
+        "examine la situation et nous vous tiendrons informe."
+        "{widget_tip}\n\n"
         "Cordialement,\n\nVome team\nsupport.vomevolunteer.com"
     ),
     (
         "Bonjour {name}, votre demande a bien ete recue et est "
         "en cours d'examen par notre equipe. Nous vous recontacterons "
-        "rapidement.\n"
+        "rapidement."
+        "{widget_tip}\n\n"
         "Cordialement,\n\nVome team\nsupport.vomevolunteer.com"
     ),
 ]
@@ -934,7 +952,14 @@ def send_auto_acknowledgment(
 
     is_french = detected_lang == "French"
     templates = _ACK_TEMPLATES_FR if is_french else _ACK_TEMPLATES_EN
-    reply = random.choice(templates).format(name=first_name)
+
+    # Only include widget tip if the feature is enabled
+    show_widget_tip = os.environ.get("ENABLE_WIDGET_TIP", "").lower() == "true"
+    if show_widget_tip:
+        tip = _WIDGET_TIP_FR if is_french else _WIDGET_TIP_EN
+    else:
+        tip = ""
+    reply = random.choice(templates).format(name=first_name, widget_tip=tip)
 
     # Auto-ack is a clean acknowledgment only — never ask for more info.
     # If more details are needed, Sam handles that in a manual reply.
@@ -1179,6 +1204,135 @@ def _has_agent_reply(conversations_result) -> bool:
     return False
 
 
+def _email_completeness_gate(
+    ticket_id: str,
+    body: str,
+    subject: str,
+    contact_email: str,
+    contact_name: str,
+    detected_lang: str | None = None,
+    has_attachments: bool = False,
+) -> bool:
+    """Check if an email ticket has enough context to process.
+
+    If the ticket body is very sparse (under ~30 words, no attachments),
+    send a reply asking for more details and set the ticket to On Hold.
+
+    Returns True if the ticket was parked (caller should stop processing).
+    Returns False if the ticket has enough context to proceed.
+    """
+    # Don't gate tickets with attachments -- screenshots count as context
+    if has_attachments:
+        return False
+
+    # Don't gate if there's no contact email to reply to
+    if not contact_email:
+        return False
+
+    # Count meaningful words in body
+    combined = f"{subject} {body}".strip()
+    words = [w for w in combined.split() if len(w) > 1]
+    word_count = len(words)
+
+    # If the message has 30+ words, it probably has enough context
+    if word_count >= 30:
+        return False
+
+    # Check how many of the required fields we can extract
+    # from the subject + body text alone
+    has_description = word_count >= 10
+    has_platform = any(
+        p in combined.lower()
+        for p in ("web", "mobile", "app", "browser", "phone", "iphone", "android")
+    )
+    has_module_hint = any(
+        m in combined.lower()
+        for m in (
+            "schedul", "volunteer", "hour", "login", "password",
+            "register", "signup", "sign up", "kiosk", "report",
+            "form", "group", "permission", "setting", "dashboard",
+            "opportunity", "sequence", "email", "chat", "site",
+        )
+    )
+
+    fields_present = sum([has_description, has_platform, has_module_hint])
+
+    # If we have at least 2 identifiable fields, proceed normally
+    if fields_present >= 2:
+        return False
+
+    # Ticket is too sparse -- send a reply asking for more info
+    print(
+        f"[COMPLETENESS] Ticket {ticket_id} is sparse "
+        f"({word_count} words, {fields_present} fields) "
+        f"-- sending follow-up request"
+    )
+
+    is_french = detected_lang == "French"
+    first_name = (contact_name or "").split()[0] if contact_name else ""
+
+    if is_french:
+        reply = (
+            f"Bonjour{' ' + first_name if first_name else ''},\n\n"
+            "Merci de nous avoir contactes! Pour que nous puissions "
+            "vous aider le plus rapidement possible, pourriez-vous "
+            "nous fournir quelques details supplementaires?\n\n"
+            "1. Quelle partie de Vome est concernee?\n"
+            "2. Que s'est-il passe exactement et qu'attendiez-vous?\n"
+            "3. Utilisez-vous le site web ou l'application mobile?\n\n"
+            "Si possible, une capture d'ecran nous aiderait "
+            "beaucoup.\n\n"
+            "Merci!\n\n"
+            "Best,\n\nVome team\nsupport.vomevolunteer.com"
+        )
+    else:
+        reply = (
+            f"Hi{' ' + first_name if first_name else ''},\n\n"
+            "Thanks for reaching out! To help you as quickly as "
+            "possible, could you share a few more details?\n\n"
+            "1. Which part of Vome is this about?\n"
+            "2. What happened vs. what you expected?\n"
+            "3. Are you using the website or mobile app?\n\n"
+            "A screenshot would also be really helpful if "
+            "you have one.\n\n"
+            "Thanks!\n\n"
+            "Best,\n\nVome team\nsupport.vomevolunteer.com"
+        )
+
+    # Send the reply
+    result = _zoho_desk_call("ZohoDesk_sendReply", {
+        "body": {
+            "channel": "EMAIL",
+            "fromEmailAddress": ZOHO_FROM_ADDRESS,
+            "to": contact_email,
+            "content": reply,
+            "contentType": "plainText",
+        },
+        "path_variables": {"ticketId": str(ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+
+    if result:
+        data = _unwrap_mcp_result(result)
+        if isinstance(data, dict) and data.get("errorCode"):
+            print(f"[COMPLETENESS] Reply send failed: {data}")
+            return False
+        print(f"[COMPLETENESS] Follow-up sent on ticket {ticket_id}")
+    else:
+        print(f"[COMPLETENESS] Reply send failed on ticket {ticket_id}")
+        return False
+
+    # Set ticket to On Hold
+    _zoho_desk_call("ZohoDesk_updateTicket", {
+        "body": {"status": "On Hold"},
+        "path_variables": {"ticketId": str(ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+    print(f"[COMPLETENESS] Ticket {ticket_id} set to On Hold")
+
+    return True
+
+
 def process_ticket(ticket_data: dict) -> str | None:
     """Process a Zoho Desk ticket through the support agent."""
     ticket_id = ticket_data.get("ticket_id", "unknown")
@@ -1289,6 +1443,22 @@ def process_ticket(ticket_data: dict) -> str | None:
         )
     else:
         attachment_note = ""
+
+    # Email fallback completeness gate: if the ticket body is very
+    # sparse and we can identify the contact, ask for more info
+    # before running the full agent pipeline.
+    # Gated behind ENABLE_EMAIL_COMPLETENESS_GATE env var.
+    if os.environ.get("ENABLE_EMAIL_COMPLETENESS_GATE", "").lower() == "true":
+        if _email_completeness_gate(
+            ticket_id=ticket_id,
+            body=body,
+            subject=subject,
+            contact_email=contact_email,
+            contact_name=contact_name,
+            detected_lang=detected_lang,
+            has_attachments=attachment_info["has_attachments"],
+        ):
+            return "parked_incomplete"
 
     # Extract latest client message for classification focus
     latest_client_msg = _get_latest_client_message_full(

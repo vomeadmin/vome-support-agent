@@ -15,6 +15,8 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request, Response
 
 from agent import process_ticket, process_ticket_update, sync_zoho_to_clickup
+from intake import run_intake_turn
+from kb_search import run_kb_health_scan
 from clickup_assignee_handler import handle_assignee_updated
 from clickup_needs_review_handler import handle_needs_review
 from clickup_waiting_client_handler import handle_waiting_on_client
@@ -102,6 +104,10 @@ _scheduler = BackgroundScheduler(timezone="America/Montreal")
 _scheduler.add_job(
     send_daily_digest,
     CronTrigger(hour=17, minute=0, timezone="America/Montreal"),
+)
+_scheduler.add_job(
+    run_kb_health_scan,
+    CronTrigger(day_of_week="mon", hour=9, minute=0, timezone="America/Montreal"),
 )
 _scheduler.start()
 
@@ -373,6 +379,22 @@ async def clickup_status_webhook(request: Request):
             break
 
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Support widget intake
+# ---------------------------------------------------------------------------
+
+@app.post("/chat/intake")
+async def chat_intake(request: Request):
+    body = await request.json()
+    result = run_intake_turn(
+        message=body.get("message", ""),
+        session_context=body.get("session_context", {}),
+        conversation_history=body.get("conversation_history", []),
+        attachments=body.get("attachments", []),
+    )
+    return result
 
 
 @app.get("/health")

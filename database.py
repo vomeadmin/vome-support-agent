@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Column,
     DateTime,
+    Integer,
     MetaData,
     String,
     Table,
@@ -53,6 +54,17 @@ ticket_threads = Table(
     Column("close_after_send", String, default="false"),
     Column("created_at", DateTime, default=datetime.now(timezone.utc)),
     Column("updated_at", DateTime, default=datetime.now(timezone.utc)),
+)
+
+
+kb_deflection_log = Table(
+    "kb_deflection_log",
+    _metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("issue_fingerprint", String, nullable=False, index=True),
+    Column("org_id", String, nullable=True),
+    Column("user_email", String, nullable=True),
+    Column("created_at", DateTime, default=datetime.now(timezone.utc)),
 )
 
 
