@@ -526,8 +526,15 @@ def run_intake_turn(
         }
 
     elif status == "confirming" and not is_complete:
-        # Claude thinks we're ready but completeness gate says no
-        status = "collecting"
+        # Claude thinks we're ready but completeness gate says no.
+        # Exception: if we have at least a description, allow it
+        # through (frustrated user early exit -- Claude detected
+        # frustration and is wrapping up with what it has).
+        has_description = bool(
+            extracted.get("description")
+        )
+        if not has_description:
+            status = "collecting"
 
     # Log unmatched issues on each turn where we have a fingerprint
     if issue_fingerprint and not kb_article_response and status not in ("deflecting",):
