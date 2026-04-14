@@ -85,12 +85,12 @@ def fetch_all_ticket_ids() -> list[dict]:
         print(f"[FETCH] Fetching tickets offset={offset}...")
 
         # Zoho MCP requires departmentId to list tickets
-        # Also need status=All to get closed tickets (default is open only)
+        # Explicitly list all statuses to get closed/resolved tickets
         result = _zoho_desk_call("ZohoDesk_getTickets", {
             "query_params": {
                 "orgId": str(ZOHO_ORG_ID),
                 "departmentId": "569440000000006907",
-                "status": "All",
+                "status": "Open,Closed,On Hold,Escalated",
                 "from": str(offset),
                 "limit": "100",
                 "sortBy": "createdTime",

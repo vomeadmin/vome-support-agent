@@ -516,8 +516,9 @@ async def debug_test_ticket_fetch():
         "query_params": {
             "orgId": str(ZOHO_ORG_ID),
             "departmentId": "569440000000006907",
+            "status": "Open,Closed,On Hold,Escalated",
             "from": "0",
-            "limit": "5",
+            "limit": "100",
         },
     })
     results["getTickets_type"] = str(type(raw1))
