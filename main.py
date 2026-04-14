@@ -508,19 +508,21 @@ async def chat_auth_bypass(request: Request):
 
 
 @app.get("/debug/test-ticket-fetch")
-async def debug_test_ticket_fetch():
+async def debug_test_ticket_fetch(request: Request):
     """Test fetching tickets -- shows raw MCP response."""
     from agent import _zoho_desk_call, _unwrap_mcp_result, ZOHO_ORG_ID
     results = {}
+    offset = int(request.query_params.get("offset", "0"))
     raw1 = _zoho_desk_call("ZohoDesk_getTickets", {
         "query_params": {
             "orgId": str(ZOHO_ORG_ID),
             "departmentId": "569440000000006907",
             "status": "Open,Closed,On Hold,Escalated",
-            "from": "0",
+            "from": str(offset),
             "limit": "100",
         },
     })
+    results["offset_requested"] = offset
     results["getTickets_type"] = str(type(raw1))
     results["getTickets_isError"] = bool(
         isinstance(raw1, dict) and raw1.get("isError")

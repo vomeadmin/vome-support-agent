@@ -281,31 +281,39 @@ def _create_ticket_from_intake(
     subject = description[:120] if description else "Support request via widget"
 
     # Create Zoho Desk ticket
+    final_email = (
+        affected_email if affected_email and affected_email != "self"
+        else user_email
+    )
     ticket_body = {
         "body": {
             "subject": subject,
             "description": (
                 f"Submitted via Support Widget\n\n"
-                f"Affected user: {affected_email}\n"
+                f"Affected user: {affected_email or user_email}\n"
                 f"Module: {module}\n"
                 f"Platform: {platform}\n"
                 f"Organization: {org_name}\n\n"
                 f"--- Conversation Transcript ---\n\n"
                 f"{transcript}"
             ),
-            "contactId": None,  # Will be resolved by email
-            "email": affected_email if affected_email != "self" else user_email,
-            "channel": "CHAT",
+            "email": final_email,
+            "channel": "Chat",
             "status": "Open",
+            "departmentId": "569440000000006907",
         },
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
     }
 
+    print(
+        f"[INTAKE] Creating Zoho ticket for {final_email} "
+        f"-- subject: {subject[:80]}"
+    )
     result = _zoho_desk_call("ZohoDesk_createTicket", ticket_body)
     ticket_data_raw = _unwrap_mcp_result(result)
 
     if not ticket_data_raw or not isinstance(ticket_data_raw, dict):
-        print("[INTAKE] Failed to create Zoho ticket")
+        print(f"[INTAKE] Failed to create Zoho ticket. Raw: {result}")
         return {"ticket_created": False, "ticket_id": None}
 
     ticket_id = str(ticket_data_raw.get("id", ""))
@@ -314,7 +322,10 @@ def _create_ticket_from_intake(
     )
 
     if not ticket_id:
-        print("[INTAKE] Zoho ticket creation returned no ID")
+        print(
+            f"[INTAKE] Zoho ticket creation returned no ID. "
+            f"Response: {ticket_data_raw}"
+        )
         return {"ticket_created": False, "ticket_id": None}
 
     print(f"[INTAKE] Zoho ticket created: #{ticket_number} (ID: {ticket_id})")
