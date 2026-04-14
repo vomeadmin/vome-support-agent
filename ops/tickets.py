@@ -36,6 +36,7 @@ from ops.zoho_sync import (
 FIELD_AUTO_SCORE = "fd77f978-eca8-499e-bc3c-dc1bf4b8181e"
 FIELD_HIGHEST_TIER = "be348a1d-6a63-4da8-83bb-9038b24264ff"
 FIELD_COMBINED_ARR = "29c41859-f24b-4143-9af4-a34202205641"
+FIELD_REQUESTING_CLIENTS = "e2de3bd0-6ad9-4b31-bb09-104f6bef383d"
 
 # Priority list IDs
 LIST_PRIORITY_QUEUE = os.environ.get("CLICKUP_PRIORITY_QUEUE_ID", "901113386257")
@@ -271,11 +272,52 @@ def fetch_active_tickets(
 
         contact = zoho.get("contact") or {}
         contact_email = contact.get("email", "")
-        org_name = crm.get("org_name", "") or crm.get("account_name", "")
+        account = zoho.get("account") or {}
+        org_name = (
+            account.get("accountName", "")
+            or crm.get("org_name", "")
+            or crm.get("account_name", "")
+        )
         tier = _normalize_tier(crm.get("offering"))
         arr = crm.get("arr", 0) or 0
         if isinstance(arr, str):
             arr = int(re.sub(r"[^\d]", "", arr) or "0")
+
+        # Enrich from ClickUp custom fields when Zoho/DB data is missing
+        cu_info = clickup_tasks_by_zoho_id.get(tid)
+        cu_task_raw = cu_info.get("_cu_task") if cu_info else None
+        if cu_task_raw:
+            if not org_name:
+                # Try Requesting Clients custom field
+                rc = extract_custom_field_value(
+                    cu_task_raw, FIELD_REQUESTING_CLIENTS
+                )
+                if rc:
+                    org_name = str(rc)
+            if not org_name:
+                # Try to extract [Org Name] from task name
+                m = re.match(r"\[([^\]]+)\]", cu_task_raw.get("name", ""))
+                if m:
+                    org_name = m.group(1)
+            if tier == "Unknown":
+                tier_val = extract_custom_field_value(
+                    cu_task_raw, FIELD_HIGHEST_TIER
+                )
+                if isinstance(tier_val, dict):
+                    tier = _normalize_tier(
+                        tier_val.get("name", "")
+                    )
+                elif tier_val:
+                    tier = _normalize_tier(str(tier_val))
+            if not arr:
+                arr_val = extract_custom_field_value(
+                    cu_task_raw, FIELD_COMBINED_ARR
+                )
+                if arr_val:
+                    try:
+                        arr = int(float(str(arr_val)))
+                    except (ValueError, TypeError):
+                        pass
 
         # Timestamps
         last_activity = (
@@ -373,6 +415,25 @@ def fetch_active_tickets(
         # Language detection
         language = classification.get("language", "en")
 
+        # Determine if this ticket needs Sam's attention.
+        # Dev owns it if ClickUp status shows active dev work
+        # UNLESS ClickUp is "needs review" or "waiting on client"
+        # (those mean the dev kicked it back to Sam).
+        sam_statuses = {"needs review", "waiting on client"}
+        dev_statuses = {"in progress", "queued", "on dev", "on prod"}
+        if cu_task_id and cu_status in dev_statuses:
+            needs_sam = False
+        elif cu_task_id and cu_status in sam_statuses:
+            needs_sam = True
+        elif zoho_status_normalized == "final_review":
+            needs_sam = True
+        elif zoho_status_normalized == "new" and not cu_task_id:
+            needs_sam = True  # untriaged, no ClickUp task
+        elif not cu_task_id:
+            needs_sam = True  # no ClickUp link, Sam owns it
+        else:
+            needs_sam = True  # default: show it
+
         ticket_out = {
             "zoho_ticket_id": tid,
             "zoho_ticket_number": t.get("zoho_ticket_number", ""),
@@ -402,6 +463,7 @@ def fetch_active_tickets(
             "language": language,
             "has_attachment": has_attachment,
             "resolved": zoho_status_normalized == "closed",
+            "needs_sam": needs_sam,
         }
 
         result_list.append(ticket_out)
@@ -524,6 +586,9 @@ def _fetch_clickup_active_tasks() -> list[dict]:
 def _apply_filter(tickets: list[dict], filter_type: str) -> list[dict]:
     """Apply dashboard filter tabs."""
     if filter_type == "all":
+        # Default view: only tickets that need Sam's attention
+        return [t for t in tickets if t.get("needs_sam") and not t["resolved"]]
+    if filter_type == "all_including_devs":
         return [t for t in tickets if not t["resolved"]]
     if filter_type == "p1":
         return [t for t in tickets if t["p_level"] == "P1"]

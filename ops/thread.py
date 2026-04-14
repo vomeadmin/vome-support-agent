@@ -13,7 +13,6 @@ from agent import (
     _zoho_desk_call,
     _unwrap_mcp_result,
     fetch_ticket_conversations,
-    fetch_ticket_from_zoho,
 )
 from database import get_thread_by_ticket_id
 from ops.zoho_sync import get_clickup_comments
@@ -28,7 +27,13 @@ def fetch_thread(zoho_ticket_id: str) -> dict:
     # -----------------------------------------------------------------------
     # Zoho ticket metadata
     # -----------------------------------------------------------------------
-    ticket_result = fetch_ticket_from_zoho(zoho_ticket_id)
+    ticket_result = _zoho_desk_call("ZohoDesk_getTicket", {
+        "path_variables": {"ticketId": str(zoho_ticket_id)},
+        "query_params": {
+            "orgId": str(ZOHO_ORG_ID),
+            "include": "contacts,assignee",
+        },
+    })
     ticket_data = _unwrap_mcp_result(ticket_result) if ticket_result else {}
     if not isinstance(ticket_data, dict):
         ticket_data = {}
@@ -46,16 +51,25 @@ def fetch_thread(zoho_ticket_id: str) -> dict:
     ticket_number = str(ticket_data.get("ticketNumber", ""))
     status = ticket_data.get("status", "")
 
-    # CRM data from DB
-    db_row = get_thread_by_ticket_id(zoho_ticket_id)
+    # CRM data from DB (graceful if DB is down)
     crm = {}
     clickup_task_id = ""
-    if db_row:
-        _, row_data = db_row
-        crm = row_data.get("crm", {})
-        clickup_task_id = row_data.get("clickup_task_id", "")
+    try:
+        db_row = get_thread_by_ticket_id(zoho_ticket_id)
+        if db_row:
+            _, row_data = db_row
+            crm = row_data.get("crm", {})
+            clickup_task_id = row_data.get("clickup_task_id", "")
+    except Exception:
+        pass
 
-    org_name = crm.get("org_name", "") or crm.get("account_name", "")
+    # Org name: try Zoho account field first, then CRM data
+    account = ticket_data.get("account") or {}
+    org_name = (
+        account.get("accountName", "")
+        or crm.get("org_name", "")
+        or crm.get("account_name", "")
+    )
     tier = crm.get("offering", "")
     arr = crm.get("arr", 0)
 
