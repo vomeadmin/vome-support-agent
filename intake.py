@@ -19,6 +19,12 @@ from agent import (
     post_to_zoho,
     ZOHO_ORG_ID,
 )
+from zoho_desk_api import (
+    create_ticket as zoho_create_ticket,
+    add_ticket_comment as zoho_add_comment,
+    find_or_create_contact as zoho_find_or_create_contact,
+    find_or_create_account as zoho_find_or_create_account,
+)
 from clickup_tasks import (
     create_clickup_task,
     SOURCE_SUPPORT_WIDGET,
@@ -280,40 +286,53 @@ def _create_ticket_from_intake(
     # Build ticket subject
     subject = description[:120] if description else "Support request via widget"
 
-    # Create Zoho Desk ticket
+    # Create Zoho Desk ticket via direct REST API
     final_email = (
         affected_email if affected_email and affected_email != "self"
         else user_email
     )
-    ticket_body = {
-        "body": {
-            "subject": subject,
-            "description": (
-                f"Submitted via Support Widget\n\n"
-                f"Affected user: {affected_email or user_email}\n"
-                f"Module: {module}\n"
-                f"Platform: {platform}\n"
-                f"Organization: {org_name}\n\n"
-                f"--- Conversation Transcript ---\n\n"
-                f"{transcript}"
-            ),
-            "email": final_email,
-            "channel": "Chat",
-            "status": "Open",
-            "departmentId": "569440000000006907",
-        },
-        "query_params": {"orgId": str(ZOHO_ORG_ID)},
-    }
+    ticket_description = (
+        f"Submitted via Support Widget\n\n"
+        f"Affected user: {affected_email or user_email}\n"
+        f"Module: {module}\n"
+        f"Platform: {platform}\n"
+        f"Organization: {org_name}\n\n"
+        f"--- Conversation Transcript ---\n\n"
+        f"{transcript}"
+    )
+
+    # Resolve Zoho Desk account + contact so the ticket is
+    # properly linked for search and client history.
+    account_id = None
+    contact_id = None
+
+    if org_name:
+        account = zoho_find_or_create_account(org_name)
+        if account:
+            account_id = str(account.get("id", ""))
+
+    contact = zoho_find_or_create_contact(
+        email=final_email,
+        account_id=account_id,
+    )
+    if contact:
+        contact_id = str(contact.get("id", ""))
 
     print(
         f"[INTAKE] Creating Zoho ticket for {final_email} "
+        f"(contact={contact_id}, account={account_id}) "
         f"-- subject: {subject[:80]}"
     )
-    result = _zoho_desk_call("ZohoDesk_createTicket", ticket_body)
-    ticket_data_raw = _unwrap_mcp_result(result)
+    ticket_data_raw = zoho_create_ticket(
+        subject=subject,
+        description=ticket_description,
+        email=final_email,
+        contact_id=contact_id,
+        account_id=account_id,
+    )
 
     if not ticket_data_raw or not isinstance(ticket_data_raw, dict):
-        print(f"[INTAKE] Failed to create Zoho ticket. Raw: {result}")
+        print(f"[INTAKE] Failed to create Zoho ticket.")
         return {"ticket_created": False, "ticket_id": None}
 
     ticket_id = str(ticket_data_raw.get("id", ""))
@@ -328,7 +347,10 @@ def _create_ticket_from_intake(
         )
         return {"ticket_created": False, "ticket_id": None}
 
-    print(f"[INTAKE] Zoho ticket created: #{ticket_number} (ID: {ticket_id})")
+    print(
+        f"[INTAKE] Zoho ticket created: "
+        f"#{ticket_number} (ID: {ticket_id})"
+    )
 
     # Attach files if any
     # (Attachments are S3 URLs -- Zoho will need them linked, but for now
@@ -405,19 +427,21 @@ def _create_ticket_from_intake(
     except Exception as e:
         print(f"[INTAKE] Slack brief failed: {e}")
 
-    # Post internal note on Zoho ticket
+    # Post internal note on Zoho ticket (direct API)
     try:
         note = (
             f"Ticket created via Support Widget\n\n"
             f"Module: {module}\n"
             f"Platform: {platform}\n"
             f"Affected user: {affected_email}\n"
-            f"Org: {org_name} ({session_context.get('tier', 'unknown')} tier)\n"
-            f"Source page: {session_context.get('current_page', 'unknown')}\n"
+            f"Org: {org_name} "
+            f"({session_context.get('tier', 'unknown')} tier)\n"
+            f"Source page: "
+            f"{session_context.get('current_page', 'unknown')}\n"
         )
         if attachments:
             note += f"\nAttachments: {', '.join(attachments)}\n"
-        post_to_zoho(ticket_id, note)
+        zoho_add_comment(ticket_id, note)
     except Exception as e:
         print(f"[INTAKE] Internal note failed: {e}")
 
@@ -580,6 +604,21 @@ def run_intake_turn(
                 fingerprint=issue_fingerprint,
                 org_id=session_context.get("org_id"),
                 user_email=session_context.get("user_email"),
+            )
+
+        # If ticket creation failed, override Claude's optimistic reply
+        if not ticket_result.get("ticket_created"):
+            print(
+                f"[INTAKE] Ticket creation failed for "
+                f"{session_context.get('user_email')} — "
+                f"overriding reply text"
+            )
+            reply_text = (
+                "I'm sorry, I wasn't able to create your ticket "
+                "right now due to a system issue. Your conversation "
+                "has been saved — please try again in a few minutes, "
+                "or email us at support@vomevolunteer.com and we'll "
+                "follow up with you."
             )
 
         return {

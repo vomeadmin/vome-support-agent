@@ -416,48 +416,10 @@ async def chat_tickets(request: Request):
     if not email:
         return {"tickets": []}
 
-    from agent import _zoho_desk_call, _unwrap_mcp_result, ZOHO_ORG_ID
+    from zoho_desk_api import search_tickets
 
-    # Search tickets by contact email using doSearch
-    result = _zoho_desk_call("ZohoDesk_doSearch", {
-        "query_params": {
-            "orgId": str(ZOHO_ORG_ID),
-            "module": "tickets",
-            "searchStr": email,
-            "limit": "25",
-        },
-    })
-    if not result:
-        # Fallback: try searchTickets with departmentId
-        result = _zoho_desk_call("ZohoDesk_searchTickets", {
-            "query_params": {
-                "orgId": str(ZOHO_ORG_ID),
-                "departmentId": "569440000000006907",
-                "email": email,
-                "limit": "25",
-            },
-        })
-
-    raw = _unwrap_mcp_result(result)
-    if not raw:
-        return {"tickets": []}
-
-    ticket_list = []
-    items = raw.get("data", raw) if isinstance(raw, dict) else raw
-    if not isinstance(items, list):
-        items = []
-
-    for t in items:
-        ticket_list.append({
-            "ticket_id": str(t.get("id", "")),
-            "ticket_number": str(t.get("ticketNumber", "")),
-            "subject": t.get("subject", ""),
-            "status": t.get("status", ""),
-            "created_time": t.get("createdTime", ""),
-            "channel": t.get("channel", ""),
-        })
-
-    return {"tickets": ticket_list}
+    tickets = search_tickets(email)
+    return {"tickets": tickets}
 
 
 # ---------------------------------------------------------------------------
