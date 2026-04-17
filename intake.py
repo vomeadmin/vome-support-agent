@@ -254,6 +254,131 @@ def _parse_intake_response(response_text: str) -> tuple[str, dict]:
 
 
 # ---------------------------------------------------------------------------
+# Ticket formatting
+# ---------------------------------------------------------------------------
+
+def _generate_ticket_subject(
+    description: str,
+    conversation_history: list,
+) -> str:
+    """Generate a concise ticket subject from the conversation.
+
+    Uses Claude to produce a clean, short title that describes
+    the issue without including org names or user details.
+    """
+    # Collect only the user messages for context
+    user_msgs = [
+        t.get("content", "")
+        for t in conversation_history
+        if t.get("role") == "user" and t.get("content")
+    ]
+    context = "\n".join(user_msgs) if user_msgs else description
+
+    try:
+        response = _client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=60,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Write a short ticket subject line (under 80 chars) "
+                    "for this support issue. Be specific about the "
+                    "problem. Do NOT include organization names, "
+                    "user names, or emails. Just describe the bug "
+                    "or request.\n\n"
+                    f"{context[:500]}"
+                ),
+            }],
+        )
+        subject = response.content[0].text.strip()
+        # Remove any quotes Claude might wrap it in
+        subject = subject.strip('"').strip("'")
+        if len(subject) > 120:
+            subject = subject[:117] + "..."
+        return subject
+    except Exception as e:
+        print(f"[INTAKE] Subject generation failed: {e}")
+        # Fallback: use first user message, truncated
+        fallback = user_msgs[0] if user_msgs else description
+        if fallback and len(fallback) > 80:
+            fallback = fallback[:77] + "..."
+        return fallback or "Support request via widget"
+
+
+def _build_ticket_html(
+    description: str,
+    module: str,
+    platform: str,
+    affected_email: str,
+    conversation_history: list,
+    attachments: list,
+) -> str:
+    """Build a clean HTML ticket body for Zoho Desk."""
+    # Issue summary section
+    html = (
+        f"<h3>Issue</h3>"
+        f"<p>{_escape_html(description)}</p>"
+        f"<table border='0' cellpadding='4' cellspacing='0' "
+        f"style='border-collapse:collapse;'>"
+        f"<tr><td><b>Module</b></td><td>{_escape_html(module)}</td></tr>"
+        f"<tr><td><b>Platform</b></td>"
+        f"<td>{_escape_html(platform)}</td></tr>"
+        f"<tr><td><b>Affected user</b></td>"
+        f"<td>{_escape_html(affected_email)}</td></tr>"
+    )
+    if attachments:
+        att_links = ", ".join(
+            f"<a href='{a}'>{a.split('/')[-1]}</a>"
+            for a in attachments
+        )
+        html += (
+            f"<tr><td><b>Attachments</b></td>"
+            f"<td>{att_links}</td></tr>"
+        )
+    html += "</table>"
+
+    # Conversation transcript
+    html += "<h3>Conversation</h3>"
+    for turn in conversation_history:
+        role = turn.get("role", "user")
+        content = turn.get("content", "")
+        if not content:
+            continue
+
+        if role == "user":
+            label = "Customer"
+            color = "#1a73e8"
+        else:
+            label = "Vic (AI)"
+            color = "#666"
+
+        html += (
+            f"<div style='margin-bottom:12px;'>"
+            f"<b style='color:{color};'>{label}</b><br>"
+            f"<span>{_escape_html(content)}</span>"
+            f"</div>"
+        )
+
+    html += (
+        "<hr style='border:none;border-top:1px solid #ddd;'>"
+        "<p style='color:#999;font-size:11px;'>"
+        "Submitted via Support Widget</p>"
+    )
+
+    return html
+
+
+def _escape_html(text: str) -> str:
+    """Basic HTML escaping."""
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\n", "<br>")
+    )
+
+
+# ---------------------------------------------------------------------------
 # Ticket creation
 # ---------------------------------------------------------------------------
 
@@ -274,31 +399,25 @@ def _create_ticket_from_intake(
     platform = extracted.get("platform", session_context.get("platform", "web"))
     affected_email = extracted.get("affected_user_email", user_email)
 
-    # Build conversation transcript for the ticket body
-    transcript_lines = []
-    for turn in conversation_history:
-        role = turn.get("role", "user")
-        content = turn.get("content", "")
-        label = "Customer" if role == "user" else "Support"
-        transcript_lines.append(f"{label}: {content}")
-    transcript = "\n\n".join(transcript_lines)
-
-    # Build ticket subject
-    subject = description[:120] if description else "Support request via widget"
+    # Generate a clean ticket subject via Claude
+    subject = _generate_ticket_subject(
+        description, conversation_history,
+    )
 
     # Create Zoho Desk ticket via direct REST API
     final_email = (
         affected_email if affected_email and affected_email != "self"
         else user_email
     )
-    ticket_description = (
-        f"Submitted via Support Widget\n\n"
-        f"Affected user: {affected_email or user_email}\n"
-        f"Module: {module}\n"
-        f"Platform: {platform}\n"
-        f"Organization: {org_name}\n\n"
-        f"--- Conversation Transcript ---\n\n"
-        f"{transcript}"
+
+    # Build a clean HTML body for the ticket
+    ticket_description = _build_ticket_html(
+        description=description,
+        module=module,
+        platform=platform,
+        affected_email=affected_email or user_email,
+        conversation_history=conversation_history,
+        attachments=attachments,
     )
 
     # Resolve Zoho Desk account + contact so the ticket is
