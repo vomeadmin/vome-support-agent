@@ -624,6 +624,25 @@ def run_intake_turn(
                 "days_stale": kb_match["days_stale"],
             }
 
+    # Upfront KB search: run on the raw user message so Claude has
+    # KB results available on the very first turn (instead of waiting
+    # for Claude to emit a kb_query that only gets searched next turn).
+    if not kb_context and not prior_kb_query and message.strip():
+        upfront_match = _search_kb_combined(
+            message.strip(),
+            session_context.get("locale"),
+        )
+        if upfront_match:
+            if upfront_match["action"] == "flag_stale":
+                flag_stale_article(upfront_match)
+            else:
+                kb_context = json.dumps(upfront_match)
+                kb_article_response = {
+                    "title": upfront_match["title"],
+                    "url": upfront_match["url"],
+                    "days_stale": upfront_match["days_stale"],
+                }
+
     messages = _build_intake_messages(
         message=message,
         session_context=session_context,
