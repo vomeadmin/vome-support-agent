@@ -20,6 +20,11 @@ _token_lock = threading.Lock()
 _access_token: str = ""
 _token_expires_at: float = 0
 
+# Local cache: email -> contact_id (avoids duplicate creation)
+_contact_cache: dict[str, str] = {}
+# Local cache: org_name -> account_id
+_account_cache: dict[str, str] = {}
+
 
 def _refresh_access_token() -> str:
     """Exchange the refresh token for a fresh access token."""
@@ -169,13 +174,35 @@ def find_or_create_contact(
     last_name: str = "",
     account_id: str | None = None,
 ) -> dict | None:
-    """Look up a contact by email; create one if not found."""
+    """Look up a contact by email; create one if not found.
+
+    Uses a local cache to avoid creating duplicate contacts
+    when the search scope is unavailable.
+    """
+    email_lower = email.strip().lower()
+
+    # Check cache first
+    if email_lower in _contact_cache:
+        cached_id = _contact_cache[email_lower]
+        print(
+            f"[ZOHO-API] Contact cache hit: "
+            f"{cached_id} for {email_lower}"
+        )
+        return {"id": cached_id}
+
+    # Try searching (may fail with scope mismatch)
     contact = search_contact(email)
     if contact:
+        _contact_cache[email_lower] = str(contact["id"])
         return contact
-    return create_contact(
+
+    # Create new contact
+    contact = create_contact(
         email, first_name, last_name, account_id,
     )
+    if contact:
+        _contact_cache[email_lower] = str(contact["id"])
+    return contact
 
 
 # ---------------------------------------------------------------------------
@@ -228,13 +255,36 @@ def create_account(name: str) -> dict | None:
 
 
 def find_or_create_account(name: str) -> dict | None:
-    """Look up an account by name; create one if not found."""
+    """Look up an account by name; create one if not found.
+
+    Uses a local cache to avoid creating duplicate accounts
+    when the search scope is unavailable.
+    """
     if not name:
         return None
+
+    name_lower = name.strip().lower()
+
+    # Check cache first
+    if name_lower in _account_cache:
+        cached_id = _account_cache[name_lower]
+        print(
+            f"[ZOHO-API] Account cache hit: "
+            f"{cached_id} for {name_lower}"
+        )
+        return {"id": cached_id}
+
+    # Try searching (may fail with scope mismatch)
     account = search_account(name)
     if account:
+        _account_cache[name_lower] = str(account["id"])
         return account
-    return create_account(name)
+
+    # Create new account
+    account = create_account(name)
+    if account:
+        _account_cache[name_lower] = str(account["id"])
+    return account
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +327,20 @@ def create_ticket(
     if contact_id:
         payload["contactId"] = contact_id
     else:
-        payload["email"] = email
+        # Zoho Desk requires contactId — create a contact first
+        print(
+            f"[ZOHO-API] No contactId provided, "
+            f"creating contact for {email}"
+        )
+        contact = find_or_create_contact(email)
+        if contact:
+            payload["contactId"] = str(contact.get("id", ""))
+        else:
+            print(
+                f"[ZOHO-API] Could not create contact "
+                f"for {email} — ticket will likely fail"
+            )
+            payload["email"] = email
 
     if account_id:
         payload["accountId"] = account_id
@@ -307,36 +370,20 @@ def search_tickets(
 ) -> list[dict]:
     """Search Zoho Desk tickets by contact email.
 
+    Uses the contact's linked tickets endpoint, which is the
+    most reliable way to find tickets for a specific user.
+
     Returns a list of ticket summary dicts.
     """
-    # Primary: search by contact email using the contacts API
-    # to find tickets linked to this contact
-    contact = search_contact(email)
-    if contact:
-        contact_id = contact.get("id")
-        resp = _api_request(
-            "GET",
-            f"/contacts/{contact_id}/tickets",
-            params={
-                "limit": str(limit),
-                "sortBy": "createdTime",
-            },
-        )
-        if resp and resp.status_code == 200:
-            data = resp.json()
-            items = (
-                data.get("data", data)
-                if isinstance(data, dict) else data
-            )
-            if isinstance(items, list) and items:
-                return _normalize_ticket_list(items)
+    contact = find_or_create_contact(email)
+    if not contact:
+        return []
 
-    # Fallback: full-text search (catches tickets created
-    # with just an email string, not linked to a contact)
+    contact_id = contact.get("id")
     resp = _api_request(
-        "GET", "/tickets/search",
+        "GET",
+        f"/contacts/{contact_id}/tickets",
         params={
-            "searchStr": email,
             "limit": str(limit),
             "sortBy": "createdTime",
         },

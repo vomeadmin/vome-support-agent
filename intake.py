@@ -617,8 +617,8 @@ def run_intake_turn(
                 "I'm sorry, I wasn't able to create your ticket "
                 "right now due to a system issue. Your conversation "
                 "has been saved — please try again in a few minutes, "
-                "or email us at support@vomevolunteer.com and we'll "
-                "follow up with you."
+                "or email us at support@vomevolunteer.zohodesk.com "
+                "and we'll follow up with you."
             )
 
         return {
