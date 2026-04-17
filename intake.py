@@ -313,6 +313,8 @@ def _create_ticket_from_intake(
 
     contact = zoho_find_or_create_contact(
         email=final_email,
+        first_name=session_context.get("user_first_name", ""),
+        last_name=session_context.get("user_last_name", ""),
         account_id=account_id,
     )
     if contact:
