@@ -153,6 +153,7 @@ def _build_intake_messages(
     conversation_history: list,
     attachments: list,
     kb_context: str | None = None,
+    kb_searched_no_results: bool = False,
 ) -> list[dict]:
     """Build the Claude messages array from conversation history + new message."""
     messages = []
@@ -188,6 +189,15 @@ def _build_intake_messages(
     # Include KB search results if available
     if kb_context:
         user_content += f"\n\n[KB search results: {kb_context}]"
+    elif kb_searched_no_results:
+        user_content += (
+            "\n\n[KB was already searched for this message and "
+            "returned no relevant articles. Do NOT tell the user "
+            "'let me search' — the search is already done. "
+            "Proceed directly to either answering with what you "
+            "know, asking a targeted follow-up, or collecting "
+            "ticket info.]"
+        )
 
     messages.append({"role": "user", "content": user_content})
 
@@ -627,6 +637,7 @@ def run_intake_turn(
     # Upfront KB search: run on the raw user message so Claude has
     # KB results available on the very first turn (instead of waiting
     # for Claude to emit a kb_query that only gets searched next turn).
+    kb_searched_no_results = False
     if not kb_context and not prior_kb_query and message.strip():
         upfront_match = _search_kb_combined(
             message.strip(),
@@ -635,6 +646,7 @@ def run_intake_turn(
         if upfront_match:
             if upfront_match["action"] == "flag_stale":
                 flag_stale_article(upfront_match)
+                kb_searched_no_results = True
             else:
                 kb_context = json.dumps(upfront_match)
                 kb_article_response = {
@@ -642,6 +654,8 @@ def run_intake_turn(
                     "url": upfront_match["url"],
                     "days_stale": upfront_match["days_stale"],
                 }
+        else:
+            kb_searched_no_results = True
 
     messages = _build_intake_messages(
         message=message,
@@ -649,6 +663,7 @@ def run_intake_turn(
         conversation_history=conversation_history,
         attachments=attachments,
         kb_context=kb_context,
+        kb_searched_no_results=kb_searched_no_results,
     )
 
     system_prompt = _build_system_prompt(session_context)
