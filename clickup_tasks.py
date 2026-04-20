@@ -644,3 +644,69 @@ def remove_clickup_task_assignee(task_id: str) -> bool:
     except Exception as e:
         print(f"Failed to update ClickUp task {task_id}: {e}")
         return False
+
+
+def move_clickup_task(task_id: str, new_list_id: str) -> bool:
+    """Move a ClickUp task to a different list.
+
+    ClickUp has no atomic move; the pattern is add-to-new then remove-from-old.
+    Requires the "Tasks in Multiple Lists" ClickApp to be enabled on the
+    workspace. If the remove step fails after the add succeeds the task ends
+    up multi-homed — still reported as success since it is now in the target
+    list.
+    """
+    if not CLICKUP_API_TOKEN or not task_id or not new_list_id:
+        return False
+
+    new_list_id = str(new_list_id)
+    headers = {
+        "Authorization": CLICKUP_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+    try:
+        r = httpx.get(
+            f"{CLICKUP_BASE}/task/{task_id}",
+            headers=headers,
+            timeout=20,
+        )
+        r.raise_for_status()
+        old_list_id = str(r.json().get("list", {}).get("id", "") or "")
+    except Exception as e:
+        print(f"Failed to fetch current list for task {task_id}: {e}")
+        return False
+
+    if not old_list_id:
+        print(f"Task {task_id} has no resolvable list — aborting move")
+        return False
+
+    if old_list_id == new_list_id:
+        print(f"Task {task_id} already in list {new_list_id}")
+        return True
+
+    try:
+        r = httpx.post(
+            f"{CLICKUP_BASE}/list/{new_list_id}/task/{task_id}",
+            headers=headers,
+            timeout=20,
+        )
+        r.raise_for_status()
+    except Exception as e:
+        print(f"Failed to add task {task_id} to list {new_list_id}: {e}")
+        return False
+
+    try:
+        r = httpx.delete(
+            f"{CLICKUP_BASE}/list/{old_list_id}/task/{task_id}",
+            headers=headers,
+            timeout=20,
+        )
+        r.raise_for_status()
+    except Exception as e:
+        print(
+            f"Warning: task {task_id} added to {new_list_id}"
+            f" but remains in {old_list_id}: {e}"
+        )
+
+    print(f"ClickUp task {task_id} moved from {old_list_id} to {new_list_id}")
+    return True

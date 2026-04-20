@@ -21,6 +21,8 @@ import httpx
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
+from clickup_tasks import move_clickup_task
+
 # ---------------------------------------------------------------------------
 # Clients & config
 # ---------------------------------------------------------------------------
@@ -204,6 +206,7 @@ Here's what I can do when you @mention me:
 *`@Agent task [description]`* -- Create a ClickUp task. I'll use the thread context to fill in details.
 *`@Agent task for [name]`* -- Same, but assigned to a specific person (Sam, Sanjay, OnlyG, Ron).
 *`@Agent note`* -- Capture this conversation as a note in ClickUp (no assignee).
+*`@Agent move to [list]`* -- Move the task I created in this thread to a different list (e.g. "move to Admin Stuff").
 *`@Agent help`* -- Show this message.
 
 I'll pick the best ClickUp list based on the channel, or you can say things like "add to Frontend" or "put in Marketing / Blog posts" to override.\
@@ -379,6 +382,16 @@ def _extract_explicit_destination(text: str) -> str | None:
         if m:
             return m.group(1).strip()
     return None
+
+
+def _is_move_intent(text: str) -> bool:
+    """Detect a request to move an existing thread task to a different list."""
+    lower = text.lower().strip()
+    if re.search(r"\bmove\b", lower):
+        return True
+    if "wrong list" in lower:
+        return True
+    return False
 
 
 def _resolve_destination_with_claude(
@@ -782,7 +795,48 @@ def handle_agent_mention(event: dict) -> None:
 
     # --- Check if this thread already has a ClickUp task ---
     existing = _thread_tasks.get(thread_ts)
+    if not existing and not is_note and _is_move_intent(stripped):
+        _reply_in_thread(
+            channel, thread_ts,
+            "I don't have a task tracked for this thread to move."
+            " If I created a task here earlier, link it and I'll"
+            " pick it up; otherwise move it manually in ClickUp.",
+        )
+        return
     if existing and not is_note:
+        # Move the task if the user asked to move it
+        if _is_move_intent(stripped):
+            dest_hint = _extract_explicit_destination(stripped) or stripped
+            new_list_id, was_defaulted = _resolve_destination_with_claude(
+                user_text=stripped,
+                explicit_dest=dest_hint,
+                channel=channel,
+            )
+            if was_defaulted:
+                _reply_in_thread(
+                    channel, thread_ts,
+                    "Which list should I move it to? Try"
+                    " \"move to Admin Stuff\" or"
+                    " \"move to Raw Intake\".",
+                )
+                return
+            if move_clickup_task(existing["task_id"], new_list_id):
+                space_name, list_name = LIST_NAMES.get(
+                    new_list_id, ("Unknown", "Unknown")
+                )
+                _reply_in_thread(
+                    channel, thread_ts,
+                    f"Moved to {space_name} / {list_name}:\n"
+                    f"{existing['task_url']}",
+                )
+            else:
+                _reply_in_thread(
+                    channel, thread_ts,
+                    "Couldn't move the task — ClickUp API error."
+                    " Try moving it manually.",
+                )
+            return
+
         # Update the existing task instead of creating new
         result = _update_clickup_task(
             task_id=existing["task_id"],
