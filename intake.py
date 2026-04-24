@@ -13,11 +13,9 @@ from pathlib import Path
 import anthropic
 
 from agent import (
-    _zoho_desk_call,
-    _unwrap_mcp_result,
     fetch_crm_account,
-    post_to_zoho,
-    ZOHO_ORG_ID,
+    _run_auth_check,
+    _run_auth_bypass,
 )
 from zoho_desk_api import (
     create_ticket as zoho_create_ticket,
@@ -820,65 +818,6 @@ def _extract_prior_kb_query(conversation_history: list) -> str | None:
             _, parsed = _parse_intake_response(content)
             return parsed.get("kb_query")
     return None
-
-
-def _run_auth_check(email: str) -> dict | None:
-    """Check user auth status via the Django API."""
-    import os
-    import httpx
-
-    django_url = os.environ.get("DJANGO_API_URL", "")
-    api_key = os.environ.get("SUPPORT_API_KEY", "")
-    if not django_url or not api_key:
-        print("[AUTH] DJANGO_API_URL or SUPPORT_API_KEY not set")
-        return None
-
-    try:
-        resp = httpx.get(
-            f"{django_url}/api/support/auth-check/",
-            params={"email": email.strip()},
-            headers={"X-Support-Api-Key": api_key},
-            timeout=10,
-        )
-        result = resp.json()
-        print(
-            f"[AUTH] Check {email}: "
-            f"found={result.get('found')}, "
-            f"active={result.get('is_active')}, "
-            f"bypassable={result.get('is_bypassable')}"
-        )
-        return result
-    except Exception as e:
-        print(f"[AUTH] Check failed for {email}: {e}")
-        return None
-
-
-def _run_auth_bypass(email: str) -> dict | None:
-    """Activate a user's account via the Django API."""
-    import os
-    import httpx
-
-    django_url = os.environ.get("DJANGO_API_URL", "")
-    api_key = os.environ.get("SUPPORT_API_KEY", "")
-    if not django_url or not api_key:
-        return None
-
-    try:
-        resp = httpx.post(
-            f"{django_url}/api/support/auth-check/",
-            json={"email": email.strip(), "action": "bypass"},
-            headers={"X-Support-Api-Key": api_key},
-            timeout=10,
-        )
-        result = resp.json()
-        print(
-            f"[AUTH] Bypass {email}: "
-            f"bypassed={result.get('bypassed')}"
-        )
-        return result
-    except Exception as e:
-        print(f"[AUTH] Bypass failed for {email}: {e}")
-        return None
 
 
 def _search_kb_combined(

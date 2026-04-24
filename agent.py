@@ -895,6 +895,217 @@ def _ticket_is_sparse(body: str) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Auth bypass detection (email channel)
+# ---------------------------------------------------------------------------
+
+def _detect_auth_bypass_issue(subject: str, body: str) -> bool:
+    """Use Claude to detect if the ticket is about an email authentication problem."""
+    text = f"Subject: {subject}\n\nBody: {body or ''}".strip()
+    if not text:
+        return False
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=5,
+            system=(
+                "You determine whether a support ticket is about an "
+                "email authentication problem — for example: not "
+                "receiving a verification or activation code, can't "
+                "authenticate or verify their email address, account "
+                "not yet activated, or similar sign-up/login blockers. "
+                "Reply with only YES or NO."
+            ),
+            messages=[{"role": "user", "content": text}],
+        )
+        answer = response.content[0].text.strip().upper()
+        is_auth = answer.startswith("YES")
+        if is_auth:
+            print("[AUTH BYPASS] Claude detected auth issue")
+        return is_auth
+    except Exception as e:
+        print(f"[AUTH BYPASS] Detection failed: {e}")
+        return False
+
+
+def _run_auth_check(email: str) -> dict | None:
+    """Check user auth status via the Django API."""
+    django_url = os.environ.get("DJANGO_API_URL", "")
+    api_key = os.environ.get("SUPPORT_API_KEY", "")
+    if not django_url or not api_key:
+        print("[AUTH] DJANGO_API_URL or SUPPORT_API_KEY not set")
+        return None
+    try:
+        resp = httpx.get(
+            f"{django_url}/api/support/auth-check/",
+            params={"email": email.strip()},
+            headers={"X-Support-Api-Key": api_key},
+            timeout=10,
+        )
+        result = resp.json()
+        print(
+            f"[AUTH] Check {email}: "
+            f"found={result.get('found')}, "
+            f"active={result.get('is_active')}, "
+            f"bypassable={result.get('is_bypassable')}"
+        )
+        return result
+    except Exception as e:
+        print(f"[AUTH] Check failed for {email}: {e}")
+        return None
+
+
+def _run_auth_bypass(email: str) -> dict | None:
+    """Activate a user's account via the Django API."""
+    django_url = os.environ.get("DJANGO_API_URL", "")
+    api_key = os.environ.get("SUPPORT_API_KEY", "")
+    if not django_url or not api_key:
+        return None
+    try:
+        resp = httpx.post(
+            f"{django_url}/api/support/auth-check/",
+            json={"email": email.strip(), "action": "bypass"},
+            headers={"X-Support-Api-Key": api_key},
+            timeout=10,
+        )
+        result = resp.json()
+        print(f"[AUTH] Bypass {email}: bypassed={result.get('bypassed')}")
+        return result
+    except Exception as e:
+        print(f"[AUTH] Bypass failed for {email}: {e}")
+        return None
+
+
+def _send_auth_reply(ticket_id: str, to_email: str, content: str) -> None:
+    """Send an auth-specific reply via ZohoDesk email."""
+    _zoho_desk_call("ZohoDesk_sendReply", {
+        "body": {
+            "channel": "EMAIL",
+            "fromEmailAddress": ZOHO_FROM_ADDRESS,
+            "to": to_email,
+            "content": content,
+            "contentType": "plainText",
+        },
+        "path_variables": {"ticketId": str(ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+
+
+def _auth_bypass_first_name(contact_name: str) -> str:
+    """Extract a usable first name from contact_name, or return 'there'."""
+    parts = (contact_name or "").strip().split()
+    if len(parts) >= 2 and parts[0].isalpha() and 2 <= len(parts[0]) <= 15:
+        return parts[0]
+    return "there"
+
+
+def _handle_auth_bypass_email_ticket(
+    ticket_id: str,
+    contact_email: str,
+    contact_name: str,
+    detected_lang: str | None,
+) -> bool:
+    """Run auth check and send the appropriate reply for an auth code ticket.
+
+    Returns True if the ticket was handled (reply sent) and normal processing
+    should be skipped. Returns False if the check failed and the ticket should
+    fall through to the standard pipeline.
+    """
+    auth_result = _run_auth_check(contact_email)
+    if auth_result is None:
+        return False
+
+    is_french = detected_lang == "French"
+    name = _auth_bypass_first_name(contact_name)
+
+    if auth_result.get("is_bypassable"):
+        bypass_result = _run_auth_bypass(contact_email)
+        if not (bypass_result and bypass_result.get("bypassed")):
+            return False
+        if is_french:
+            reply = (
+                f"Bonjour {name},\n\n"
+                "Bonne nouvelle — j'ai activé votre compte. "
+                "Vous devriez maintenant pouvoir vous connecter.\n\n"
+                "Si vous avez encore des difficultés, vous pouvez "
+                "réinitialiser votre mot de passe ici :\n"
+                "https://www.vomevolunteer.com/forgot\n\n"
+                "Cordialement,\nÉquipe Vome"
+            )
+        else:
+            reply = (
+                f"Hi {name},\n\n"
+                "Good news — I was able to activate your account. "
+                "You should be able to log in now.\n\n"
+                "If you still have trouble signing in, you can "
+                "reset your password here:\n"
+                "https://www.vomevolunteer.com/forgot\n\n"
+                "Best,\nVome Support"
+            )
+        _send_auth_reply(ticket_id, contact_email, reply)
+        print(f"[AUTH BYPASS] Account activated, reply sent — ticket {ticket_id}")
+        return True
+
+    if auth_result.get("is_active"):
+        if is_french:
+            reply = (
+                f"Bonjour {name},\n\n"
+                "J'ai vérifié votre compte et il est déjà actif. "
+                "Il semble que votre autorisation par e-mail ait "
+                "déjà été traitée.\n\n"
+                "Si vous avez du mal à vous connecter, essayez de "
+                "réinitialiser votre mot de passe ici :\n"
+                "https://www.vomevolunteer.com/forgot\n\n"
+                "Cordialement,\nÉquipe Vome"
+            )
+        else:
+            reply = (
+                f"Hi {name},\n\n"
+                "I checked your account and it's already active. "
+                "It looks like your email authorization may have "
+                "already gone through.\n\n"
+                "If you're having trouble signing in, try resetting "
+                "your password here:\n"
+                "https://www.vomevolunteer.com/forgot\n\n"
+                "Best,\nVome Support"
+            )
+        _send_auth_reply(ticket_id, contact_email, reply)
+        print(f"[AUTH BYPASS] Already active, reply sent — ticket {ticket_id}")
+        return True
+
+    # Account not found — reply and return True so we skip the generic ack/ClickUp
+    if is_french:
+        reply = (
+            f"Bonjour {name},\n\n"
+            "Je n'ai pas trouvé de compte associé à cette adresse "
+            "e-mail. Il est possible que vous ayez utilisé une "
+            "adresse différente lors de votre inscription.\n\n"
+            "Si vous n'êtes pas encore inscrit, vous pouvez le "
+            "faire ici :\n"
+            "https://www.vomevolunteer.com/register-volunteer\n\n"
+            "Si vous pensez qu'il y a une erreur, répondez avec "
+            "l'adresse e-mail que vous avez utilisée lors de votre "
+            "inscription et nous vérifierons.\n\n"
+            "Cordialement,\nÉquipe Vome"
+        )
+    else:
+        reply = (
+            f"Hi {name},\n\n"
+            "I wasn't able to find an account registered with "
+            "this email address. It's possible you signed up "
+            "with a different email.\n\n"
+            "If you haven't registered yet, you can do so here:\n"
+            "https://www.vomevolunteer.com/register-volunteer\n\n"
+            "If you think this is a mistake, please reply with "
+            "the email address you used to sign up and we'll "
+            "look into it.\n\n"
+            "Best,\nVome Support"
+        )
+    _send_auth_reply(ticket_id, contact_email, reply)
+    print(f"[AUTH BYPASS] Account not found, reply sent — ticket {ticket_id}")
+    return True
+
+
 def send_auto_acknowledgment(
     ticket_id: str,
     contact_name: str,
@@ -1421,6 +1632,19 @@ def process_ticket(ticket_data: dict) -> str | None:
             f"-- draft response in {detected_lang}\n"
         )
         print(f"Language detected: {detected_lang} (ticket {ticket_id})")
+
+    # Auth bypass fast-path: if the ticket is clearly about not receiving
+    # an auth/activation code, check + act immediately instead of running
+    # the full classification pipeline and sending a generic ack.
+    if _detect_auth_bypass_issue(subject, body):
+        handled = _handle_auth_bypass_email_ticket(
+            ticket_id=ticket_id,
+            contact_email=contact_email,
+            contact_name=contact_name,
+            detected_lang=detected_lang,
+        )
+        if handled:
+            return "auth_bypass_handled"
 
     # Build attachment note for Claude prompt
     if attachment_info["has_attachments"]:
