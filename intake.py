@@ -23,10 +23,6 @@ from zoho_desk_api import (
     find_or_create_contact as zoho_find_or_create_contact,
     find_or_create_account as zoho_find_or_create_account,
 )
-from clickup_tasks import (
-    create_clickup_task,
-    SOURCE_SUPPORT_WIDGET,
-)
 from kb_search import (
     get_best_kb_match,
     check_and_create_kb_task,
@@ -314,39 +310,17 @@ def _generate_ticket_subject(
 
 
 def _build_ticket_html(
-    description: str,
-    module: str,
-    platform: str,
-    affected_email: str,
     conversation_history: list,
     attachments: list,
 ) -> str:
-    """Build a clean HTML ticket body for Zoho Desk."""
-    # Issue summary section
-    html = (
-        f"<h3>Issue</h3>"
-        f"<p>{_escape_html(description)}</p>"
-        f"<table border='0' cellpadding='4' cellspacing='0' "
-        f"style='border-collapse:collapse;'>"
-        f"<tr><td><b>Module</b></td><td>{_escape_html(module)}</td></tr>"
-        f"<tr><td><b>Platform</b></td>"
-        f"<td>{_escape_html(platform)}</td></tr>"
-        f"<tr><td><b>Affected user</b></td>"
-        f"<td>{_escape_html(affected_email)}</td></tr>"
-    )
-    if attachments:
-        att_links = ", ".join(
-            f"<a href='{a}'>{a.split('/')[-1]}</a>"
-            for a in attachments
-        )
-        html += (
-            f"<tr><td><b>Attachments</b></td>"
-            f"<td>{att_links}</td></tr>"
-        )
-    html += "</table>"
+    """Build a clean HTML ticket body for Zoho Desk.
 
-    # Conversation transcript
-    html += "<h3>Conversation</h3>"
+    The body is the conversation transcript only — structured metadata
+    (module, platform, affected user, etc.) is posted as an internal
+    comment so the ticket description stays focused on the customer
+    exchange that the agent will reply to.
+    """
+    html = ""
     for turn in conversation_history:
         role = turn.get("role", "user")
         content = turn.get("content", "")
@@ -357,7 +331,7 @@ def _build_ticket_html(
             label = "Customer"
             color = "#1a73e8"
         else:
-            label = "Vic (AI)"
+            label = "Vic"
             color = "#666"
 
         html += (
@@ -365,6 +339,15 @@ def _build_ticket_html(
             f"<b style='color:{color};'>{label}</b><br>"
             f"<span>{_escape_html(content)}</span>"
             f"</div>"
+        )
+
+    if attachments:
+        att_links = ", ".join(
+            f"<a href='{a}'>{a.split('/')[-1]}</a>"
+            for a in attachments
+        )
+        html += (
+            f"<p><b>Attachments:</b> {att_links}</p>"
         )
 
     html += (
@@ -418,12 +401,9 @@ def _create_ticket_from_intake(
         else user_email
     )
 
-    # Build a clean HTML body for the ticket
+    # Build a clean HTML body for the ticket (transcript only —
+    # metadata is added as an internal comment below)
     ticket_description = _build_ticket_html(
-        description=description,
-        module=module,
-        platform=platform,
-        affected_email=affected_email or user_email,
         conversation_history=conversation_history,
         attachments=attachments,
     )
@@ -520,35 +500,22 @@ def _create_ticket_from_intake(
 
     zoho_url = f"https://desk.zoho.com/agent/vomevolunteer/tickets/{ticket_id}"
 
-    # Create ClickUp task
-    clickup_result = create_clickup_task(
-        ticket_data=ticket_data,
-        agent_response=agent_response,
-        crm=crm,
-        zoho_url=zoho_url,
-        source_option_id=SOURCE_SUPPORT_WIDGET,
-        analysis=analysis,
-    )
-
-    clickup_task_id = None
-    if clickup_result:
-        clickup_task_id = clickup_result.get("task_id")
-        print(f"[INTAKE] ClickUp task created: {clickup_task_id}")
+    # Note: ClickUp task creation is intentionally NOT triggered here.
+    # New widget tickets land in Zoho with status "New" for human triage
+    # first. A ClickUp task is only created once a ticket is assigned to
+    # the backend or frontend team — handled out-of-band, not from intake.
 
     # Post Slack ticket brief
     try:
-        clickup_task_url = None
-        if clickup_result:
-            clickup_task_url = clickup_result.get("task_url")
         send_ticket_brief(
             ticket_id=ticket_id,
             ticket_number=ticket_number,
             subject=subject,
             crm=crm,
             agent_response=agent_response,
-            clickup_task_url=clickup_task_url,
+            clickup_task_url=None,
             zoho_ticket_url=zoho_url,
-            clickup_task_id=clickup_task_id,
+            clickup_task_id=None,
             contact_email=user_email,
             issue_summary=description,
             new_classification=analysis,

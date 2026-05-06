@@ -299,7 +299,7 @@ def create_ticket(
     account_id: str | None = None,
     department_id: str = "569440000000006907",
     channel: str = "Chat",
-    status: str = "Open",
+    status: str = "New",
 ) -> dict | None:
     """Create a Zoho Desk ticket via the REST API.
 
@@ -322,6 +322,10 @@ def create_ticket(
         "channel": channel,
         "status": status,
         "departmentId": department_id,
+        # Always set email on the ticket so the agent UI has a
+        # reply-to address even if the linked contact's email is
+        # missing or out of date.
+        "email": email,
     }
 
     if contact_id:
@@ -340,7 +344,6 @@ def create_ticket(
                 f"[ZOHO-API] Could not create contact "
                 f"for {email} — ticket will likely fail"
             )
-            payload["email"] = email
 
     if account_id:
         payload["accountId"] = account_id
