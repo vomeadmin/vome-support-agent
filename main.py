@@ -598,6 +598,73 @@ async def knowledge_book_status():
     }
 
 
+_kb_sync_running = False
+_kb_sync_status = {"status": "idle", "started": None, "last_update": None}
+
+
+@app.post("/kb-sync/run")
+async def kb_sync_run(request: Request):
+    """Trigger a full Zoho Desk -> kb_articles sync.
+
+    Runs in a background thread so the request returns immediately.
+    Safe to call repeatedly -- the sync UPSERTs by zoho_article_id and
+    only writes rows whose modifiedTime changed.
+    """
+    global _kb_sync_running, _kb_sync_status
+    if _kb_sync_running:
+        return {"status": "already_running", "info": _kb_sync_status}
+
+    import threading
+
+    def _run():
+        global _kb_sync_running, _kb_sync_status
+        _kb_sync_running = True
+        _kb_sync_status = {
+            "status": "running",
+            "started": datetime.now(timezone.utc).isoformat(),
+            "last_update": None,
+            "result": None,
+        }
+        try:
+            from kb_sync import (
+                fetch_all_kb_articles,
+                sync_articles_to_db,
+            )
+            articles = fetch_all_kb_articles()
+            stats = sync_articles_to_db(articles) if articles else {}
+            _kb_sync_status["status"] = "completed"
+            _kb_sync_status["result"] = {
+                "articles_fetched": len(articles),
+                **stats,
+            }
+        except Exception as e:
+            _kb_sync_status["status"] = f"failed: {e}"
+        finally:
+            _kb_sync_status["last_update"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
+            _kb_sync_running = False
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return {"status": "started", "info": _kb_sync_status}
+
+
+@app.get("/kb-sync/status")
+async def kb_sync_status():
+    """Inspect the kb_articles index and the last sync run."""
+    from database import kb_index_status
+    try:
+        index = kb_index_status()
+    except Exception as e:
+        index = {"error": str(e)}
+    return {
+        "pipeline": _kb_sync_status,
+        "running": _kb_sync_running,
+        "index": index,
+    }
+
+
 @app.get("/health")
 async def health():
     env_status = {v: bool(os.environ.get(v)) for v in REQUIRED_ENV}
