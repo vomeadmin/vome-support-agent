@@ -773,10 +773,8 @@ def _generate_summary(
         "### For AI Agents",
         "The intake prompt (`intake_prompt.md`) loads the "
         "Sam's Voice guide and relevant category sections "
-        "at runtime. When a new support conversation starts, "
-        "the system retrieves the most similar past tickets "
-        "from ChromaDB and includes Sam's actual responses "
-        "as examples.",
+        "at runtime so the agent can mirror Sam's tone "
+        "and approach when answering new support conversations.",
         "",
         "### For Human Agents",
         "Read the Sam's Voice guide first to understand the "

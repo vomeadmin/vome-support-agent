@@ -3,7 +3,6 @@ fastapi
 uvicorn
 python-dotenv
 httpx
-chromadb
 slack-sdk
 apscheduler
 psycopg2-binary

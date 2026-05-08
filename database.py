@@ -102,6 +102,42 @@ knowledge_sections = Table(
 )
 
 
+def _kb_articles_create_sql() -> str:
+    """Raw SQL for the kb_articles table.
+
+    Uses a STORED generated tsvector column so FTS is automatic on UPSERT
+    without a trigger. 'simple' config (no language stemming) is good enough
+    for ~hundreds of articles across en/fr -- queries match the same tokens
+    that get indexed.
+    """
+    return (
+        "CREATE TABLE IF NOT EXISTS kb_articles ("
+        "  zoho_article_id VARCHAR PRIMARY KEY,"
+        "  title TEXT NOT NULL,"
+        "  body TEXT NOT NULL DEFAULT '',"
+        "  url TEXT NOT NULL DEFAULT '',"
+        "  permalink TEXT NOT NULL DEFAULT '',"
+        "  category TEXT NOT NULL DEFAULT '',"
+        "  language VARCHAR NOT NULL DEFAULT 'en',"
+        "  status VARCHAR NOT NULL DEFAULT '',"
+        "  modified_time TIMESTAMP NULL,"
+        "  created_time TIMESTAMP NULL,"
+        "  synced_at TIMESTAMP NOT NULL DEFAULT NOW(),"
+        "  search_vector tsvector GENERATED ALWAYS AS ("
+        "    setweight(to_tsvector('simple', coalesce(title, '')), 'A') ||"
+        "    setweight(to_tsvector('simple', coalesce(body, '')), 'B')"
+        "  ) STORED"
+        ")"
+    )
+
+
+def _kb_articles_index_sql() -> str:
+    return (
+        "CREATE INDEX IF NOT EXISTS kb_articles_search_idx "
+        "ON kb_articles USING GIN (search_vector)"
+    )
+
+
 def _get_engine():
     global _engine
     if _engine is None:
@@ -128,6 +164,10 @@ def init_db():
     try:
         engine = _get_engine()
         _metadata.create_all(engine)
+        # Create kb_articles (raw SQL because of generated tsvector column)
+        with engine.begin() as conn:
+            conn.execute(text(_kb_articles_create_sql()))
+            conn.execute(text(_kb_articles_index_sql()))
         # Migrate: add columns if missing
         with engine.begin() as conn:
             migrations = [
@@ -411,6 +451,245 @@ def mark_event_processed(event_id: str):
             )
     except Exception as e:
         print(f"[DB] mark_event_processed failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# KB articles (Zoho Desk article bodies, FTS-searchable)
+# ---------------------------------------------------------------------------
+
+def upsert_kb_article(article: dict) -> str:
+    """Insert or update a KB article. Returns 'added', 'updated', or 'unchanged'.
+
+    Expected dict keys: id, title, content, url, permalink, category,
+    language, status, modifiedTime, createdTime.
+    """
+    if not DATABASE_URL:
+        return "skipped"
+    article_id = str(article.get("id") or "")
+    if not article_id:
+        return "skipped"
+
+    engine = _get_engine()
+    now = datetime.now(timezone.utc)
+    body = (article.get("content") or "").strip()
+    title = (article.get("title") or "").strip()
+    if not title:
+        return "skipped"
+
+    params = {
+        "zoho_article_id": article_id,
+        "title": title,
+        "body": body,
+        "url": article.get("url") or "",
+        "permalink": article.get("permalink") or "",
+        "category": article.get("category") or "",
+        "language": article.get("language") or "en",
+        "status": article.get("status") or "",
+        "modified_time": _parse_zoho_time(article.get("modifiedTime")),
+        "created_time": _parse_zoho_time(article.get("createdTime")),
+        "synced_at": now,
+    }
+
+    with engine.begin() as conn:
+        existing = conn.execute(
+            text(
+                "SELECT modified_time FROM kb_articles "
+                "WHERE zoho_article_id = :zid"
+            ),
+            {"zid": article_id},
+        ).first()
+
+        if existing is not None:
+            if (
+                existing[0] is not None
+                and params["modified_time"] is not None
+                and existing[0] == params["modified_time"]
+            ):
+                # Body unchanged -- just update synced_at to mark freshness
+                conn.execute(
+                    text(
+                        "UPDATE kb_articles SET synced_at = :synced_at "
+                        "WHERE zoho_article_id = :zid"
+                    ),
+                    {"synced_at": now, "zid": article_id},
+                )
+                return "unchanged"
+
+            conn.execute(
+                text(
+                    "UPDATE kb_articles SET "
+                    "  title = :title, body = :body, url = :url, "
+                    "  permalink = :permalink, category = :category, "
+                    "  language = :language, status = :status, "
+                    "  modified_time = :modified_time, "
+                    "  created_time = :created_time, "
+                    "  synced_at = :synced_at "
+                    "WHERE zoho_article_id = :zoho_article_id"
+                ),
+                params,
+            )
+            return "updated"
+
+        conn.execute(
+            text(
+                "INSERT INTO kb_articles "
+                "(zoho_article_id, title, body, url, permalink, "
+                " category, language, status, modified_time, "
+                " created_time, synced_at) "
+                "VALUES (:zoho_article_id, :title, :body, :url, "
+                " :permalink, :category, :language, :status, "
+                " :modified_time, :created_time, :synced_at)"
+            ),
+            params,
+        )
+        return "added"
+
+
+def delete_missing_kb_articles(seen_ids: list[str]) -> int:
+    """Delete kb_articles rows whose zoho_article_id is NOT in seen_ids.
+
+    Called after a full sync to drop articles deleted in Zoho.
+    Returns the number of rows deleted.
+    """
+    if not DATABASE_URL or not seen_ids:
+        return 0
+    engine = _get_engine()
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                "DELETE FROM kb_articles "
+                "WHERE zoho_article_id != ALL(:ids)"
+            ),
+            {"ids": list(seen_ids)},
+        )
+        return result.rowcount or 0
+
+
+def search_kb_articles_db(
+    query: str,
+    language: str | None = None,
+    limit: int = 2,
+    body_chars: int = 3000,
+) -> list[dict]:
+    """Postgres FTS over kb_articles. Returns ranked article dicts.
+
+    Each dict: {id, title, body, url, permalink, category, language,
+    modified_time, days_stale, score}. body is truncated to body_chars.
+    """
+    if not DATABASE_URL or not query or not query.strip():
+        return []
+    engine = _get_engine()
+
+    sql = (
+        "SELECT zoho_article_id, title, body, url, permalink, category, "
+        "       language, modified_time, "
+        "       ts_rank_cd(search_vector, plainto_tsquery('simple', :q)) AS score "
+        "FROM kb_articles "
+        "WHERE search_vector @@ plainto_tsquery('simple', :q) "
+    )
+    params = {"q": query.strip(), "limit": limit}
+    if language in ("en", "fr"):
+        sql += "  AND language = :lang "
+        params["lang"] = language
+    sql += "ORDER BY score DESC LIMIT :limit"
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+
+    now = datetime.now(timezone.utc)
+    out = []
+    for row in rows:
+        body = (row["body"] or "")[:body_chars]
+        if row["body"] and len(row["body"]) > body_chars:
+            body = body.rstrip() + "..."
+        days_stale = None
+        mod = row["modified_time"]
+        if mod is not None:
+            mod_aware = mod if mod.tzinfo else mod.replace(tzinfo=timezone.utc)
+            days_stale = (now - mod_aware).days
+        out.append({
+            "id": row["zoho_article_id"],
+            "title": row["title"],
+            "body": body,
+            "url": row["url"] or "",
+            "permalink": row["permalink"] or "",
+            "category": row["category"] or "",
+            "language": row["language"] or "en",
+            "modified_time": (
+                row["modified_time"].isoformat()
+                if row["modified_time"] else ""
+            ),
+            "days_stale": days_stale,
+            "score": float(row["score"]) if row["score"] is not None else 0.0,
+        })
+    return out
+
+
+def kb_index_status() -> dict:
+    """Return summary stats about the kb_articles table."""
+    if not DATABASE_URL:
+        return {"error": "DATABASE_URL not set"}
+    engine = _get_engine()
+    with engine.connect() as conn:
+        total = conn.execute(
+            text("SELECT COUNT(*) FROM kb_articles")
+        ).scalar() or 0
+        if total == 0:
+            return {"total": 0}
+
+        by_lang = dict(conn.execute(
+            text(
+                "SELECT language, COUNT(*) FROM kb_articles "
+                "GROUP BY language"
+            )
+        ).all())
+
+        by_category = conn.execute(
+            text(
+                "SELECT category, COUNT(*) AS n FROM kb_articles "
+                "GROUP BY category ORDER BY n DESC LIMIT 10"
+            )
+        ).all()
+
+        synced = conn.execute(
+            text(
+                "SELECT MIN(synced_at), MAX(synced_at) FROM kb_articles"
+            )
+        ).first()
+
+        modified = conn.execute(
+            text(
+                "SELECT MIN(modified_time), MAX(modified_time) "
+                "FROM kb_articles WHERE modified_time IS NOT NULL"
+            )
+        ).first()
+
+    return {
+        "total": int(total),
+        "by_language": {k: int(v) for k, v in by_lang.items()},
+        "top_categories": [(c, int(n)) for c, n in by_category],
+        "synced_oldest": synced[0].isoformat() if synced and synced[0] else None,
+        "synced_newest": synced[1].isoformat() if synced and synced[1] else None,
+        "modified_oldest": (
+            modified[0].isoformat() if modified and modified[0] else None
+        ),
+        "modified_newest": (
+            modified[1].isoformat() if modified and modified[1] else None
+        ),
+    }
+
+
+def _parse_zoho_time(zoho_str: str | None) -> datetime | None:
+    """Parse a Zoho ISO 8601 timestamp into a naive UTC datetime for storage."""
+    if not zoho_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(zoho_str.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except (ValueError, TypeError):
+        return None
 
 
 # ---------------------------------------------------------------------------

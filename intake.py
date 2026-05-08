@@ -182,7 +182,7 @@ def _build_intake_messages(
 
     # Include KB search results if available
     if kb_context:
-        user_content += f"\n\n[KB search results: {kb_context}]"
+        user_content += f"\n\n{kb_context}"
     elif kb_searched_no_results:
         user_content += (
             "\n\n[KB was already searched for this message and "
@@ -312,6 +312,8 @@ def _generate_ticket_subject(
 def _build_ticket_html(
     conversation_history: list,
     attachments: list,
+    current_message: str = "",
+    current_reply: str = "",
 ) -> str:
     """Build a clean HTML ticket body for Zoho Desk.
 
@@ -319,9 +321,20 @@ def _build_ticket_html(
     (module, platform, affected user, etc.) is posted as an internal
     comment so the ticket description stays focused on the customer
     exchange that the agent will reply to.
+
+    `conversation_history` is the prior turns. The user's latest
+    `current_message` and the agent's `current_reply` are appended at
+    the end so the ticket body always reflects the full exchange,
+    including a status="complete" handoff that fires on the first turn.
     """
+    turns = list(conversation_history)
+    if current_message:
+        turns.append({"role": "user", "content": current_message})
+    if current_reply:
+        turns.append({"role": "assistant", "content": current_reply})
+
     html = ""
-    for turn in conversation_history:
+    for turn in turns:
         role = turn.get("role", "user")
         content = turn.get("content", "")
         if not content:
@@ -378,6 +391,8 @@ def _create_ticket_from_intake(
     session_context: dict,
     conversation_history: list,
     attachments: list,
+    current_message: str = "",
+    current_reply: str = "",
 ) -> dict:
     """Create a Zoho Desk ticket + ClickUp task from the completed intake.
 
@@ -406,6 +421,8 @@ def _create_ticket_from_intake(
     ticket_description = _build_ticket_html(
         conversation_history=conversation_history,
         attachments=attachments,
+        current_message=current_message,
+        current_reply=current_reply,
     )
 
     # Resolve Zoho Desk account + contact so the ticket is
@@ -592,7 +609,7 @@ def run_intake_turn(
             session_context.get("locale"),
         )
         if kb_match:
-            kb_context = json.dumps(kb_match)
+            kb_context = _format_kb_context(kb_match)
             kb_article_response = {
                 "title": kb_match["title"],
                 "url": kb_match["url"],
@@ -613,7 +630,7 @@ def run_intake_turn(
                 flag_stale_article(upfront_match)
                 kb_searched_no_results = True
             else:
-                kb_context = json.dumps(upfront_match)
+                kb_context = _format_kb_context(upfront_match)
                 kb_article_response = {
                     "title": upfront_match["title"],
                     "url": upfront_match["url"],
@@ -710,12 +727,54 @@ def run_intake_turn(
 
     # Override status based on completeness
     if status == "complete":
+        # Redirect short-circuit: if Vic is closing the conversation
+        # because the question is org-controlled (or otherwise not a
+        # Vome support matter), do not create a ticket. The warm
+        # redirect IS the resolution.
+        if issue_fingerprint == "out-of-scope-redirect":
+            print(
+                f"[INTAKE] Skipping ticket creation: "
+                f"out-of-scope-redirect for "
+                f"{session_context.get('user_email')}"
+            )
+            return {
+                "reply": reply_text,
+                "status": "complete",
+                "kb_article": kb_article_response,
+                "ticket_created": False,
+                "ticket_id": None,
+            }
+
+        # Sanity guard: refuse to create a content-less ticket. If
+        # there's no description AND no prior conversation AND no
+        # current user message, Claude completed prematurely. Fall
+        # back to "collecting" so the user can actually say something.
+        has_description = bool(extracted.get("description"))
+        has_any_user_input = bool(
+            conversation_history or message.strip()
+        )
+        if not has_description and not has_any_user_input:
+            print(
+                f"[INTAKE] Skipping ticket creation: empty "
+                f"description and no user input from "
+                f"{session_context.get('user_email')}"
+            )
+            return {
+                "reply": reply_text,
+                "status": "collecting",
+                "kb_article": kb_article_response,
+                "ticket_created": False,
+                "ticket_id": None,
+            }
+
         # User confirmed -- create the ticket
         ticket_result = _create_ticket_from_intake(
             extracted=extracted,
             session_context=session_context,
             conversation_history=conversation_history,
             attachments=attachments,
+            current_message=message,
+            current_reply=reply_text,
         )
 
         # Log unmatched issue for KB gap tracking
@@ -787,38 +846,115 @@ def _extract_prior_kb_query(conversation_history: list) -> str | None:
     return None
 
 
+def _format_kb_context(kb_match: dict) -> str:
+    """Render a KB match as a structured prompt block with article bodies.
+
+    The body is what lets Claude paraphrase real instructions instead of
+    inferring from the title alone. Stale articles already filtered upstream.
+    """
+    title = kb_match.get("title", "")
+    url = kb_match.get("url", "")
+    days = kb_match.get("days_stale")
+    action = kb_match.get("action", "suggest")
+    body = kb_match.get("body", "")
+    extras = kb_match.get("extras", []) or []
+
+    days_str = f"{days}" if days is not None else "unknown"
+
+    lines = [
+        "[KB context — use the article content below to answer the user. "
+        "If the content actually addresses their question, walk them through "
+        "it in your own voice and link the article. If it doesn't, fall "
+        "back to collecting ticket info.]",
+        "",
+        f"Primary article: {title}",
+        f"URL: {url}",
+        f"Days since last update: {days_str}",
+        f"Recommendation: {action}",
+    ]
+    if body:
+        lines.append("Body:")
+        lines.append(body)
+    else:
+        lines.append("Body: (not available — title-only match)")
+
+    for i, extra in enumerate(extras, start=2):
+        e_days = extra.get("days_stale")
+        e_days_str = f"{e_days}" if e_days is not None else "unknown"
+        lines.append("")
+        lines.append(f"Secondary article #{i}: {extra.get('title', '')}")
+        lines.append(f"URL: {extra.get('url', '')}")
+        lines.append(f"Days since last update: {e_days_str}")
+        if extra.get("body"):
+            lines.append("Body:")
+            lines.append(extra["body"])
+
+    return "\n".join(lines)
+
+
 def _search_kb_combined(
     query: str,
     locale: str | None = None,
 ) -> dict | None:
-    """Search KB using ChromaDB first (semantic), fall back to Zoho API (keyword).
+    """Search the local kb_articles index, fall back to Zoho API on failure.
 
-    Returns a dict with {title, url, days_stale, action} or None.
+    Primary path is Postgres FTS over nightly-synced article bodies (gives
+    Claude full content to paraphrase). Fallback is the Zoho live keyword
+    search, which only returns titles/snippets -- used only if the local
+    index is unreachable or empty.
+
+    Returns a dict with {title, url, days_stale, action, body, extras} or None.
+    `body` is the full primary article text for prompt injection.
+    `extras` is a list of secondary articles ({title, url, body, days_stale}).
     """
-    # Try ChromaDB (nightly-indexed articles)
+    # Try the local kb_articles index (Postgres FTS)
     try:
-        chroma_results = search_kb_articles(
-            query, n_results=1, language=locale,
+        kb_results = search_kb_articles(
+            query, n_results=2, language=locale,
         )
-        if chroma_results:
-            best = chroma_results[0]
-            # Only use if relevance score is reasonable
-            if best.get("score") and best["score"] > 0.3:
-                days = best.get("days_stale")
-                if days is not None and days > 365:
-                    action = "flag_stale"
-                elif days is not None and days > 90:
-                    action = "suggest_with_caveat"
-                else:
-                    action = "suggest"
-                return {
-                    "title": best["title"],
-                    "url": best["url"],
-                    "days_stale": days,
-                    "action": action,
-                }
-    except Exception as e:
-        print(f"[KB] ChromaDB search failed, falling back: {e}")
+        # The SQL @@ filter already excludes non-matches; keep a tiny
+        # floor to drop near-zero-rank rows.
+        usable = [
+            r for r in kb_results
+            if r.get("score") is not None and r["score"] > 0.0
+        ]
+        if usable:
+            best = usable[0]
+            days = best.get("days_stale")
+            if days is not None and days > 365:
+                action = "flag_stale"
+            elif days is not None and days > 90:
+                action = "suggest_with_caveat"
+            else:
+                action = "suggest"
 
-    # Fall back to Zoho keyword search
-    return get_best_kb_match(query, locale=locale)
+            extras = []
+            for r in usable[1:]:
+                r_days = r.get("days_stale")
+                # Skip stale extras -- don't feed Claude outdated context
+                if r_days is not None and r_days > 365:
+                    continue
+                extras.append({
+                    "title": r["title"],
+                    "url": r["url"],
+                    "body": r.get("body", ""),
+                    "days_stale": r_days,
+                })
+
+            return {
+                "title": best["title"],
+                "url": best["url"],
+                "days_stale": days,
+                "action": action,
+                "body": best.get("body", ""),
+                "extras": extras,
+            }
+    except Exception as e:
+        print(f"[KB] kb_articles search failed, falling back to Zoho: {e}")
+
+    # Fall back to Zoho keyword search (no body available)
+    fallback = get_best_kb_match(query, locale=locale)
+    if fallback:
+        fallback["body"] = ""
+        fallback["extras"] = []
+    return fallback

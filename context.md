@@ -77,7 +77,7 @@ The agent never sends anything directly to clients. All client-facing responses 
 
 ## What is not yet built
 
-- **RAG layer** (Phase 4) — ChromaDB is in requirements.txt but not implemented. Historical ticket search for recurrence intelligence and draft reference is not active.
+- **Historical ticket RAG** (Phase 4) — semantic search over past tickets for recurrence intelligence and draft reference is not active. KB article retrieval (a separate concern) uses Postgres FTS over `kb_articles` and is live; see `kb_sync.py`.
 - **Sleeping item wake monitoring** — system prompt describes wake conditions but no automated scheduler checks Wake Date fields or recurrence triggers yet
 - **Weekly feature request digest** — daily digest exists but weekly feature summary for Sam is not implemented
 - **Resolution custom field option IDs** — Completed/Declined/Sleeping/Duplicate option IDs still need to be fetched from ClickUp

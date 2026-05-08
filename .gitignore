@@ -3,11 +3,6 @@
 __pycache__/
 *.pyc
 
-# Vector database folders
-chroma_data/
-chromadb/
-*.chroma
-
 # IDE
 .vscode/
 .idea/
