@@ -559,6 +559,37 @@ Opportunities > Shifts
 
 ---
 
+**Applying for an opportunity (volunteer-side):**
+
+This happens when an organization shares a direct
+opportunity link or the volunteer finds one on the
+org's public page.
+
+1. Click the opportunity link shared by the org
+2. Review the opportunity details on the page
+3. Click the green **Apply** button
+   - If the org already assigned you directly,
+     you may skip this and go straight to reserving
+     shifts
+4. Fill out the application form -- the org
+   customizes these fields, so complete everything
+5. If a Shifts section appears, you can request
+   specific shifts (approval still required unless
+   Instant Book is enabled -- if it is, requested
+   shifts are booked immediately upon approval)
+6. Scroll to the bottom and click **Submit**
+7. Your application status becomes "Pending" --
+   visible on your Homepage or My Opportunities page
+8. The org will review and notify you by email or
+   app notification when approved
+9. Note: you will not receive an automatic
+   confirmation right after submitting -- that is
+   normal. The org contacts you with next steps.
+
+Once approved, you can reserve shifts (see below).
+
+---
+
 **Reserving a shift (volunteer-side):**
 1. Go to Home > "Reserve Shifts"
 2. Use filters, search bar, or mini calendar
