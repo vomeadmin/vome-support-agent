@@ -683,35 +683,90 @@ async def kb_sync_debug():
     if cat_list:
         first = cat_list[0]
         cat_id = first.get("id")
-        if cat_id:
-            art_result = _zoho_desk_call(
-                "ZohoDesk_getArticles",
-                {
-                    "path_variables": {"categoryId": str(cat_id)},
-                    "query_params": {
-                        "orgId": str(ZOHO_ORG_ID),
-                        "limit": 5,
-                    },
+        out["first_category_id"] = cat_id
+
+        # Try a few argument shapes -- whichever one returns articles
+        # tells us how to talk to this MCP server.
+        attempts = [
+            ("getArticles, no locale", "ZohoDesk_getArticles", {
+                "path_variables": {"categoryId": str(cat_id)},
+                "query_params": {"orgId": str(ZOHO_ORG_ID), "limit": 5},
+            }),
+            ("getArticles, locale=en", "ZohoDesk_getArticles", {
+                "path_variables": {"categoryId": str(cat_id)},
+                "query_params": {
+                    "orgId": str(ZOHO_ORG_ID),
+                    "limit": 5,
+                    "locale": "en",
                 },
-            )
-            out["first_category_articles_raw_type"] = (
-                type(art_result).__name__
-            )
-            unwrapped = _unwrap_mcp_result(art_result)
-            out["first_category_articles_unwrapped_type"] = (
-                type(unwrapped).__name__
-            )
+            }),
+            ("searchArticleTranslations, en", (
+                "ZohoDesk_searchArticleTranslations"
+            ), {
+                "path_variables": {"locale": "en"},
+                "query_params": {
+                    "orgId": str(ZOHO_ORG_ID),
+                    "categoryId": str(cat_id),
+                    "status": "Published",
+                    "limit": 5,
+                },
+            }),
+            ("getArticles, no path_var, query categoryId", (
+                "ZohoDesk_getArticles"
+            ), {
+                "query_params": {
+                    "orgId": str(ZOHO_ORG_ID),
+                    "categoryId": str(cat_id),
+                    "limit": 5,
+                },
+            }),
+        ]
+
+        out["attempts"] = []
+        for label, tool, args in attempts:
+            raw = _zoho_desk_call(tool, args)
+            entry: dict = {"label": label, "tool": tool}
+
+            # Capture error text if present (MCP wraps errors in content)
+            if isinstance(raw, dict) and raw.get("isError"):
+                err_text = ""
+                for blk in raw.get("content", []) or []:
+                    if blk.get("type") == "text":
+                        err_text = blk.get("text", "")[:500]
+                        break
+                entry["isError"] = True
+                entry["error_text"] = err_text
+                out["attempts"].append(entry)
+                continue
+
+            unwrapped = _unwrap_mcp_result(raw)
             if isinstance(unwrapped, dict):
-                out["first_category_articles_keys"] = list(
-                    unwrapped.keys()
-                )
-                arts = unwrapped.get("data", [])
+                if "isError" in unwrapped:
+                    entry["isError"] = unwrapped.get("isError")
+                    entry["raw_keys"] = list(unwrapped.keys())
+                    err_text = ""
+                    for blk in unwrapped.get("content", []) or []:
+                        if blk.get("type") == "text":
+                            err_text = blk.get("text", "")[:500]
+                            break
+                    entry["error_text"] = err_text
+                else:
+                    arts = unwrapped.get("data", [])
+                    entry["article_count"] = len(arts)
+                    entry["sample_titles"] = [
+                        a.get("title") or a.get("name") or ""
+                        for a in arts[:5]
+                    ]
             elif isinstance(unwrapped, list):
-                arts = unwrapped
+                entry["article_count"] = len(unwrapped)
+                entry["sample_titles"] = [
+                    a.get("title") or a.get("name") or ""
+                    for a in unwrapped[:5]
+                ]
             else:
-                arts = []
-            out["first_category_article_count"] = len(arts)
-            out["first_category_article_sample"] = arts[:2]
+                entry["unwrapped_type"] = type(unwrapped).__name__
+
+            out["attempts"].append(entry)
 
     return out
 
