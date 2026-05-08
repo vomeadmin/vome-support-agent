@@ -650,6 +650,72 @@ async def kb_sync_run(request: Request):
     return {"status": "started", "info": _kb_sync_status}
 
 
+@app.get("/kb-sync/debug")
+async def kb_sync_debug():
+    """Surface raw Zoho responses so we can see why fetch returns empty.
+
+    Returns the categories list, plus -- if any categories exist -- a
+    sample of the first category's article list. No body fetches, just
+    the listing endpoints.
+    """
+    from agent import _zoho_desk_call, _unwrap_mcp_result, ZOHO_ORG_ID
+    out: dict = {"zoho_org_id_set": bool(ZOHO_ORG_ID)}
+
+    cat_result = _zoho_desk_call(
+        "ZohoDesk_getAllKBRootCategories",
+        {"query_params": {"orgId": str(ZOHO_ORG_ID)}},
+    )
+    out["categories_raw_type"] = type(cat_result).__name__
+    out["categories_raw"] = cat_result
+
+    raw_cats = _unwrap_mcp_result(cat_result)
+    out["categories_unwrapped_type"] = type(raw_cats).__name__
+    if isinstance(raw_cats, dict):
+        out["categories_unwrapped_keys"] = list(raw_cats.keys())
+        cat_list = raw_cats.get("data", [])
+    elif isinstance(raw_cats, list):
+        cat_list = raw_cats
+    else:
+        cat_list = []
+    out["category_count"] = len(cat_list)
+    out["category_sample"] = cat_list[:3]
+
+    if cat_list:
+        first = cat_list[0]
+        cat_id = first.get("id")
+        if cat_id:
+            art_result = _zoho_desk_call(
+                "ZohoDesk_getArticles",
+                {
+                    "path_variables": {"categoryId": str(cat_id)},
+                    "query_params": {
+                        "orgId": str(ZOHO_ORG_ID),
+                        "limit": 5,
+                    },
+                },
+            )
+            out["first_category_articles_raw_type"] = (
+                type(art_result).__name__
+            )
+            unwrapped = _unwrap_mcp_result(art_result)
+            out["first_category_articles_unwrapped_type"] = (
+                type(unwrapped).__name__
+            )
+            if isinstance(unwrapped, dict):
+                out["first_category_articles_keys"] = list(
+                    unwrapped.keys()
+                )
+                arts = unwrapped.get("data", [])
+            elif isinstance(unwrapped, list):
+                arts = unwrapped
+            else:
+                arts = []
+            out["first_category_article_count"] = len(arts)
+            out["first_category_article_sample"] = arts[:2]
+
+    return out
+
+
 @app.get("/kb-sync/status")
 async def kb_sync_status():
     """Inspect the kb_articles index and the last sync run."""
