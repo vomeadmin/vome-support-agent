@@ -326,6 +326,24 @@ support.vomevolunteer.com
 
 ---
 
+## 21. NonprofitDiscount (Nonprofit Pricing Question)
+
+**Use when:** A user asks whether Vome offers a nonprofit discount, charity pricing, NGO rate, or any reduced pricing for mission-driven organizations.
+
+**Key fact:** Vome does NOT offer nonprofit discounts. The vast majority of customers are nonprofits, universities, and mission-driven organizations — pricing is built for this customer base. Do NOT say yes or imply a discount exists.
+
+**Template:**
+
+> Hi {{name}},
+>
+> Great question. Our pricing is actually designed with nonprofits and mission-driven organizations in mind from the ground up — they make up the core of who we serve, so there isn't a separate nonprofit tier or discount to apply on top.
+>
+> If you'd like to talk through what the right plan looks like for your organization's size and needs, our team would be happy to walk you through it.
+>
+> Let me know if there's anything else I can help with!
+
+---
+
 ## 20. InviteNotReceived (Volunteer Didn't Receive Invitation)
 
 **Use when:** A volunteer says they didn't receive an invitation email from an organization.
