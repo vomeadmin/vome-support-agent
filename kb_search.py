@@ -14,7 +14,7 @@ from agent import _zoho_desk_call, _unwrap_mcp_result
 ZOHO_ORG_ID = os.environ.get("ZOHO_ORG_ID", "")
 
 
-def search_kb(query: str, limit: int = 5) -> list[dict]:
+def search_kb(query: str, limit: int = 5, locale: str | None = None) -> list[dict]:
     """Search Zoho Desk KB articles by keyword query.
 
     Returns a list of scored article dicts, sorted by relevance.
@@ -23,12 +23,15 @@ def search_kb(query: str, limit: int = 5) -> list[dict]:
     if not query or not query.strip():
         return []
 
+    safe_locale = locale if locale in ("en", "fr") else "en"
+
     result = _zoho_desk_call("ZohoDesk_searchArticleTranslations", {
+        "path_variables": {"locale": safe_locale},
         "query_params": {
             "orgId": str(ZOHO_ORG_ID),
-            "searchStr": query.strip(),
+            "searchString": query.strip(),
+            "status": "Published",
             "limit": limit,
-            "sortBy": "relevance",
         },
     })
 
@@ -114,13 +117,13 @@ def _compute_days_stale(modified_time_str: str) -> int | None:
         return None
 
 
-def get_best_kb_match(query: str) -> dict | None:
+def get_best_kb_match(query: str, locale: str | None = None) -> dict | None:
     """Search KB and return the best article suitable for deflection.
 
     Returns the top article with action "suggest" or "suggest_with_caveat",
     or None if no suitable article is found.
     """
-    results = search_kb(query, limit=3)
+    results = search_kb(query, limit=3, locale=locale)
     for article in results:
         if article["action"] in ("suggest", "suggest_with_caveat"):
             return article

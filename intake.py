@@ -821,4 +821,4 @@ def _search_kb_combined(
         print(f"[KB] ChromaDB search failed, falling back: {e}")
 
     # Fall back to Zoho keyword search
-    return get_best_kb_match(query)
+    return get_best_kb_match(query, locale=locale)
