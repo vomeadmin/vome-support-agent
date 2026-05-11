@@ -91,9 +91,12 @@ def fetch_all_kb_articles() -> list[dict]:
         art_result = _zoho_desk_call(
             "ZohoDesk_getArticles",
             {
-                "path_variables": {"categoryId": str(cat_id)},
+                # categoryId belongs in query_params for this MCP server.
+                # Passing it as a path variable returns "Invalid keys
+                # found in path variable" and silently yields 0 articles.
                 "query_params": {
                     "orgId": str(ZOHO_ORG_ID),
+                    "categoryId": str(cat_id),
                     "limit": 100,
                 },
             },

@@ -355,9 +355,13 @@ def run_kb_health_scan():
         articles_result = _zoho_desk_call(
             "ZohoDesk_getArticles",
             {
-                "path_variables": {"categoryId": str(cat_id)},
+                # categoryId must go in query_params, not path_variables,
+                # for this MCP server -- otherwise the call errors with
+                # "Invalid keys found in path variable" and we silently
+                # see 0 articles.
                 "query_params": {
                     "orgId": str(ZOHO_ORG_ID),
+                    "categoryId": str(cat_id),
                     "limit": 100,
                 },
             },
