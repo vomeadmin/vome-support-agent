@@ -685,6 +685,78 @@ async def kb_sync_debug():
         cat_id = first.get("id")
         out["first_category_id"] = cat_id
 
+        # Grab one real article ID so we can probe getArticle shapes.
+        probe_art_id = None
+        probe_result = _zoho_desk_call(
+            "ZohoDesk_getArticles",
+            {
+                "query_params": {
+                    "orgId": str(ZOHO_ORG_ID),
+                    "categoryId": str(cat_id),
+                    "from": 1,
+                    "limit": 1,
+                },
+            },
+        )
+        probe_unwrapped = _unwrap_mcp_result(probe_result)
+        if isinstance(probe_unwrapped, dict):
+            probe_data = probe_unwrapped.get("data", []) or []
+            if probe_data:
+                probe_art_id = str(probe_data[0].get("id") or "")
+        out["probe_article_id"] = probe_art_id
+
+        # Probe getArticle (singular) -- multiple argument shapes
+        if probe_art_id:
+            article_attempts = [
+                ("getArticle, path_var articleId", {
+                    "path_variables": {"articleId": probe_art_id},
+                    "query_params": {"orgId": str(ZOHO_ORG_ID)},
+                }),
+                ("getArticle, query articleId", {
+                    "query_params": {
+                        "orgId": str(ZOHO_ORG_ID),
+                        "articleId": probe_art_id,
+                    },
+                }),
+                ("getArticle, path_var id", {
+                    "path_variables": {"id": probe_art_id},
+                    "query_params": {"orgId": str(ZOHO_ORG_ID)},
+                }),
+            ]
+            out["article_detail_attempts"] = []
+            for label, args in article_attempts:
+                raw = _zoho_desk_call("ZohoDesk_getArticle", args)
+                entry: dict = {"label": label}
+                if isinstance(raw, dict) and raw.get("isError"):
+                    for blk in raw.get("content", []) or []:
+                        if blk.get("type") == "text":
+                            entry["error_text"] = (
+                                blk.get("text", "") or ""
+                            )[:400]
+                            break
+                    out["article_detail_attempts"].append(entry)
+                    continue
+                unwrapped = _unwrap_mcp_result(raw)
+                if isinstance(unwrapped, dict):
+                    if "isError" in unwrapped:
+                        entry["isError"] = unwrapped.get("isError")
+                        for blk in unwrapped.get("content", []) or []:
+                            if blk.get("type") == "text":
+                                entry["error_text"] = (
+                                    blk.get("text", "") or ""
+                                )[:400]
+                                break
+                    else:
+                        entry["keys"] = list(unwrapped.keys())[:30]
+                        entry["title"] = unwrapped.get("title", "")
+                        entry["has_answer"] = bool(
+                            unwrapped.get("answer")
+                        )
+                        entry["answer_len"] = len(
+                            unwrapped.get("answer") or ""
+                        )
+                out["article_detail_attempts"].append(entry)
+
         # Try a few argument shapes -- whichever one returns articles
         # tells us how to talk to this MCP server.
         attempts = [
