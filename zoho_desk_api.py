@@ -418,6 +418,78 @@ def _normalize_ticket_list(items: list) -> list[dict]:
     return tickets
 
 
+def upload_attachment(
+    ticket_id: str,
+    file_url: str,
+    filename: str | None = None,
+) -> dict | None:
+    """Download a file from a URL and attach it to a Zoho Desk ticket.
+
+    Used by the widget intake path to forward S3-hosted screenshots,
+    recordings, and debug logs to the underlying ticket so the
+    support team can actually see them. Without this, attachments
+    would only exist as text URLs in the ticket description.
+
+    Returns the attachment dict from Zoho on success, None on failure.
+    """
+    if not ZOHO_DESK_REFRESH_TOKEN:
+        return None
+
+    try:
+        dl = httpx.get(file_url, timeout=30, follow_redirects=True)
+        if dl.status_code != 200:
+            print(
+                f"[ZOHO-API] Attachment download failed: "
+                f"HTTP {dl.status_code} for {file_url}"
+            )
+            return None
+        file_bytes = dl.content
+    except Exception as e:
+        print(f"[ZOHO-API] Attachment download error: {e}")
+        return None
+
+    if not filename:
+        filename = file_url.split("?")[0].split("/")[-1] or "attachment"
+
+    content_type = (
+        dl.headers.get("content-type", "")
+        or "application/octet-stream"
+    ).split(";")[0].strip()
+
+    token = _get_token()
+
+    try:
+        resp = httpx.post(
+            f"https://desk.zoho.com/api/v1/tickets"
+            f"/{ticket_id}/attachments",
+            files={"file": (filename, file_bytes, content_type)},
+            headers={
+                "Authorization": f"Zoho-oauthtoken {token}",
+                "orgId": str(ZOHO_ORG_ID),
+            },
+            timeout=30,
+        )
+
+        if resp.status_code not in (200, 201):
+            print(
+                f"[ZOHO-API] Attachment upload failed on "
+                f"{ticket_id}: HTTP {resp.status_code} — "
+                f"{resp.text[:300]}"
+            )
+            return None
+
+        data = resp.json()
+        print(
+            f"[ZOHO-API] Attachment uploaded to {ticket_id}: "
+            f"{filename} (id={data.get('id')})"
+        )
+        return data
+
+    except Exception as e:
+        print(f"[ZOHO-API] Attachment upload error: {e}")
+        return None
+
+
 def add_ticket_comment(
     ticket_id: str,
     content: str,

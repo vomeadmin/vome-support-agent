@@ -22,6 +22,7 @@ from zoho_desk_api import (
     add_ticket_comment as zoho_add_comment,
     find_or_create_contact as zoho_find_or_create_contact,
     find_or_create_account as zoho_find_or_create_account,
+    upload_attachment as zoho_upload_attachment,
 )
 from kb_search import (
     get_best_kb_match,
@@ -141,6 +142,14 @@ def _infer_module_from_page(current_page: str) -> str | None:
 # Message building
 # ---------------------------------------------------------------------------
 
+_IMAGE_URL_RE = re.compile(r"\.(png|jpe?g|gif|webp)(\?|$)", re.IGNORECASE)
+
+
+def _is_image_url(url: str) -> bool:
+    """True if the URL points to an image format Claude vision can decode."""
+    return bool(_IMAGE_URL_RE.search(url or ""))
+
+
 def _build_intake_messages(
     message: str,
     session_context: dict,
@@ -175,7 +184,11 @@ def _build_intake_messages(
                 f"{message}"
             )
 
-    # Include attachment info
+    # Include attachment info as a text marker. The prompt treats this
+    # marker as the only source of truth for "the user attached
+    # something" -- without it, Vic will refuse to acknowledge
+    # phantom screenshots.
+    image_urls = [a for a in attachments if _is_image_url(a)]
     if attachments:
         att_note = f"\n\n[User attached {len(attachments)} file(s): {', '.join(attachments)}]"
         user_content += att_note
@@ -193,7 +206,20 @@ def _build_intake_messages(
             "ticket info.]"
         )
 
-    messages.append({"role": "user", "content": user_content})
+    # If any attachments are images, pass them as vision content blocks
+    # so Claude can actually see them (not just see a URL string).
+    # Non-image attachments stay as text-only references.
+    if image_urls:
+        blocks: list[dict] = []
+        for url in image_urls:
+            blocks.append({
+                "type": "image",
+                "source": {"type": "url", "url": url},
+            })
+        blocks.append({"type": "text", "text": user_content})
+        messages.append({"role": "user", "content": blocks})
+    else:
+        messages.append({"role": "user", "content": user_content})
 
     return messages
 
@@ -478,10 +504,16 @@ def _create_ticket_from_intake(
         f"#{ticket_number} (ID: {ticket_id})"
     )
 
-    # Attach files if any
-    # (Attachments are S3 URLs -- Zoho will need them linked, but for now
-    #  we include them in the description. Full attachment API integration
-    #  can be added later.)
+    # Upload any attachments (S3 URLs from the widget) to the Zoho
+    # ticket so the support team can actually view them. Each upload
+    # is best-effort -- a failure does not abort ticket creation.
+    for url in attachments:
+        try:
+            zoho_upload_attachment(ticket_id, url)
+        except Exception as e:
+            print(
+                f"[INTAKE] Attachment upload failed for {url}: {e}"
+            )
 
     # CRM enrichment
     crm = fetch_crm_account(user_email)
