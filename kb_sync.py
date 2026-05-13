@@ -230,16 +230,24 @@ def fetch_all_kb_articles() -> list[dict]:
 
 
 def _fetch_article_detail(article_id: str) -> dict | None:
-    """Fetch full article content from Zoho Desk."""
+    """Fetch full article content from Zoho Desk.
+
+    The MCP server expects the path variable key to be `id`, NOT
+    `articleId`. Using `articleId` returns the error "Mandatory path
+    variable 'id' is not present in tool body" and the article body
+    silently comes back empty.
+    """
     result = _zoho_desk_call(
         "ZohoDesk_getArticle",
         {
-            "path_variables": {"articleId": str(article_id)},
+            "path_variables": {"id": str(article_id)},
             "query_params": {"orgId": str(ZOHO_ORG_ID)},
         },
     )
+    if isinstance(result, dict) and result.get("isError"):
+        return None
     raw = _unwrap_mcp_result(result)
-    if isinstance(raw, dict):
+    if isinstance(raw, dict) and "isError" not in raw:
         return raw
     return None
 
