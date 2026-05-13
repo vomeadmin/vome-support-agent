@@ -775,6 +775,7 @@ async def kb_sync_debug():
 async def kb_sync_status():
     """Inspect the kb_articles index and the last sync run."""
     from database import kb_index_status
+    from kb_sync import LAST_FETCH_DEBUG
     try:
         index = kb_index_status()
     except Exception as e:
@@ -783,6 +784,7 @@ async def kb_sync_status():
         "pipeline": _kb_sync_status,
         "running": _kb_sync_running,
         "index": index,
+        "last_fetch_debug": LAST_FETCH_DEBUG,
     }
 
 

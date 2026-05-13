@@ -53,12 +53,33 @@ ZOHO_DELAY = 1.5  # seconds between API calls
 # Fetch articles from Zoho
 # =====================================================================
 
+LAST_FETCH_DEBUG: list[dict] = []
+
+
+def _extract_mcp_error(raw) -> str | None:
+    """If the MCP response is an error wrapper, return its message text."""
+    if not isinstance(raw, dict):
+        return None
+    if not raw.get("isError"):
+        return None
+    for block in raw.get("content", []) or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            return (block.get("text", "") or "")[:500]
+    return "isError=true with no text block"
+
+
 def fetch_all_kb_articles() -> list[dict]:
     """Fetch all KB articles from all categories in Zoho Desk.
 
     Returns list of {id, title, content, permalink, category,
     modifiedTime, createdTime, language, status, url}.
+
+    Side effect: writes a per-category trace into the module-level
+    LAST_FETCH_DEBUG so /kb-sync/status can surface what happened
+    when a sync mysteriously returns 0 articles.
     """
+    global LAST_FETCH_DEBUG
+    LAST_FETCH_DEBUG = []
     articles = []
 
     print("[KB SYNC] Fetching KB categories...")
@@ -66,9 +87,16 @@ def fetch_all_kb_articles() -> list[dict]:
         "ZohoDesk_getAllKBRootCategories",
         {"query_params": {"orgId": str(ZOHO_ORG_ID)}},
     )
+    cat_err = _extract_mcp_error(cat_result)
+    if cat_err:
+        print(f"[KB SYNC] Category fetch errored: {cat_err}")
+        LAST_FETCH_DEBUG.append({"stage": "categories", "error": cat_err})
+        return []
+
     raw_cats = _unwrap_mcp_result(cat_result)
     if not raw_cats:
         print("[KB SYNC] Failed to fetch categories")
+        LAST_FETCH_DEBUG.append({"stage": "categories", "error": "empty response"})
         return []
 
     categories = []
@@ -78,6 +106,9 @@ def fetch_all_kb_articles() -> list[dict]:
         categories = raw_cats
 
     print(f"[KB SYNC] Found {len(categories)} categories")
+    LAST_FETCH_DEBUG.append({
+        "stage": "categories", "count": len(categories),
+    })
 
     for cat in categories:
         cat_id = cat.get("id")
@@ -102,8 +133,27 @@ def fetch_all_kb_articles() -> list[dict]:
             },
         )
 
+        art_err = _extract_mcp_error(art_result)
+        if art_err:
+            print(
+                f"[KB SYNC]   getArticles errored for {cat_name}: {art_err}"
+            )
+            LAST_FETCH_DEBUG.append({
+                "stage": "getArticles",
+                "category": cat_name,
+                "category_id": str(cat_id),
+                "error": art_err,
+            })
+            continue
+
         raw_articles = _unwrap_mcp_result(art_result)
         if not raw_articles:
+            LAST_FETCH_DEBUG.append({
+                "stage": "getArticles",
+                "category": cat_name,
+                "category_id": str(cat_id),
+                "note": "empty response after unwrap",
+            })
             continue
 
         art_list = []
@@ -111,6 +161,13 @@ def fetch_all_kb_articles() -> list[dict]:
             art_list = raw_articles.get("data", [])
         elif isinstance(raw_articles, list):
             art_list = raw_articles
+
+        LAST_FETCH_DEBUG.append({
+            "stage": "getArticles",
+            "category": cat_name,
+            "category_id": str(cat_id),
+            "article_count": len(art_list),
+        })
 
         for art in art_list:
             article_id = str(art.get("id", ""))
