@@ -96,7 +96,9 @@ def fetch_all_kb_articles() -> list[dict]:
     raw_cats = _unwrap_mcp_result(cat_result)
     if not raw_cats:
         print("[KB SYNC] Failed to fetch categories")
-        LAST_FETCH_DEBUG.append({"stage": "categories", "error": "empty response"})
+        LAST_FETCH_DEBUG.append({
+            "stage": "categories", "error": "empty response",
+        })
         return []
 
     categories = []
@@ -117,50 +119,58 @@ def fetch_all_kb_articles() -> list[dict]:
             continue
 
         print(f"[KB SYNC] Category: {cat_name} (ID: {cat_id})")
-        time.sleep(ZOHO_DELAY)
 
-        art_result = _zoho_desk_call(
-            "ZohoDesk_getArticles",
-            {
-                # categoryId belongs in query_params for this MCP server.
-                # Passing it as a path variable returns "Invalid keys
-                # found in path variable" and silently yields 0 articles.
-                "query_params": {
-                    "orgId": str(ZOHO_ORG_ID),
-                    "categoryId": str(cat_id),
-                    "limit": 100,
+        # Zoho's getArticles caps limit at 50, so paginate via `from`.
+        # categoryId must go in query_params (not path_variables) for
+        # this MCP server.
+        art_list: list[dict] = []
+        page_from = 0
+        page_size = 50
+        max_pages = 20  # safety cap (1000 articles per category)
+        errored = False
+        for _ in range(max_pages):
+            time.sleep(ZOHO_DELAY)
+            page_result = _zoho_desk_call(
+                "ZohoDesk_getArticles",
+                {
+                    "query_params": {
+                        "orgId": str(ZOHO_ORG_ID),
+                        "categoryId": str(cat_id),
+                        "from": page_from,
+                        "limit": page_size,
+                    },
                 },
-            },
-        )
-
-        art_err = _extract_mcp_error(art_result)
-        if art_err:
-            print(
-                f"[KB SYNC]   getArticles errored for {cat_name}: {art_err}"
             )
-            LAST_FETCH_DEBUG.append({
-                "stage": "getArticles",
-                "category": cat_name,
-                "category_id": str(cat_id),
-                "error": art_err,
-            })
-            continue
+            page_err = _extract_mcp_error(page_result)
+            if page_err:
+                print(
+                    f"[KB SYNC]   getArticles errored for "
+                    f"{cat_name} @ from={page_from}: {page_err}"
+                )
+                LAST_FETCH_DEBUG.append({
+                    "stage": "getArticles",
+                    "category": cat_name,
+                    "category_id": str(cat_id),
+                    "from": page_from,
+                    "error": page_err,
+                })
+                errored = True
+                break
 
-        raw_articles = _unwrap_mcp_result(art_result)
-        if not raw_articles:
-            LAST_FETCH_DEBUG.append({
-                "stage": "getArticles",
-                "category": cat_name,
-                "category_id": str(cat_id),
-                "note": "empty response after unwrap",
-            })
-            continue
+            unwrapped = _unwrap_mcp_result(page_result)
+            page_items: list = []
+            if isinstance(unwrapped, dict):
+                page_items = unwrapped.get("data", []) or []
+            elif isinstance(unwrapped, list):
+                page_items = unwrapped
 
-        art_list = []
-        if isinstance(raw_articles, dict):
-            art_list = raw_articles.get("data", [])
-        elif isinstance(raw_articles, list):
-            art_list = raw_articles
+            art_list.extend(page_items)
+            if len(page_items) < page_size:
+                break
+            page_from += page_size
+
+        if errored:
+            continue
 
         LAST_FETCH_DEBUG.append({
             "stage": "getArticles",
