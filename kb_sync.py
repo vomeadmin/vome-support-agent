@@ -121,10 +121,11 @@ def fetch_all_kb_articles() -> list[dict]:
         print(f"[KB SYNC] Category: {cat_name} (ID: {cat_id})")
 
         # Zoho's getArticles caps limit at 50, so paginate via `from`.
-        # categoryId must go in query_params (not path_variables) for
-        # this MCP server.
+        # `from` is a 1-indexed record number (must be > 0), not a
+        # 0-based offset. categoryId must go in query_params (not
+        # path_variables) for this MCP server.
         art_list: list[dict] = []
-        page_from = 0
+        page_from = 1
         page_size = 50
         max_pages = 20  # safety cap (1000 articles per category)
         errored = False
