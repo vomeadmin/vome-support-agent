@@ -55,6 +55,26 @@ ZOHO_DELAY = 1.5  # seconds between API calls
 
 LAST_FETCH_DEBUG: list[dict] = []
 
+# Tokens that signal a category is French. Detected on lowercased
+# category name. `detail.locale` from Zoho always returns "en" (it
+# reflects the fetched translation, not the article's primary
+# language), so we fall back to the category name.
+_FRENCH_NAME_TOKENS = (
+    "connaissances",
+    "français",
+    " et ",
+    " de la ",
+    " des ",
+)
+
+
+def _detect_language_from_category(category_name: str) -> str:
+    name = (category_name or "").lower()
+    for tok in _FRENCH_NAME_TOKENS:
+        if tok in name:
+            return "fr"
+    return "en"
+
 
 def _extract_mcp_error(raw) -> str | None:
     """If the MCP response is an error wrapper, return its message text."""
@@ -197,12 +217,10 @@ def fetch_all_kb_articles() -> list[dict]:
             title = detail.get("title", art.get("title", ""))
             permalink = detail.get("permalink", "")
 
-            language = "en"
-            if detail.get("locale"):
-                language = (
-                    "fr" if "fr" in detail["locale"].lower()
-                    else "en"
-                )
+            # detail.locale always returns "en" from Zoho (it's the
+            # fetched translation's locale, not the article's primary
+            # language). Infer from the category name instead.
+            language = _detect_language_from_category(cat_name)
 
             articles.append({
                 "id": article_id,

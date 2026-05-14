@@ -650,6 +650,67 @@ async def kb_sync_run(request: Request):
     return {"status": "started", "info": _kb_sync_status}
 
 
+@app.post("/kb-sync/fix-languages")
+async def kb_sync_fix_languages():
+    """One-shot: re-tag kb_articles.language based on category name.
+
+    Cheaper than a 14-minute re-sync. Uses the same heuristic as
+    `kb_sync._detect_language_from_category` so this matches what
+    future syncs will assign.
+    """
+    from sqlalchemy import text
+    from database import _get_engine
+    from kb_sync import _detect_language_from_category
+
+    engine = _get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT category, language, COUNT(*) AS n "
+                "FROM kb_articles GROUP BY category, language "
+                "ORDER BY n DESC"
+            )
+        ).all()
+
+    before = [
+        {"category": r[0], "language": r[1], "count": int(r[2])}
+        for r in rows
+    ]
+
+    updates: dict[str, int] = {}
+    with engine.begin() as conn:
+        # Pull distinct category names, decide language, update.
+        cats = conn.execute(
+            text("SELECT DISTINCT category FROM kb_articles")
+        ).all()
+        for (cat_name,) in cats:
+            target = _detect_language_from_category(cat_name)
+            result = conn.execute(
+                text(
+                    "UPDATE kb_articles SET language = :lang "
+                    "WHERE category = :cat AND language != :lang"
+                ),
+                {"lang": target, "cat": cat_name},
+            )
+            if (result.rowcount or 0) > 0:
+                updates[f"{cat_name} -> {target}"] = result.rowcount
+
+    with engine.connect() as conn:
+        after_rows = conn.execute(
+            text(
+                "SELECT language, COUNT(*) AS n "
+                "FROM kb_articles GROUP BY language ORDER BY n DESC"
+            )
+        ).all()
+    after = {r[0]: int(r[1]) for r in after_rows}
+
+    return {
+        "before": before,
+        "updates": updates,
+        "after": after,
+    }
+
+
 @app.get("/kb-sync/debug")
 async def kb_sync_debug():
     """Surface raw Zoho responses so we can see why fetch returns empty.
