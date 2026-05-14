@@ -82,12 +82,16 @@ def score_article(article: dict) -> dict | None:
     elif article_id:
         url = f"https://support.vomevolunteer.com/portal/en/kb/articles/{article_id}"
 
-    # Freshness scoring
+    # Freshness scoring. Most KB articles stay accurate for over a
+    # year, so we only caveat or flag truly old ones:
+    #   < 1 year   -> suggest cleanly (no "X days ago" label)
+    #   1-2 years  -> share with a soft "may have changed" caveat
+    #   2+ years   -> don't share, flag for refresh
     if days_stale is None:
         action = "suggest_with_caveat"
-    elif days_stale > 365:
+    elif days_stale > 730:
         action = "flag_stale"
-    elif days_stale > 90:
+    elif days_stale > 365:
         action = "suggest_with_caveat"
     else:
         action = "suggest"

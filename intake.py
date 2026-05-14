@@ -642,11 +642,7 @@ def run_intake_turn(
         )
         if kb_match:
             kb_context = _format_kb_context(kb_match)
-            kb_article_response = {
-                "title": kb_match["title"],
-                "url": kb_match["url"],
-                "days_stale": kb_match["days_stale"],
-            }
+            kb_article_response = _build_kb_article_response(kb_match)
 
     # Upfront KB search: run on the raw user message so Claude has
     # KB results available on the very first turn (instead of waiting
@@ -663,11 +659,9 @@ def run_intake_turn(
                 kb_searched_no_results = True
             else:
                 kb_context = _format_kb_context(upfront_match)
-                kb_article_response = {
-                    "title": upfront_match["title"],
-                    "url": upfront_match["url"],
-                    "days_stale": upfront_match["days_stale"],
-                }
+                kb_article_response = _build_kb_article_response(
+                    upfront_match,
+                )
         else:
             kb_searched_no_results = True
 
@@ -744,15 +738,12 @@ def run_intake_turn(
             session_context.get("locale"),
         )
         if kb_match:
-            kb_article_response = {
-                "title": kb_match["title"],
-                "url": kb_match["url"],
-                "days_stale": kb_match["days_stale"],
-            }
-            # If stale, flag it
+            # If stale, flag it -- don't show the article at all
             if kb_match["action"] == "flag_stale":
                 flag_stale_article(kb_match)
-                kb_article_response = None  # Don't show stale articles
+                kb_article_response = None
+            else:
+                kb_article_response = _build_kb_article_response(kb_match)
 
     # Step 4: Apply completeness gate
     is_complete, missing = check_completeness(extracted, session_context)
@@ -878,6 +869,25 @@ def _extract_prior_kb_query(conversation_history: list) -> str | None:
     return None
 
 
+def _build_kb_article_response(kb_match: dict) -> dict:
+    """Build the kb_article payload that gets returned to the widget.
+
+    Only surface days_stale when the article is actually old enough to
+    matter (>1 year). For fresh articles the widget hides the
+    "Last updated N days ago" label and Claude doesn't need to caveat.
+    """
+    days = kb_match.get("days_stale")
+    action = kb_match.get("action", "suggest")
+    return {
+        "title": kb_match["title"],
+        "url": kb_match["url"],
+        "days_stale": (
+            days if action in ("suggest_with_caveat", "flag_stale")
+            else None
+        ),
+    }
+
+
 def _format_kb_context(kb_match: dict) -> str:
     """Render a KB match as a structured prompt block with article bodies.
 
@@ -953,9 +963,12 @@ def _search_kb_combined(
         if usable:
             best = usable[0]
             days = best.get("days_stale")
-            if days is not None and days > 365:
+            # Most KB articles stay accurate for over a year. Only
+            # caveat or flag if truly old (see kb_search.score_article
+            # for the matching thresholds).
+            if days is not None and days > 730:
                 action = "flag_stale"
-            elif days is not None and days > 90:
+            elif days is not None and days > 365:
                 action = "suggest_with_caveat"
             else:
                 action = "suggest"
@@ -963,8 +976,9 @@ def _search_kb_combined(
             extras = []
             for r in usable[1:]:
                 r_days = r.get("days_stale")
-                # Skip stale extras -- don't feed Claude outdated context
-                if r_days is not None and r_days > 365:
+                # Drop genuinely stale extras (over 2 years) so Claude
+                # doesn't get outdated context from them.
+                if r_days is not None and r_days > 730:
                     continue
                 extras.append({
                     "title": r["title"],
