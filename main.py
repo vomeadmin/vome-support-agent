@@ -685,77 +685,81 @@ async def kb_sync_debug():
         cat_id = first.get("id")
         out["first_category_id"] = cat_id
 
-        # Grab one real article ID so we can probe getArticle shapes.
-        probe_art_id = None
-        probe_result = _zoho_desk_call(
-            "ZohoDesk_getArticles",
-            {
-                "query_params": {
-                    "orgId": str(ZOHO_ORG_ID),
-                    "categoryId": str(cat_id),
-                    "from": 1,
-                    "limit": 1,
-                },
-            },
-        )
-        probe_unwrapped = _unwrap_mcp_result(probe_result)
-        if isinstance(probe_unwrapped, dict):
-            probe_data = probe_unwrapped.get("data", []) or []
-            if probe_data:
-                probe_art_id = str(probe_data[0].get("id") or "")
-        out["probe_article_id"] = probe_art_id
+        # Probe one article from each category. This shows us what
+        # `locale` (and `availableLocaleTranslations`) Zoho returns
+        # so we can map articles -> language correctly.
+        out["language_probes"] = []
+        for cat in cat_list[:2]:
+            this_cat_id = str(cat.get("id") or "")
+            this_cat_name = cat.get("name", "")
+            if not this_cat_id:
+                continue
 
-        # Probe getArticle (singular) -- multiple argument shapes
-        if probe_art_id:
-            article_attempts = [
-                ("getArticle, path_var articleId", {
-                    "path_variables": {"articleId": probe_art_id},
-                    "query_params": {"orgId": str(ZOHO_ORG_ID)},
-                }),
-                ("getArticle, query articleId", {
+            listing = _zoho_desk_call(
+                "ZohoDesk_getArticles",
+                {
                     "query_params": {
                         "orgId": str(ZOHO_ORG_ID),
-                        "articleId": probe_art_id,
+                        "categoryId": this_cat_id,
+                        "from": 1,
+                        "limit": 1,
                     },
-                }),
-                ("getArticle, path_var id", {
-                    "path_variables": {"id": probe_art_id},
-                    "query_params": {"orgId": str(ZOHO_ORG_ID)},
-                }),
-            ]
-            out["article_detail_attempts"] = []
-            for label, args in article_attempts:
-                raw = _zoho_desk_call("ZohoDesk_getArticle", args)
-                entry: dict = {"label": label}
-                if isinstance(raw, dict) and raw.get("isError"):
-                    for blk in raw.get("content", []) or []:
-                        if blk.get("type") == "text":
-                            entry["error_text"] = (
-                                blk.get("text", "") or ""
-                            )[:400]
-                            break
-                    out["article_detail_attempts"].append(entry)
-                    continue
-                unwrapped = _unwrap_mcp_result(raw)
-                if isinstance(unwrapped, dict):
-                    if "isError" in unwrapped:
-                        entry["isError"] = unwrapped.get("isError")
-                        for blk in unwrapped.get("content", []) or []:
-                            if blk.get("type") == "text":
-                                entry["error_text"] = (
-                                    blk.get("text", "") or ""
-                                )[:400]
-                                break
-                    else:
-                        entry["keys"] = list(unwrapped.keys())[:30]
-                        entry["title"] = unwrapped.get("title", "")
-                        entry["has_answer"] = bool(
-                            unwrapped.get("answer")
+                },
+            )
+            listing_unwrapped = _unwrap_mcp_result(listing)
+            art_id = ""
+            list_locale = None
+            if isinstance(listing_unwrapped, dict):
+                rows = listing_unwrapped.get("data", []) or []
+                if rows:
+                    art_id = str(rows[0].get("id") or "")
+                    list_locale = rows[0].get("locale")
+
+            entry: dict = {
+                "category": this_cat_name,
+                "category_id": this_cat_id,
+                "first_article_id": art_id,
+                "list_locale": list_locale,
+            }
+            if art_id:
+                detail = _zoho_desk_call(
+                    "ZohoDesk_getArticle",
+                    {
+                        "path_variables": {"id": art_id},
+                        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+                    },
+                )
+                detail_unwrapped = _unwrap_mcp_result(detail)
+                if (
+                    isinstance(detail_unwrapped, dict)
+                    and "isError" not in detail_unwrapped
+                ):
+                    entry["detail_title"] = (
+                        detail_unwrapped.get("title", "")
+                    )
+                    entry["detail_locale"] = (
+                        detail_unwrapped.get("locale")
+                    )
+                    entry["detail_locale_type"] = type(
+                        detail_unwrapped.get("locale")
+                    ).__name__
+                    entry["available_locale_translations"] = (
+                        detail_unwrapped.get(
+                            "availableLocaleTranslations"
                         )
-                        entry["answer_len"] = len(
-                            unwrapped.get("answer") or ""
-                        )
-                out["article_detail_attempts"].append(entry)
+                    )
+                else:
+                    entry["detail_error"] = True
+            out["language_probes"].append(entry)
+
+        # Keep the original article_detail_attempts probe too, but
+        # only run it once on the first category's first article.
+        probe_art_id = None
+        if out["language_probes"]:
+            probe_art_id = out["language_probes"][0].get(
+                "first_article_id"
+            ) or None
+        out["probe_article_id"] = probe_art_id
 
         # Try a few argument shapes -- whichever one returns articles
         # tells us how to talk to this MCP server.
