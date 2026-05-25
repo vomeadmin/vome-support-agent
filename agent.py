@@ -40,6 +40,28 @@ if _templates_path.exists():
         f"{_templates_content}"
     )
 
+# Load the feature catalog (generated from landing-page strings) so Claude
+# can ground answers about what Vome offers, plan limits, and pricing in
+# the same copy customers see on the marketing site.
+_catalog_path = Path(__file__).parent / "knowledge_book" / "feature_catalog.md"
+if _catalog_path.exists():
+    _catalog_content = _catalog_path.read_text(encoding="utf-8")
+    SYSTEM_PROMPT += (
+        "\n\n---\n\n"
+        "## FEATURE CATALOG (FROM LANDING PAGE)\n\n"
+        "The following catalog is the authoritative reference for what "
+        "features Vome ships, how each module is described publicly, and "
+        "what each plan tier (Recruit / Pro / Enterprise / Ultimate) "
+        "includes. Use it when drafting replies to questions about "
+        "capabilities, pricing, plan limits, integrations, or how a "
+        "particular feature works. If a question describes something this "
+        "catalog covers, ground the answer in this copy rather than "
+        "guessing. If a request describes something the catalog does NOT "
+        "cover, treat it as a potential feature request and flag it for "
+        "human review.\n\n"
+        f"{_catalog_content}"
+    )
+
 ZOHO_DESK_MCP_URL = os.environ.get("ZOHO_DESK_MCP_URL", "")
 ZOHO_CRM_MCP_URL = os.environ.get("ZOHO_CRM_MCP_URL", "")
 ZOHO_ORG_ID = os.environ.get("ZOHO_ORG_ID", "")

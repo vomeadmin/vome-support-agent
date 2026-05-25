@@ -442,11 +442,28 @@ def _create_ticket_from_intake(
         else user_email
     )
 
+    # Aggregate attachments from every turn in the conversation, not
+    # just the current one. The widget only forwards a given turn's
+    # uploads on that turn — so if the screenshot arrived in turn N and
+    # the user confirmed the ticket in turn N+1, the current `attachments`
+    # would be empty and the screenshot would never reach Zoho.
+    all_attachments: list[str] = []
+    seen: set[str] = set()
+    for turn in conversation_history:
+        for url in turn.get("attachments") or []:
+            if url and url not in seen:
+                seen.add(url)
+                all_attachments.append(url)
+    for url in attachments or []:
+        if url and url not in seen:
+            seen.add(url)
+            all_attachments.append(url)
+
     # Build a clean HTML body for the ticket (transcript only —
     # metadata is added as an internal comment below)
     ticket_description = _build_ticket_html(
         conversation_history=conversation_history,
-        attachments=attachments,
+        attachments=all_attachments,
         current_message=current_message,
         current_reply=current_reply,
     )
@@ -507,7 +524,7 @@ def _create_ticket_from_intake(
     # Upload any attachments (S3 URLs from the widget) to the Zoho
     # ticket so the support team can actually view them. Each upload
     # is best-effort -- a failure does not abort ticket creation.
-    for url in attachments:
+    for url in all_attachments:
         try:
             zoho_upload_attachment(ticket_id, url)
         except Exception as e:
@@ -584,8 +601,10 @@ def _create_ticket_from_intake(
             f"Source page: "
             f"{session_context.get('current_page', 'unknown')}\n"
         )
-        if attachments:
-            note += f"\nAttachments: {', '.join(attachments)}\n"
+        if all_attachments:
+            note += (
+                f"\nAttachments: {', '.join(all_attachments)}\n"
+            )
         zoho_add_comment(ticket_id, note)
     except Exception as e:
         print(f"[INTAKE] Internal note failed: {e}")

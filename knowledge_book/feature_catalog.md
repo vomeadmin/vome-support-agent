@@ -1,0 +1,1473 @@
+# Vome feature catalog
+
+_Generated 2026-05-24 from `landing-page/src/i18n/strings.ts` (English copy only)._
+
+This catalog is the authoritative reference for what features Vome ships, 
+how they are described publicly, and what each plan tier includes. Use it 
+to answer customer questions about capabilities, pricing, and plan limits.
+
+---
+
+## Hero — homepage value proposition
+
+- 4.6 ★ on Capterra, GetApp & G2
+- The volunteer management software
+- your volunteers and staff
+- actually want to use
+- From a single coordinator to teams running programs across multiple sites, Vome automates the manual work behind onboarding, scheduling, tracking and communication. All in one platform, with unlimited volunteers on every plan.
+- Sign up for Free
+- Book a demo
+- Free plan + 30-day trials on paid
+- Set up in minutes
+- HIPAA, GDPR & SOC 2
+- Hours Logged: 1h 00
+- Party size:
+- 3 people
+- New message
+- Celine: See you Saturday!
+
+---
+
+## Feature tabs — homepage modules overview
+
+- Everything volunteer managers need.
+- Built to work together.
+- Vome is the complete volunteer management platform. One easy-to-use system that eliminates manual work at every step, from the first application to the final report.
+- Watch a 2-minute video
+- Recruitment
+- Onboarding
+- Scheduling
+- Hour tracking
+- Data & reports
+- Communications
+- Build the recruitment process you need.
+- Custom application forms
+- Add questions, request file uploads, collect e-signatures, embed shift calendars — all from one form builder.
+- One-click apply links
+- Share direct links to opportunities, forms, or your public page. Embed on your site, post on social, or share it anywhere.
+- Recruitment automations
+- Automations move applicants forward on their own and keep your system organized when knowing it's your turn to perform an admin task. Triggered by form response automations, visibility rules, and eligibility requirements.
+- Automated status updates
+- Email and app notifications keep volunteers in the loop through every step of the application process, by eliminating redundant back-and-forth, and without any administrative intervention.
+- Onboard volunteers through custom workflows.
+- No manual follow-up.
+- Build any onboarding flow, your way
+- Combine forms, fillable PDFs, e-signatures, training modules, checklists, and file uploads into a single guided sequence. Organize into folders by program, department, or season.
+- Fillable PDFs, built in
+- Waivers, releases, policies, and compliance forms. Signed and submitted inside the sequence, with no third-party tools, printing, scanning, or re-uploading needed.
+- Control every step
+- Due dates, reminders, skip rules, auto-expiration, and visibility settings per step. Choose whether volunteers propel themselves to the next step or admins advance them.
+- Credentialing and compliance, handled
+- Background check integrations, auto-expiring renewals for certifications and waivers, and audit-ready tracking at every step.
+- 1.25M+ shifts scheduled and counting.
+- One-off events. Recurring tasks. Multi-site calendars. Vome handles it all.
+- Shift management at every scale
+- Create single shifts, recurring schedules, or import entire calendars from a spreadsheet. Use shift templates and apply them across programs for quick and easy setup. Mass assign, edit, and cancel from one calendar view.
+- Flexible booking, your rules
+- Choose instant booking or admin approval. Open shifts to everyone, or make them private and visible only to tagged volunteers. Let volunteers propose their own times with flexible scheduling.
+- Group reservations for corporate and team events
+- Volunteers reserve multiple spots in a single action on behalf of a team, a family, or a corporate group. Hours and participation roll up at the group level, ready for reporting.
+- Reminders, confirmations, and calendar sync
+- Configurable shift notifications send reminders before, during, and after each shift. Volunteers confirm, join waitlists, and sync shifts to Google, Outlook, or Apple Calendar.
+- So many ways to track volunteer hours. Pick what fits your program.
+- Multiple ways to track hours
+- QR scan, tap-to-check-in via the app, on-site kiosk, or fully automate check-in/out. Pick one, or mix different methods across your different volunteer programs.
+- Proximity validation for attendance integrity
+- Require volunteers to be physically within a defined radius to check in or out. Customizable by program. Prevents remote check-ins and protects program data.
+- Walk-ins, group reservations, and off-site hours
+- On-site kiosks handle check-in and check-out for everyone on a shift, with an optional "Join a shift" mode for walk-ins who want to sign up on the spot. Group reservations roll up at the group level for reporting. Volunteers can also submit hour claims for work they did off-platform.
+- Audit-ready hour reports
+- Shifts and hours by volunteer, a complete reservations and hours log, and custom database exports. Every hour traced to a person, an opportunity, and a shift.
+- Import your data. Organize it your way. Report in just a few clicks.
+- Turnkey data import and migration
+- Move your volunteer records into Vome in minutes. Bulk import from any other system, map custom fields to match your existing structure, and invite volunteers to claim their profiles. Duplicate handling built in.
+- A database that flexes to your program
+- Segment volunteers by tag, program, or location with unlimited custom fields. Build and save custom views that filter and organize data any way you need. Give each admin access only to the data that belongs to them. Super admins see everything. Site managers see their site.
+- Ready-made reports for key stakeholders
+- Hours by volunteer, attendance logs, sequence completion, form submissions, and check-in history. Every report you need for funders, boards, and audits, ready in seconds.
+- Analytics dashboards at a glance
+- Visualize hours, shifts, onboarding progress, form completion, and custom field trends. Feel the pulse of your program without running a single report.
+- Every way you need to communicate, in one place.
+- Native instant messaging
+- One-on-one instant messaging, custom group chats, and auto-generated chatrooms for every shift and opportunity. No messaging apps. No email chains. Volunteers talk to admins and each other right inside the platform.
+- Bulk email built for campaigns
+- Send personalized emails to volunteers through Vome's server, or connect your own Google or Outlook account to send from your domain. Build reusable email templates with dynamic variables. Target by group, tag, program, or any custom field.
+- Automate the messages you send every week
+- Birthday wishes, shift reminders, onboarding follow-ups, survey invitations, award notifications, and confirmation requests. Set the rule once. Vome handles the sending forever.
+- Full visibility across your team's outgoing messages
+- Every email and notification in one dashboard. See what was sent, to whom, when, and by which admin. Share email templates across the team so everyone's communication stays consistent.
+
+---
+
+## Features page — modules overview
+
+- Features | Complete volunteer management platform | Vome
+- From first application to final report, Vome connects every stage of your volunteer program in one integrated platform.
+- All-in-one volunteer management
+- One
+- connected platform
+- for every stage of volunteer management.
+- Your onboarding flows, your scheduling rules, your hour tracking methods, your reports.
+- Flexible enough to match any workflow your organization needs.
+- Simple enough to start using it today.
+- Unlimited volunteers
+- iOS, Android & Web
+- 30-day free trial on paid plans
+- Recruitment
+- Applications & automations
+- Onboarding
+- Guided workflows
+- Scheduling
+- Shift management & self-scheduling
+- Hour tracking
+- QR, kiosk, tap & auto check-in/out
+- Communications
+- Chat, email & automations
+- Data & reports
+- Your database, your way
+- Recognition
+- Custom challenges & awards
+- Mobile app
+- iOS & Android
+- Integrations
+- Native, API, Zapier & MSFT Power Automate
+- Explore by module
+- Learn more about each feature module - the capabilities, the integrations, and the workflows your team can put to work today.
+- Recruitment & applications
+- Build modern, custom-branded forms and turn interest into ready-to-go applicants. No manual triage required.
+- Custom forms with conditional logic, e-signatures & file uploads
+- Reusable form templates across opportunities
+- Recruitment automation workflows (auto-tag, auto-assign, status updates)
+- Direct shareable links, QR codes & embeddable widgets
+- Learn more about recruitment
+- Onboarding & screening
+- Build any onboarding flow your program needs (interviews, training, waivers, background checks) in one guided sequence.
+- Step-by-step sequences with optional volunteer self-tracking
+- Sterling Volunteers background-check integration
+- SCORM Cloud E-learning, fillable PDFs & e-signatures
+- Auto-expiring renewals + audit-ready status tracking
+- Learn more about onboarding
+- Scheduling & shifts
+- From a single shift to multi-site recurring programs. Vome scales scheduling to whatever your operation looks like.
+- Recurring & one-time shifts with bulk creation
+- Self-scheduling, instant booking, or admin-approval flows
+- Custom policies for capacity, cancellations & check-ins
+- Calendar sync, exports, and reminders by app + email
+- Learn more about scheduling
+- Hour tracking & check-in
+- So many ways to track hours. Pick what fits each program: QR codes, kiosks, hour claims, or fully automated check-in & out.
+- QR-code or tap-to-check-in attendance tracking via the mobile app
+- Attendance kiosks to be used on any tablet, computer or phone
+- Volunteer-submitted hour claims with admin approval
+- Bulk hour logging + integrated reservation & hours reports
+- Learn more about hour tracking
+- Recognition
+- Reward and motivate your volunteers with auto-earned achievements and the custom awards your team designs.
+- Built-in Vome achievements your volunteers earn out of the box
+- Custom awards & badges your team designs
+- Auto-earned based on hours, shifts & milestones
+- Visible on volunteer profiles, share-ready
+- Learn more about recognition
+- Communications
+- Every channel volunteers actually use, in one place. Email, in-app chat, group chats, and auto-generated shift rooms.
+- Bulk + individual email with Google or Microsoft domain integration
+- Native private messaging and custom group chats
+- Auto-generated chatrooms for every shift and opportunity
+- Automated reminders, confirmations, and announcements
+- Learn more about communications
+- Data & reports
+- Import your data, organize it your way, and report in just a few clicks.
+- Bulk import + custom field mapping (Excel, .CSV)
+- Unlimited custom & dynamic database fields
+- Profile tags, advanced filtering, and group management
+- Instant reports, analytics dashboards & Google Sheets sync
+- Learn more about data & reports
+- Mobile app
+- Designed for every age, skill, and shift. Free for volunteers, full admin power for your team, wherever you are.
+- iOS & Android, free download for everyone
+- Volunteers apply, reserve, check-in, and message in-app
+- Admins manage shifts, attendees, and chats from anywhere
+- Push notifications + reminders built in
+- Learn more about the app
+- Integrations & API
+- Connect Vome to the tools your team already uses. Native integrations for the essentials, plus API access and no-code automations for everything else.
+- Native integrations: Salesforce Lightning app, Sterling Volunteers, Double the Donation, and many more
+- Implement custom no-code automations with Zapier and Microsoft Power Automate
+- SAML-based SSO with Microsoft Entra ID, JumpCloud, and other providers
+- REST API, custom webhooks, and a developer dashboard
+- Learn more about integrations
+- See it in action
+- Sign up free and explore the platform yourself, or book a demo and we'll walk you through the modules that matter most to you.
+
+---
+
+## Module: Recruitment (forms & application workflows)
+
+- Volunteer application forms & recruitment workflows | Vome
+- Build modern, custom-branded forms with conditional questions, automations, and recruitment workflows that route applicants automatically.
+- Recruitment & application forms
+- Build the
+- recruitment process
+- your program needs.
+- Modern forms with conditional questions, file uploads, and e-signatures. Automations that route applicants. Recruitment workflows wired into the rest of the platform.
+- First form free
+- Custom-branded pages
+- Works on any device
+- Everything you need to convert interest into action
+- Redirect users from your website, social media, or email campaigns to custom forms that guide applicants through your recruitment process and save your team hours of manual work.
+- A branded page for every opportunity
+- Build custom landing pages for events, programs, and positions. Each routes to its own form and recruitment workflow.
+- Conditional questions
+- Show only what's relevant. Branch on each answer to personalize the volunteer's experience.
+- Forms tailored to each applicant
+- Route applicants by role, age, group status, or whether they're already in your database. Each volunteer sees only the form that fits them, and you decide what's visible to whom.
+- Auto-routing into onboarding
+- New applicants can be dropped straight into onboarding sequences automatically, with no manual triage, status updates, or assignments needed.
+- A dashboard built for forms
+- Filter, sort, and save custom views. Permissions let each team see only the forms that matter to them, across sites and locations.
+- Apply from any device
+- Volunteers fill out forms on the iOS and Android apps, browser, tablet, or computer. Mobile-first by default, accessible everywhere.
+- BUILD
+- Build any application form, exactly the way you need it.
+- Drag, drop, save. Add conditional questions that show or hide based on previous answers, request file uploads, collect digital consent through e-signatures, and embed shift calendars right inside the form.
+- 20+ question types to collect any data your form needs
+- Choose who gets notified about new submissions, and when
+- Link forms to different areas of the platform to collect submissions at every stage
+- Duplicate any form to spin up new ones with the same questions and workflow
+- ROUTE
+- You decide what the volunteer journey looks like.
+- Whether you use a single form for all volunteers, or different forms for every role, age group, or situation, it's all configurable in Vome. Set who can see each role, what they need to complete, and how they advance through the process.
+- Make opportunities visible only to matching volunteers by tag, role, location, age, or anything else you need
+- Add conditional questions to collect specific data based on previous answers
+- Track every submission on a live dashboard, monitor status, and take bulk actions in a few clicks
+- Sort, filter, and save custom views, and use admin permissions to share forms across sites while letting each team see only what they need
+- AUTOMATE
+- Automations pick up where the form leaves off.
+- When a form is submitted, automations fire. Assign onboarding sequences or opportunities, add tags, and send a confirmation email. Each action can be triggered by what the volunteer answered.
+- 10+ automations ready to use out of the box
+- Move volunteers through the process without manual work
+- Map form submissions directly into your database, structured exactly how you need it
+- Let your IT team push form submissions to any third-party platform with our open API
+- See for yourself.
+- Build your first form free, in minutes.
+- Build your first form free
+- How it works
+- Build once. Set the rules. Let Vome do the rest, every time someone applies.
+- Build the form
+- Drag-and-drop fields. Add conditional logic, file uploads, e-signatures, and shift-calendar embeds.
+- Set the workflow
+- Configure eligibility, screening questions, and the stages applicants will move through.
+- Publish and share
+- Direct links, QR codes, and embeds. A branded recruitment page with featured opportunities.
+- Automations take over
+- Submissions trigger the right next steps. Tags, sequences, confirmations, and assignments run on their own based on what each volunteer answered.
+- More than a form builder
+- Generic form tools collect data into a spreadsheet. Vome turns each submission into an end-to-end recruitment workflow.
+- Built for volunteer programs
+- Forms are one step of the volunteer journey. Choose which form a volunteer submits and how it shapes the next step, whether that's onboarding, scheduling shifts, or whatever your program needs.
+- Routing beyond the form
+- Most form tools stop at conditional fields. Vome layers on conditional automations that move volunteers to the right stage based on how you've designed the workflow. Handle file uploads, background checks, or anything else you need without extra effort.
+- All in one platform
+- Forms can feed directly into your database, or be prompted throughout the platform whenever you need them. Require volunteers to resubmit forms before reserving shifts, checking in, or anything else.
+- Recruitment FAQs
+- Common questions about application forms and recruitment workflows.
+- Still have questions?
+- Talk to our team
+- How do conditional questions work?
+- Each question can branch based on a previous answer. Vome will show, hide, or require fields dynamically. Useful for personalizing the form by program, role, or eligibility.
+- What happens after a form is submitted?
+- You can configure automations to handle the next step automatically, or manually screen submissions and take action as needed. Based on what the applicant answered, Vome can tag them, assign them to an onboarding sequence, post them to the right opportunity, and send a confirmation email, all without manual work from your team.
+- Can volunteers upload documents?
+- Yes. You can collect all sorts of file uploads from volunteers. Have them upload a document, digitally sign a waiver, or fill out a PDF directly inside Vome.
+- Can I reuse a form across opportunities?
+- Yes. You can customize the recruitment process and reuse forms across your opportunities in just a few clicks. You can also duplicate opportunities or forms with ease.
+- Does it work on mobile?
+- Yes. Forms are mobile-first, and shareable links open the Vome app on logged-in volunteers' phones for an app-native experience.
+- Recruitment features by plan
+
+---
+
+## Module: Onboarding
+
+- Volunteer onboarding & screening software | Vome
+- Build onboarding sequences with interviews, training, waivers, e-signatures, and Sterling Volunteers background checks. Track status and expirations in one place.
+- Onboarding & screening
+- Take volunteers through
+- custom guided
+- onboarding sequences
+- Combine file uploads, background checks, and training in guided flows. Decide what volunteers do, when steps expire, and how completion is verified, all with ease.
+- First sequence free
+- Volunteers self-track
+- Audit-ready
+- Everything your screening process requires.
+- Reduce the time it takes to move volunteers through the onboarding process. Decide which steps volunteers can see and when they can move through them, designed exactly as you need it, with a live dashboard to track progress.
+- Step-by-step sequences
+- Build as many onboarding processes as you need, whether by role or age specification. Volunteers can get auto-assigned the moment their application clears.
+- Integrated background checks
+- Connect the tools you already use, like Sterling Volunteers or Verified First, without leaving Vome. Statuses sync back automatically.
+- SCORM e-learning & videos
+- Drop SCORM-compliant training modules directly into a sequence with our SCORM Cloud integration. Completion and scores sync to the volunteer profile. Upload videos or YouTube links and track who's watched them, often useful for training.
+- Fillable PDFs, waivers & forms
+- Collect signed waivers, let volunteers fill out PDFs directly in Vome, and gather form submissions inside the flow. Configure expirations and pull reports out of the box.
+- Self-track from web or mobile
+- Volunteers see their next step from the Vome mobile app or web. Or keep any step (or the full sequence) private and advance volunteers yourself.
+- Status across every site
+- A dashboard view of who's screened, who's expiring, and who's waiting. Permissions scope each admin to their site or team.
+- BUILD
+- Build custom step-by-step onboarding sequences and choose who gets routed into them and when.
+- Combine interviews, orientations, training modules, waivers, document uploads, and background checks into guided flows. Mark steps as required or optional, private or visible to volunteers, and so much more.
+- 10+ step types to choose from when building each step in your sequence
+- Customizable settings to control what volunteers see, whether they can skip steps, and when each step is due
+- Add automations that fire when volunteers finish a sequence or complete a specific step
+- Duplicate sequences to spin up new onboarding processes with similar configurations
+- TRACK
+- See exactly where every volunteer stands across every step.
+- Volunteers can move through steps from their homepage, or admins can manage the process for them. A live dashboard shows where each volunteer is in their journey and how long they've been on a step. Build reports in minutes.
+- Volunteers see their sequences on the web and mobile apps
+- Uploaded files and documents stay on each volunteer's profile for easy access
+- Manage file expirations with ease and let volunteers reupload new versions
+- Integrate third-party tools or pull sequence data using Vome's API
+- AUTOMATE
+- Choose what comes after they finish onboarding.
+- When volunteers complete the process and become eligible, Vome can automatically assign them to opportunities, let them reserve shifts, and turn them into active volunteers in your portal. Or assign them to a new sequence based on specific requirements they still need to complete. The possibilities are endless. Structure the program exactly as you need.
+- Set up automations per step, or trigger them once a volunteer finishes the full sequence
+- Send custom notifications to admins and volunteers when steps are completed or pending review
+- Run background checks or e-learning modules without leaving the platform
+- Auto-trigger expiration emails so volunteers can resubmit documents once they're past due
+- See for yourself.
+- Build your first onboarding sequence free, in minutes.
+- Build your first sequence free
+- How it works
+- Build the sequence once. Every volunteer who applies gets walked through the right screening for their role.
+- Build the sequence
+- Add interview, training, waiver, background-check, and document steps in the order your program needs.
+- Connect integrations
+- Sterling Volunteers and SCORM Cloud are native. Activate them once, reuse across every opportunity.
+- Volunteers move through
+- Each volunteer sees their next step and takes action, or admins keep it private and advance them.
+- Status stays current
+- Completion, expiration, and renewal sync back automatically. Reports and dashboards reflect it in real time.
+- More than a checklist
+- Generic onboarding tools track tasks. Vome lets you build custom onboarding journeys, immediately accessible after a volunteer completes an application form, all tied to your database.
+- Embed your workflows into sequences
+- Integrate background checks, Vome forms, and training videos directly throughout your sequence. Everything is tracked and managed inside Vome, and accessible on each volunteer's profile at any time.
+- Audit-ready reporting built in
+- See exactly when documents were uploaded and when steps were marked complete, across all sequences or per sequence. Pull the report you need in a few clicks.
+- Proven to cut onboarding time
+- Rochester Regional Health used Vome sequences to take volunteer onboarding from 6–8 weeks down to 1, saving admins 10+ hours every week. See why you can do the same and get started today.
+- Onboarding FAQs
+- Common questions about onboarding sequences, screening, and expiration tracking.
+- Still have questions?
+- Talk to our team
+- What step types can I add to a sequence?
+- You can build any custom step. For example: interviews, orientations, trainings, waivers, e-signatures, fillable PDFs, file uploads, videos, checklists, background checks, and Vome forms.
+- Can I let volunteers track their own progress?
+- Yes. Each sequence can be set to volunteer-visible (they see their next step and take action themselves) or admin-only (your team advances them). You can mix modes per sequence depending on the need.
+- How are expirations and renewals handled?
+- Steps that expire (waivers, background checks, certifications) carry a renewal date on the volunteer record. Vome flags upcoming expirations on the dashboard, sends reminders before the date, and re-opens the step so the volunteer can resubmit. Past expirations are surfaced in a dedicated report.
+- Can I reuse a sequence?
+- Yes. Build a sequence once and assign it to any number of opportunities, or duplicate a sequence to spin up a variation. Multi-site permissions scope sequences to the right admins so teams only manage what's theirs.
+- Where does the volunteer data go?
+- The data is available in many places: on your sequence dashboard, the volunteer's profile, and across our standard reports. You can easily access completion dates, expirations, upload dates, and so much more without any additional configuration.
+- Onboarding features by plan
+
+---
+
+## Module: Scheduling (shifts & reservations)
+
+- Volunteer scheduling software & shift management | Vome
+- Run one-time and recurring shifts with self-scheduling, instant booking, group reservations, custom scheduling policies, auto-shift chatrooms, calendar sync, and reminders.
+- Scheduling & shifts
+- From one-off shifts to multi-site programs,
+- schedule it all
+- in Vome.
+- Build one-time or recurring shifts in bulk. Let volunteers self-schedule, request approval, or pre-assign them yourself. Custom scheduling policies handle capacity, cancellations, check-ins, and reservation limits.
+- Multi-site & recurring
+- Calendar sync
+- Built-in reminders
+- 1.25M+ shifts have been trusted to run on Vome.
+- From national events with thousands of volunteers showing up in a single day, to multi-site healthcare organizations coordinating 200+ volunteers daily, Vome scheduling makes it easy for both administrators and volunteers to keep pace.
+- Bulk shifts and reusable templates
+- Generate one-time or recurring shifts in a few clicks. Save any setup as a template and reuse it next season, no rebuilding from scratch.
+- Self-schedule, request, or admin-assign
+- Open shifts to instant booking for approved volunteers, require admin approval, or pre-assign in bulk from the schedule view.
+- Custom scheduling policies
+- Control everything, from restricting overlapping reservations to when volunteers can check in or cancel and whether waitlists are allowed. All handled per opportunity.
+- Group reservations and guests
+- Let one volunteer book on behalf of a team, family, or corporate group, and add guests to a reservation. Vome stores the lead, party size, and group on the shift.
+- Configure chatrooms or scheduled notifications
+- Enable per-shift chatrooms with attendees added automatically, or schedule email and push notifications to send before, during, or after shifts, with dynamic messaging across every shift.
+- Reporting out of the box
+- Pull shift activity by site, location, opportunity, or hours completed. Save custom views, filters, and shift tags. Permissions scope each admin to what they manage.
+- BUILD
+- Build and publish your schedule in a few clicks.
+- Generate recurring shifts in bulk, set capacity with min and max attendees, turn on waitlists, and decide who can see each shift. Restrict by tag, role, age, or site. Vome publishes the dates and keeps every change in sync.
+- Save any shift setup as a template and reuse it for next season's program, no rebuilding from scratch
+- Bulk-edit existing shifts: change capacity, times, spots, or coordinators across hundreds of shifts in a single action
+- Organize with shift tags and saved locations so your schedule stays sortable, filterable, and scoped to each site
+- Require a form, training, or background check before a volunteer can book, with recruitment and onboarding wired into the schedule
+- RESERVE
+- Volunteers reserve the way you want them to.
+- Approved volunteers can reserve instantly with auto-confirmation, or every reservation can be routed for admin approval. Group reservations let one volunteer reserve for a team or family. Reservation limits and cancellation windows are enforced automatically per scheduling policy.
+- Vome flags reservation conflicts before they happen, with no double-bookings and no overlaps
+- Mass-assign volunteers across many shifts in a single action, straight from the schedule view
+- Mobile check-in from the volunteer app on arrival, or scan a shared QR kiosk at the door
+- Waitlists auto-promote volunteers when a spot opens, with notifications fired automatically
+- COORDINATE
+- Coordinate every shift without chasing anyone.
+- Configure custom notification policies that fire dynamic messages before, during, and after every shift, by email, push, or in-app. Each shift can also get its own auto-generated chatroom with attendees added on reservation, so coordinators can drop last-minute updates to the whole crew. Volunteers sync to Google, Outlook, or Apple Calendar, and Vome fires reminders automatically.
+- Mark absences and log hours directly from the shift view, with no separate tracker and no copy-paste
+- Assign a coordinator to each shift so volunteers always know who to contact, and admins know who's accountable
+- Custom notification policies: dynamic messages before, during, and after every shift, through the channel you choose
+- Export the daily roster to PDF, Excel, or CSV with attendees, contact info, group rosters, and any custom fields
+- See for yourself.
+- Start a 30-day free trial and schedule your first shift in minutes.
+- Start your free trial
+- How it works
+- Build the shifts. Set the policy. Volunteers reserve. Vome handles the rest.
+- Generate the shifts
+- Bulk-create one-time or recurring shifts. Set capacity, dates, and which volunteers can see them.
+- Set the policy
+- Choose instant booking, approval, or admin-assign. Configure cancellations, check-ins, and reservation limits.
+- Volunteers reserve
+- From the app, browser, or a public calendar embedded on a form. Group reservations covered.
+- Vome runs the day
+- Reminders fire, the chatroom is live, attendees check in, and the schedule export is ready when you need it.
+- More than a calendar tool
+- Generic calendar tools show free time. Vome runs the actual scheduling: capacity, eligibility, group reservations, chatrooms, and renewals tied to the volunteer database.
+- Policies, not just slots
+- Capacity, cancellations, check-ins, and reservation limits live as configurable policies, applied per opportunity or globally. No spreadsheets.
+- Group reservations and check-in, native
+- One volunteer books for a team, family, or corporate group, with guests included. Each shift carries its own chatroom and check-in window. Volunteers scan a QR or check in from the mobile app, and hours log automatically.
+- Proven at scale
+- 1.25M+ shifts scheduled across hospital systems, national events, and multi-site programs. Vome handles spikes and routine alike, on web and mobile.
+- Scheduling FAQs
+- Common questions about shifts, policies, group reservations, and reminders.
+- Still have questions?
+- Talk to our team
+- Can I create recurring shifts in bulk?
+- Yes. Pick a date range, the days of the week, and the time window. Vome generates every shift in that range with the capacity and visibility rules you configured. You can edit any single shift afterward without breaking the recurring pattern.
+- How do scheduling policies work?
+- Policies control capacity, cancellation windows, check-in rules, and how many reservations a volunteer can hold at a time. Set a default policy for the org and override per opportunity. Vome enforces the rules at booking time and at check-in, so volunteers can't book past the limits.
+- Can volunteers book for a group?
+- Yes. Group reservations let one volunteer book on behalf of a team, family, or corporate group. Vome stores the group name, the lead, and the party size on the shift. The advanced Groups module ties group reservations back to dedicated groups for cleaner workflows and analytics.
+- How do shift chatrooms work?
+- Each shift can have an auto-generated chatroom. As volunteers reserve, they're added automatically. Coordinators message the whole group at once for last-minute updates. The chatroom is optional per shift, and access ends when the shift does.
+- Can I save a shift setup as a template?
+- Yes. Save any shift or recurring pattern as a template, including capacity, visibility rules, scheduling policy, and all. Reuse the template next season or for a similar program in one click, no rebuilding from scratch.
+- What kind of reporting comes built in?
+- Out-of-the-box reports for shift activity by site, location, opportunity, hours completed, and more. Save custom views and filters, attach shift tags, and scope each admin to what they manage with permissions. Export to PDF, Excel, or CSV anytime.
+- Scheduling features by plan
+
+---
+
+## Module: Hour tracking
+
+- Volunteer hour tracking & check-in software | Vome
+- Track volunteer hours your way. QR-code check-in via the mobile app, on-site kiosks on any device, volunteer hour claims, mass logging, and integrated reservation and hours reports.
+- Hour tracking & check-in
+- Track volunteer hours
+- the way each program works
+- .
+- Pick the tools that fit your program: QR-code check-in, on-site kiosks, hour claims, mass logging, and GPS proximity validation. Every hour flows straight into reservation and hours reports.
+- Reusable QR codes
+- Unlimited kiosks
+- Built-in reports
+- Hour tracking that fits every kind of shift.
+- Some volunteers scan a QR code, others tap in at a kiosk, a few submit hour claims after the fact. Pick the method per opportunity. Every hour flows into the same profile, the same reservation record, and the same set of reports.
+- Multiple ways to check in
+- Volunteers can scan a QR code from the app, tap to check in from any device, or trigger a hands-free check-in via GPS proximity. Vome auto-checks-out anyone who forgets at shift end, and hours flow straight to the profile with no manual entry.
+- On-site kiosks on any device
+- Turn any tablet, phone, or computer into a self-service kiosk. Volunteers find their name, tap to check in, and the kiosk groups them by opportunity or category for fast lookup at busy events.
+- Volunteer-submitted hour claims
+- Volunteers can submit hours for any shift they completed, even ones that weren't booked through Vome. Approve, decline, or request more info in one click, and the time lands on their profile.
+- Bulk & past-shift hour logging
+- Log hours for an entire shift in a few clicks, or backfill past shifts in bulk with accurate dates preserved. No spreadsheet edits, no per-volunteer data entry.
+- Custom attendance & claim settings
+- Configure attendance rules per opportunity: pick the check-in methods, optional GPS proximity, grace windows, and claim policies that fit each program.
+- Reports with charts & built-in insights
+- Built-in line graphs, monthly trends, and check-in heatmaps. Save custom views and filters per admin, group hours any way you need, and export to Excel or sync to any platform using Vome's API.
+- CHECK IN
+- Check-in, however your program runs.
+- Pick the check-in flow that matches each opportunity. Some programs need no check-in at all. Vome auto-logs hours based on the shift's start and end times. From there, choose how volunteers confirm: scan a QR code from the app, just tap to check in with no scan needed, require GPS proximity to the site, or run an on-site Attendance Kiosk where volunteers find their name and check themselves in and out.
+- Configurable check-in windows per opportunity: early grace, late grace, and lock-out times to match how each program runs
+- Volunteers see the shift name, time, and role on screen before they confirm, so there are no wrong-shift mistakes
+- Coordinators can manually adjust hours, mark absences, or log past-shift attendance from the same view
+- Hours flow straight to the volunteer profile and reservation record, ready for reports the moment the shift ends
+- CLAIMS
+- Approve hour claims without chasing emails.
+- You can choose to allow volunteers to submit hour claims for any shift they completed, even ones not booked through Vome. Each claim shows up in a queue with the shift, the volunteer, and the hours. Approve it and the time lands on their profile, ready for reports.
+- Bulk approve or decline multiple claims at once
+- Require volunteers to add a note or submit a form attached to their hour claim
+- Per-opportunity claim policies: max hours per submission, mandatory descriptions, attached evidence
+- Choose to allow volunteers to request additional hours, even if they've already been logged
+- REPORT
+- Reservation and hours reports, in one view.
+- Every check-in, claim, and bulk log feeds the same dashboard. Slice by site, program, opportunity, or custom field. Compare reservation counts to hours actually logged. Export to Excel or sync with any platform using Vome's API.
+- Built-in line graphs, monthly trends, and check-in heatmaps, so you can see exactly when volunteers actually show up
+- Mix and match report types: shift list, attendees & hours, volunteer bookings, check-in/out, all from one place
+- Save custom views and filters as permissioned dashboards for each admin or site
+- Auto-summary cards (total hours, top sites, average shifts/volunteer) calculated for you, no spreadsheet pivot tables required
+- See for yourself.
+- Start a 30-day free trial and start tracking hours with ease.
+- Start your free trial
+- How it works
+- Pick the check-in method per opportunity. Vome handles the rest, from arrival to report.
+- Pick a method
+- QR code, on-site kiosk, hour claims, or mass logging. Each opportunity can use a different combination.
+- Volunteers check in
+- Scan from the app, tap into a kiosk, or wait to submit a claim later. GPS proximity is optional.
+- Hours auto-log
+- Approved time lands on the volunteer profile and the opportunity record without manual data entry.
+- Pull the reports
+- Filter by site, program, or custom field. Export to Excel or sync to Google Sheets for funders and grants.
+- More than a punch clock
+- Generic time-trackers ask volunteers to track their hours themselves. Vome offers 5+ methods to track hours systematically or automatically, and has all the reporting you need out of the box.
+- Multiple methods, one record
+- QR scan, kiosk tap, hour claim, mass log. Whatever fits the program. Every minute lands in the same volunteer profile and report.
+- Tied to reservations
+- Hours are matched to the shift each volunteer was booked for, so you can compare reserved time to time actually served.
+- Audit-ready reports
+- Group hours by site, program, or custom field. Export to Excel or sync with the tools you already use through Vome's API.
+- Hour tracking FAQs
+- Common questions about volunteer check-in, hour claims, and reporting.
+- Still have questions?
+- Talk to our team
+- How does QR-code check-in work?
+- Customize and print one QR to be used across your program. Reserved attendees scan it from the Vome app on their phone to check in and out. The same QR code can be reused every shift, every day, with no need to print a new one. Hours log automatically on the volunteer's profile and reports.
+- Do I need to buy hardware for the kiosk?
+- No. The on-site kiosk is a web page that runs on any tablet, phone, or computer you already have. Open the kiosk URL, lock the device to that page, and you're set. You can run as many kiosks as you need, customized per location.
+- What happens when a volunteer forgets to check out?
+- You can configure an automatic check-out at the end of the shift, so volunteers who forget still get credited for their reserved time. Admins can also adjust hours manually from the attendee list at any point.
+- Can volunteers log hours for shifts that weren't booked through Vome?
+- Yes. Volunteers can submit hour claims for any shift they completed, even off-platform volunteering. The claim shows up in your review queue with the shift, date, and hours. Approve it and the time lands on their profile.
+- Can admins log hours in bulk?
+- Yes. Pull up the attendee list for a shift or filter past volunteers, then log hours for the whole group in a few clicks. Dates and times stay accurate without manual data entry per person.
+- How do hours feed into reports?
+- Every method (QR scan, kiosk, claim, bulk log) writes to the same volunteer profile and reservation record. Reports group hours by volunteer, opportunity, site, program, or custom field, and can be exported to Excel or any third-party platform.
+- Hour tracking features by plan
+
+---
+
+## Module: Recognition & awards
+
+- Volunteer recognition: Vome Achievements & custom awards | Vome
+- Design custom awards your team owns end to end — Volunteer of the Month, five-year tenure, anything you want. Every volunteer also earns Vome Achievements, a free Bronze-to-Platinum tier ladder, on every plan.
+- Volunteer recognition software
+- Recognize the volunteers
+- your program runs on
+- .
+- Design custom awards to reward your volunteers for the amazing work they do — Volunteer of the Month, #1 leader in hours, reaching a milestone, or anything you want.
+- Create custom awards
+- Auto or assigned manually
+- Set up in minutes
+- Recognition that lands the same week the work happens
+- Two systems that complement each other. Your team can design custom awards based on the milestones you set, and decide which volunteers are eligible to earn them. Vome also has an out-of-the-box Bronze-to-Platinum achievement ladder that runs in the background for every volunteer.
+- Custom awards your team designs
+- Build your own awards with their own name, icon or uploaded image, and description. Pick an auto rule Vome enforces or a manual award a coordinator can assign as needed, with optional caps on the number of recipients and a choice of whether it repeats on a continuous basis.
+- Bronze → Platinum, free for everyone
+- Vome Achievements ship on every plan: a four-tier badge ladder fueled by Vome Points that volunteers earn by completing platform challenges. Active from a volunteer's first log, no admin setup.
+- Triggers on hours or shifts, any window
+- Set thresholds in hours or shifts across all-time, a calendar year, a date range, a rolling window, or consecutive periods (e.g. 5 hours per month for 3 straight months).
+- Send a one-off award by hand
+- Some moments do not fit a rule. Send a custom award to one volunteer or a hand-picked group, and choose to make it visible to volunteers on their profiles.
+- Integrated notifications
+- When an award is given, you can choose to set up automated emails or notifications to the volunteer at a time you choose, using your template, sender, and signature. Admins get notified too, so coordinators see recognition as it happens.
+- Eligibility scoped to the right people
+- Restrict any award by tag, opportunity, site, finished onboarding sequence, active database status, or even age range. Volunteers outside the scope never see it in their catalog or progress.
+- DESIGN
+- Design custom awards for the moments only you see.
+- Every award gets a name and a face, a shape and a scope. Some awards are simple — a one-time thank-you for coming. Others are more intricate — a tenure award capped at five recipients a year, restricted to your hospital site, with progress hidden until earned. The depth is there when you need it.
+- Preset icons or upload your own image
+- Cap how many volunteers can earn it, mark it repeatable or one-time
+- Folders & bulk actions to keep a large award catalog clean
+- Decide if volunteers can see their progress toward an award, or keep that tracking for admins only
+- VOME ACHIEVEMENTS
+- A four-tier ladder every volunteer climbs, on every plan.
+- Vome ships a platform-level recognition ladder out of the box: Bronze, Silver, Gold, Platinum. Volunteers earn Vome Points by completing challenges tied to real activity, then climb the tiers as VP add up. Active from the first log, free on every plan, managed by Vome.
+- Four tiers, Bronze through Platinum, fueled by Vome Points
+- Challenges tied to real activity: hours logged, shifts completed, milestones hit
+- Volunteers track tier progress and Vome Points in real time
+- Free for every volunteer in every org, no setup required
+- TIMELINE
+- A timeline volunteers can keep, and you can verify.
+- Each tier badge and award lands with a date and source. Vome Achievements show what challenges were completed to earn badges. Custom awards show who sent them or which rule matched. You can customize all the options below.
+- Chronological wall on the volunteer profile, mobile and web
+- Email or push notification fires the moment an award lands
+- Progress bars for the next tier and any in-flight custom awards
+- Admins can get notified too, so coordinators see what awards have been given
+- See for yourself.
+- Start recognizing your volunteers with achievements and custom awards. Sign up free today.
+- Get started for free
+- Recognition wired into the rest of the platform
+- Standalone gamification tools sit in their own silo. Vome's volunteer recognition software pulls from our scheduling and hour-tracking tools that help you organize the rest of your operations. It takes no additional time to reward volunteers, as it should be.
+- Same data as your hour tracking
+- Auto rules run on the verified hours and shifts your team already approves. No separate counter, no double-counting, no reconciliation step.
+- Tied to the volunteer record
+- An award's eligibility, scope, and history live on the volunteer record itself. Coordinators see who earned what alongside reservations, onboarding, and tags, not on a separate tab.
+- No bolt-on gamification
+- Recognition isn't a separate dashboard, a leaderboard, or a points minigame. The Vome tier ladder runs in the background; your custom awards reflect verified work. Volunteers get a real thank-you, not synthetic ranks.
+- Recognition FAQs
+- Common questions about achievements and custom awards.
+- Still have questions?
+- Talk to our team
+- What's the difference between Vome Achievements and a custom award?
+- Vome Achievements are a platform-wide four-tier badge ladder, Bronze through Platinum, fueled by Vome Points. Every volunteer earns them by completing platform challenges. They are free on every plan and managed by Vome. Custom awards are completely designed by your team, with your own branding and rules. You decide who can earn them and how they are earned.
+- When does a custom award actually trigger?
+- The moment a logged hour or shift crosses the threshold you set. You pick the metric (hours or shifts) and the window: all-time, calendar year, a fixed date range, a rolling window of N days/weeks/months, or consecutive periods (e.g. 5 hours per month for 3 straight months). Vome uses the same hours and shifts your team already approves, so awards reflect verified work.
+- Can I send an award to a single volunteer with a personal note?
+- Yes. Custom awards can be sent manually to one volunteer or a hand-picked group, with a note attached. Useful for moments that no rule could capture: a volunteer who covered a hard shift, a five-year tenure that sits outside your usual milestones, or a thank-you at the end of a project.
+- What happens when an award lands? Who gets notified?
+- You can choose to have Vome email the volunteer the moment an award fires, at a time you choose, using your template, sender (the creator or a specific admin), and signature. Email variables like first name, award title, and window period are personalized per volunteer. You can also add admins who get notified each time the award is earned, so coordinators see recognition as it happens. This can all run through Vome's email system or through your integrated email (Outlook or Gmail).
+- Can I limit an award to a specific group of volunteers?
+- Yes. Each custom award can be scoped by tag, opportunity, site, completion of a specific onboarding sequence, active database status, or even an age range with configurable behavior when age is unknown. Volunteers outside the scope never see the award in their catalog or progress, so the experience stays clean for everyone else.
+- Which plan unlocks recognition?
+- Vome Achievements (the Bronze-to-Platinum tier ladder and Vome Points) ship free on every plan, including Recruit. Custom awards (your own awards with auto rules or manual sending, eligibility scoping, and notifications) unlock on Enterprise.
+- Recognition features by plan
+
+---
+
+## Module: Communications (email, chat, notifications)
+
+- Volunteer communications: bulk email, chat, automated reminders | Vome
+- Bulk and individual email from your own Google or Microsoft mailbox, native private and group chats, auto-generated chatrooms per opportunity and shift, and automations that fire on triggers.
+- Volunteer communication tools
+- Reach every volunteer on the
+- channel they actually use
+- .
+- Send bulk and individual emails from your own Google or Microsoft mailbox, communicate using 1-1, group or shift-based chatrooms, and create reusable notifications for shift reminders, birthdays, and volunteer recognition.
+- Send from your domain
+- Chat, email & reminders
+- Available on all plans
+- Every volunteer channel, in one place
+- One workspace for every conversation with your volunteers, tied to the same database and the same audit trail. Stop juggling personal phones, WhatsApp groups, and a separate email tool: bulk email, native chat, shared templates, and reusable notification policies all live where your team already works.
+- Bulk and individual email
+- Send a one-off message to a single volunteer or a targeted blast to a saved segment. Filter by tag, role, site, or status, all from inside Vome.
+- Send from your own domain
+- Connect a Google or Microsoft mailbox and outgoing email lands from your domain instead of a generic noreply address. Replies come back to your inbox.
+- Native private chat
+- Message volunteers one-on-one from the web or using the Vome app on the go. Conversations stay tied to their profile and accessible by each of your admins depending on their permissions.
+- Group and shift chatrooms
+- Create custom group chats for ongoing teams. Vome also allows you to auto-generate chatrooms per opportunity and per shift, with admins added automatically.
+- Reusable notification policies
+- Build notification policies to automate communication about shift reminders and post-shift surveys, birthday wishes, or between admins. You decide the content, where and when it's sent, and Vome automates the rest.
+- Email templates & shared folders
+- Build a template library and folder it so every coordinator sends with the same voice. Reuse the same templates inside one-off emails, bulk sends, and notification policies.
+- EMAIL
+- Email volunteers like a marketer, from your own mailbox.
+- You can filter your volunteer database into segments by tag, role, site, or status, then send a personalized email to each one through your own Google or Microsoft mailbox. Replies come back to your inbox, the dashboard tracks deliveries, and your team sees what was sent and to whom.
+- Cc, Bcc, attachments, custom subject headers, and a default signature on every send
+- You can also skip the integration and send through Vome's native email server in two clicks
+- Personalize with dynamic variables like first name, role, site, shift, and custom fields
+- Shared outbox tracks every send and exposes it to the team per your sharing policy
+- CHAT
+- Private chats, group chats, and a chatroom for every shift.
+- There's no need to run your program through various messaging platforms. Vome allows you to private chat with any volunteer, create custom group chats for ongoing teams, and choose to benefit from auto-generated chatrooms per opportunity and per shift. When a volunteer reserves the shift, they join. When they cancel, they leave. It's that simple.
+- Send images, video, voice notes, documents, and links inline (not just text)
+- Assign or share a shift right inside the conversation, no tab-switching
+- Mute a thread, pin a message, jump to the volunteer's profile in one tap
+- Push notifications on the iOS and Android apps so volunteers actually see it
+- AUTOMATE
+- Design the notifications you want, when you want them to send, throughout the entire platform.
+- Build custom shift notification policies for pre-shift reminders, during shifts, or a post-shift survey link, then attach them to the shifts they were designed for. Add automated birthday notifications with site-level recipient rules, and hand-off notifications that ping coordinators when a profile lands in their site, sequence, opportunity, or shift, manually or via automation.
+- Compose every message with shared templates, dynamic variables, and your default signature
+- Pick the channel per rule: integrated email domain, in-app, push notification, or all of the above
+- Drop a survey link in the post-shift email so feedback comes in while it's fresh
+- Separate outbox tabs for shift notifications and birthday emails make every send auditable
+- Connect your mailbox and turn on policies in minutes.
+- Link your Google or Microsoft mailbox, create your templates, and let automations handle the rest.
+- Sign up for free
+- More than a notification tool
+- Generic email tools blast a list. WhatsApp groups lose volunteers when phones change. Vome is built for volunteer programs and connects to the rest of your data.
+- Wired to your volunteer database
+- You can build custom segments with live filters of the database, not exports. Tag a volunteer or change their status and the next bulk send picks it up automatically.
+- Email & chat under one audit trail
+- Outbox, chat history, and automation logs all live in the same admin dashboard. Filter by sender, segment, or trigger; control visibility with the email sharing policy.
+- Coordinators stop leaving with the data
+- When a coordinator goes on leave, you keep their conversations, templates, and policies. Onboard the replacement in an afternoon instead of rebuilding a year of context from screenshots and personal text threads.
+- Communications FAQs
+- Common questions about email, chat, and message automations.
+- Still have questions?
+- Talk to our team
+- Can volunteers see emails come from my address?
+- Yes. Connect a Google or Microsoft mailbox and Vome sends through it. Outgoing email lands from your address, replies route back to your inbox, and your domain reputation drives deliverability.
+- Can our team share email templates so we all sound the same?
+- Yes. Build templates and group them into folders that every admin can pull from. The same library powers one-off emails, bulk sends, shift notification policies, and birthday notifications, so the language stays consistent across coordinators and across automations.
+- What is an auto-generated chatroom?
+- Vome creates a chatroom for every opportunity and for every shift. Admins are added automatically. Volunteers join when they reserve the shift and leave when they cancel. You can also build custom group chats for ongoing teams, and inside any chat you can send images, documents, voice notes, or assign a shift directly.
+- How do shift notification policies work?
+- A shift notification policy is a saved set of automated messages that fire around the shifts it's attached to: pre-shift reminders, during-shift updates, and post-shift follow-ups (with optional survey links). Build it once, attach it to any shift or shift generator, and every shift that uses the policy inherits the same rules. The full setup walkthrough lives in our help center.
+- Can I control what other admins see in the outbox?
+- Yes. The shared outbox lists every email sent through Vome (one-off, bulk, shift notifications, birthday notifications) and the email sharing policy controls who sees what. Filter by sender, segment, or trigger to audit a campaign or onboard a new coordinator without losing context.
+- What are hand-off notifications?
+- When a profile is assigned to a site, sequence, opportunity, or shift you coordinate, hand-off notifications ping you so the volunteer doesn't fall through the cracks. They fire whether the assignment was manual (another admin moved them) or automatic (a form submission or finished sequence routed them to you), and you can subscribe per category in your notification settings.
+- Communications features by plan
+
+---
+
+## Module: Database & reporting
+
+- Volunteer database, reports & analytics | Vome
+- A custom volunteer database with mass import, unlimited custom fields, profile tags, saved custom views, Google Sheets sync, instant reports, and analytics dashboards.
+- Volunteer database software
+- A volunteer database
+- organized your way
+- .
+- Import your data, structure it with custom field types, save the views each admin needs, and pull instant reports and insights in a few clicks.
+- Bulk import profiles
+- Unlimited fields
+- Permissions per site & team
+- A database customized the way you need it.
+- Hours, shifts, sequences, tags, custom fields, and the ability to report on any of it in seconds. All in one place, with permissions and segmented views that show each admin exactly what they need to see.
+- Bulk import from Excel, CSV or API
+- Import 10,000 profiles per file with field mapping. Batch-assign tags, opportunities, and shifts in the same flow. Or integrate with Vome's API to automate the process.
+- Custom field types
+- Text, number, date, single & multi-select, email, URL, address, attachment, and more. Unlimited fields per profile.
+- Auto-update data
+- Map volunteer form submissions to database fields, or batch-update data whenever you need to. Merge, archive, or delete profiles to keep your database accurate.
+- Filter, sort & save custom views
+- Each admin keeps the views that matter to them: new applicants, expiring profiles, top hours, and more. Custom-formula filters for advanced segments.
+- Bulk actions from any view
+- Assign tags, sequences, shifts, languages, or skills. Send broadcast emails or instant messages. All from the profiles you've selected.
+- Instant reports & dashboards
+- Attendees, hours, sequence completion, expirations, shift lists, check-ins, emergency contacts, medical info, file uploads, notes, birthdays. Vome has it all, accessible in a few clicks.
+- CUSTOMIZE
+- Model the database around the data you need to collect.
+- Add unlimited custom fields in every type your program needs: text, number, date, single and multi-select, email, URL, address, attachment, and more. Map application and registration form responses straight into the database so submissions become structured profile data with no re-keying.
+- Map any form question to a database field, so applicants and new registrations populate profiles automatically
+- Manage offline profiles for seniors and participants who don't want to log in, with the same database, hours, and reporting
+- Invite an offline profile to claim their account in one click whenever they're ready to onboard
+- Profile tags for bulk emails, shift assignments, sequence enrollment, and any segmentation your program needs
+- VIEW
+- Each admin sees exactly the volunteers they're responsible for.
+- Each admin can create custom views with the data and filters they need. Permissions then scope what they can see and act on, so it's easy to share resources or segment profiles by site, role, activity, or anything else you need across your team.
+- Custom-formula filters layer multiple conditions for advanced segments, like active volunteers with over 50 hours while also tagged as 'Healthcare'
+- Share a saved view across the team or keep it private to your account
+- Custom admin roles fine-tune edit, delete, message, and report rights per role
+- Export any view to Excel, or sync it with any other database tool for backups and downstream automations
+- REPORT
+- Pull the answers you need in a few clicks, not a few hours.
+- Reports answer the questions your board and funders ask, in seconds. Data refreshes live as your team logs hours, submits forms, and updates profiles. The same filters and date ranges you use in the database carry into every report and dashboard, so the segment you've already built is one click away from a chart.
+- Access custom dashboards and reports that show exactly what you need, and save them for future use
+- Filter every report by site, opportunity, tag, date range, or any field on a profile or shift
+- Track KPIs like retention and activity with ease, all out of the box
+- Export any report to Excel, save its configuration as a custom view to reuse next time, or integrate with Vome's API to pull data anywhere you need it
+- Migration case study
+- Brent's Place
+- Seamless migration: 1,500+ profiles in under 5 minutes.
+- <5 min
+- to migrate 1,500+ profiles
+- 100%
+- self-serve via Excel import
+- Zero
+- downtime during transition
+- The ease of use for the manager and volunteers alone is amazing. Having an actual person to talk to made the transition seamless, and our volunteers had no trouble navigating the platform.
+- Kit Mworia-Hooper
+- Volunteer Engagement Manager, Brent's Place
+- Read the full case study
+- Brent's Place migration case study | Vome
+- How Brent's Place migrated 1,500+ volunteer profiles to Vome in under 5 minutes with zero downtime. Download the full case study.
+- How Brent's Place transitioned their entire volunteer program to Vome with zero downtime, self-serve data import, and hands-on support every step of the way.
+- What's inside
+- About Brent's Place: location, mission, and the volunteer base they manage
+- The challenge: why they outgrew Amplify/Get Connected and what they needed instead
+- The 3-step migration process they ran end-to-end in under 5 minutes
+- Key results, including auto check-in/out and zero downtime through the transition
+- Download the case study
+- Tell us a bit about you and we'll unlock the download right away.
+- Required
+- First name
+- Work email
+- Organization
+- Your role
+- e.g. Volunteer Manager, Director of Programs
+- Unlock the download
+- Sending…
+- Something went wrong. Please try again or email us at hello@vomevolunteer.com.
+- We use this only to follow up if you'd like a chat. No marketing spam.
+- Your case study is ready.
+- Click below to download the PDF. We'll also follow up by email if you'd like to chat about your own migration.
+- Download the PDF
+- Back to the database overview
+- Migrate your existing data in minutes.
+- Customize your fields, drop in an Excel file or connect through the API, and your team is operating from a single source of truth the same day.
+- Sign up for free
+- More than a spreadsheet
+- Vome's database software was built to manage volunteers from the ground up: form-mapped applications, onboarding sequences, completed shifts and hours, and communications tools, with permissions and site-level management all included.
+- Built for volunteer programs
+- Profiles include hours, shifts, opportunities, sequence status, tags, and notes by default. No data model setup before you can use it.
+- Permissions you can actually trust
+- Scope every admin to their site, location, or team. Visibility, edit rights, and bulk actions all respect those boundaries.
+- Live in days, not months
+- Programs migrate from spreadsheets and legacy CRMs in a single working session. Fields customized, profiles imported, views saved, and the team operating that afternoon.
+- Database & reports FAQs
+- Common questions about the volunteer database, custom fields, custom views, and reporting.
+- Still have questions?
+- Talk to our team
+- Can I import my existing volunteer data?
+- Yes. Upload an Excel or CSV file (up to 10,000 profiles per import) and map each column to a Vome field, including any custom fields you've created. The same import flow can batch-assign tags, opportunities, and shifts so volunteers land in the right place from day one.
+- What field types can I add to the database?
+- Field types include text, number, date, time, single select, multi-select, email, URL, address, attachment, boolean, and unique ID. You can add as many custom fields per profile as your program needs, and map any application or registration form question straight to a field so submissions populate the database automatically.
+- How do custom views and permissions work together?
+- A custom view is a saved combination of filters, sort order, and visible columns. Each admin can save their own. Permissions per site, location, or team then scope what each admin can see and edit, so a hospital coordinator only ever sees their hospital's volunteers, even when they apply a shared view.
+- What reports can I generate?
+- Attendees, hours, sequence completion, form submissions, and check-in history are available out of the box, each filterable by site, opportunity, tag, date range, or custom field. Analytics dashboards summarize volunteer activity, retention, and program performance for board and funder updates.
+- Can I manage volunteers who don't use the app?
+- Yes. Create offline profiles for seniors and non-digital participants. Your team manages everything internally: hours, shifts, notes, and reporting all work the same way. Convert an offline profile to an active account anytime by sending an invitation.
+- Can I restrict what each admin sees in the database?
+- Yes. Scope each admin to one or more sites, locations, or teams, and assign them a custom admin role with a specific permission set. They only see profiles within their scope, the bulk actions and exports respect those boundaries, and shared custom views are filtered automatically when applied. A hospital coordinator never sees clinic volunteers, even when opening a portfolio-wide saved view.
+- What actions can I take directly from the database?
+- Select any rows in any view and you can: assign tags, sequences, shifts, opportunities, languages, or skills; bulk-update custom field values; send a broadcast email; merge duplicate profiles; archive, reactivate, or delete records. The same actions are available from saved custom views, so a coordinator can act on their segment without leaving the page.
+- What analytics dashboards are included?
+- Built-in dashboards cover Overview, Profiles, Hours, Shifts, Sequences, Forms, and your own Custom Database Fields. The Custom Database Fields dashboard charts any field you've added, with single-select breakdowns, attachment-expiry timelines, and numeric distributions, all without extra configuration. Every dashboard filters by site, opportunity, tag, date range, or any field on the profile.
+- Database & reporting features by plan
+
+---
+
+## Module: Mobile app for volunteers
+
+- Volunteer mobile app: reserve shifts, check in by QR, message admins | Vome
+- A native iOS and Android app where your volunteers browse opportunities, reserve shifts, bring guests, check in by QR on arrival, manage their schedule and time off, finish onboarding from their phone, and chat with your team in real time.
+- App for volunteers
+- Give your volunteers a mobile app that's
+- actually easy to use
+- .
+- A native iOS and Android app built for volunteers — browse opportunities, reserve shifts, QR check-in on arrival, manage their schedule, sign waivers, watch training videos, and chat with your team. Free for every volunteer, forever.
+- iOS + Android
+- Free for volunteers
+- SSO with Apple, Google or Microsoft
+- Everything your volunteers need, in one app
+- Designed with every age group in mind — from tech-savvy users to those just getting started — the Vome app makes it simple for volunteers to engage with the organizations they care about. Reserving a shift, finishing an onboarding sequence, checking in on arrival, logging hours, getting notified the moment plans change — it all just works.
+- Browse and apply to opportunities
+- Volunteers explore your available opportunities, filter by role or location, and apply or join with one tap. Application forms render natively, with rich fields and file uploads.
+- Reserve shifts in seconds
+- Calendar and list views, instant booking or request-to-book, and group reservations so volunteers can bring a friend, family member, or +1 to the same shift.
+- Effortless hour tracking
+- Tap to check in, scan a QR code at the site, or let attendance log automatically — whichever fits your program. Hours roll up to the volunteer's profile, no clipboard or spreadsheet required.
+- Manage schedule and time off
+- Upcoming, past, and time-off views. Cancel a shift, request hours after the fact, or block date ranges so they're not auto-scheduled while they're away.
+- Finish onboarding from their phone
+- Sign waivers with on-screen e-signature, upload required documents from camera or files, watch training videos, and finish background-check sequences without leaving the app.
+- Chat, push, and shift chatrooms
+- Direct-message admins, get push reminders before each shift, and join the auto-generated chatroom for every shift volunteers reserve. Voice notes, images, and document attachments included.
+- RESERVE SHIFTS
+- Browse, tap, reserve. With a guest if they want.
+- Volunteers see your real-time availability the moment they open the app — calendar grid or list, filtered by role, site, or program. They reserve in one tap, request to book if approval is needed, or kick off a group reservation to bring a friend or family member to the same shift.
+- Calendar and list views with role, location, and cause filters
+- Instant booking or request-to-book per opportunity, set by you
+- Group reservations let one volunteer bring up to N guests, with name and contact for each
+- Self-schedule positions, recurring shifts, and waitlists are all supported in-app
+- ARRIVE & CHECK IN
+- Tap, scan, or auto-check-in. Hours log themselves.
+- Volunteers can pull up a personal QR code for a coordinator to scan at the kiosk, scan a station QR posted at the door, or simply tap to check in from their shift on the home screen. Hours roll up to their profile in real time — no clipboard, no spreadsheet, no manual entry. See every hour-tracking option →
+- Multiple methods to choose from per opportunity: personal QR, station QR, tap-to-check-in, or fully automated
+- Optional geo-fence rejects check-ins from outside the site radius you set
+- Hours auto-roll into the volunteer's profile and the dashboard, no manual entry
+- Volunteers can also claim hours after the fact for shifts they checked in offline
+- ONBOARD ON THEIR PHONE
+- The whole onboarding sequence including waivers, docs, training — done from the app.
+- Drop a volunteer into one of your sequences and they finish every step from their phone. E-sign waivers with their finger, upload documents from camera or file picker, watch training videos, complete background checks, and confirm profile fields — all without ever opening a laptop. Coordinators see progress in real time and get pinged when a step needs review.
+- On-screen e-signature with timestamp + IP capture, stored on the volunteer's profile
+- Document upload from camera, photo library, or file picker (PDFs, images, IDs)
+- Embedded training videos and YouTube playlists, with completion tracking per step
+- Background-check sequences kick off straight from the app and surface back in the dashboard
+- Your volunteers can be browsing shifts before lunch.
+- Send them an invite link, they download the app, sign in with Apple, Google or Microsoft, and they're in. No paywall, no per-volunteer fee, ever.
+- Sign up for free
+- More than a mobile site in a shell
+- A lot of volunteer apps are wrapped web pages. Vome's app is built native — fast on older phones, real push notifications, real camera, real offline behavior. And it's free for every volunteer, on every plan.
+- Free for volunteers, on every plan
+- We never charge volunteers a cent — not for the app, not to apply, not to reserve. The price of the platform is paid by the organization, not the people doing the work.
+- One app for every organization they serve
+- A volunteer who serves at a hospital, a food bank, and a school doesn't need three apps. They search for each organization in Vome, join, and switch between them in the side menu.
+- Sign in with what they already use
+- Apple, Google, and Microsoft sign-in are wired in alongside email + password. Volunteers don't need to invent a new account or remember another password to start contributing.
+- Mobile app FAQs
+- Common questions about the volunteer mobile app.
+- Still have questions?
+- Talk to our team
+- Is there a native iOS and Android app, and where do volunteers download it?
+- Yes. The Vome volunteer app is in the Apple App Store and Google Play. Volunteers search "Vome volunteer" or open an invite link from your team and the app store opens to the right listing.
+- Do volunteers have to pay or create an account before they can sign up?
+- Volunteers never pay anything to use Vome. They create a free account once — using Apple, Google, Microsoft, or email — and that one account works across every organization on Vome they choose to join.
+- Can a volunteer belong to more than one organization in the same app?
+- Yes. The app has a built-in organization search where volunteers can find and join any nonprofit using Vome. Once joined, they switch between their organizations from the side menu and see the right schedule, chats, and onboarding for each one. The same volunteer can serve five different orgs from the same app on the same phone.
+- Can volunteers actually finish onboarding from the phone — waivers, ID, training?
+- Yes, every step. Volunteers e-sign waivers with their finger, upload documents from the camera or photo library, watch embedded training videos, and complete background-check steps without leaving the app. Each completion writes back to their profile and the dashboard shows coordinators the live status of every sequence.
+- What happens at the door — how does check-in actually work?
+- There are tons of different check-in methods available. We recommend checking our hour tracking page to learn more about all the options available.
+- Can volunteers cancel a shift or block dates they're unavailable?
+- Yes. From the schedule tab they can cancel any shift inside the cancellation window you set (admins are notified automatically). They can also add time-off date ranges so the system won't auto-schedule them while they're away — useful for vacations, exam weeks, or surgery recoveries.
+- Mobile-app capabilities by plan
+
+---
+
+## Module: Integrations (API, Zapier, Salesforce, etc.)
+
+- Integrations & API for volunteer management | Vome
+- Connect Vome to Salesforce, Sterling Volunteers, SCORM Cloud, Double the Donation, Google Sheets, Zapier, and Microsoft Power Automate. SAML SSO. REST API and custom webhooks for everything else.
+- Integrations & API
+- Plug Vome into the
+- tools your team
+- already uses.
+- Vome offers native integrations with Salesforce, Sterling Volunteers, Microsoft Entra ID, and more. Build no-code automation flows through Zapier and Power Automate. A full REST API when you need to build something custom.
+- Native integrations
+- No-code via Zapier
+- REST API & webhooks
+- Connect Vome to your stack without rebuilding it
+- Vome talks to the systems you already pay for. Volunteer activity can flow across your background-check tools, CRMs, your inbox, or other custom-built systems.
+- Salesforce Lightning App
+- Two-way sync between Vome and Salesforce lets you sync any data you need between the platforms, completely out of the box. No CSV exports, no copy-paste.
+- Background checks in-flow
+- Trigger Sterling Volunteers or Verified First checks from an onboarding step. Results land on the volunteer profile and unlock the next step automatically.
+- Training scores from SCORM
+- Host SCORM courses through SCORM Cloud, deliver them as a step in any sequence, and keep scores on the volunteer record.
+- Matching gifts on every hour claim
+- Double the Donation runs employer matching when volunteers log hours. Vome surfaces the match in their profile and on reports.
+- Email from your domain
+- Connect a Google or Microsoft mailbox so confirmation, reminder, and onboarding emails send from your address, not a Vome subdomain.
+- SAML SSO for staff and admins
+- Provision admins through Microsoft Entra ID, JumpCloud, or any SAML 2.0 provider. Enforce SSO and offboard from one place.
+- CONNECT
+- Native integrations for the essentials, hand-built by Vome.
+- Native integrations with popular providers like Salesforce, Sterling Volunteers, SCORM Cloud, Double the Donation, and Google Sheets make it easy to plug Vome into your tools in a few clicks. Configure them once, and the data flows where you'd expect it: onto the volunteer profile, into your sequences, and across reports.
+- Two background-check providers supported: Sterling Volunteers and Verified First, with results stored on the profile
+- Map any Vome field to its Salesforce counterpart, including custom fields — for a seamless two-way integration
+- SCORM Cloud completion scores arrive in real time and unlock the next onboarding step automatically
+- Two-way Google Sheets sync keeps a live mirror of your database for downstream reporting and BI tools
+- AUTOMATE
+- Reach 5,000+ apps without writing a single line of code.
+- Vome ships with native Zapier and Microsoft Power Automate connectors. Trigger flows on a new applicant, a status change, a new reservation, or a logged hour — then chain the apps your team already lives in.
+- Pre-built Vome triggers in both connectors — pick a trigger, pick an action, no API config or schema mapping required
+- Reach 5,000+ apps through Zapier and the full Microsoft 365 ecosystem through Power Automate
+- Filter and branch flows by site, program, or volunteer attribute so the same trigger forks per audience
+- Operations teams own and monitor the flows, no Vome dev access or developer involvement required
+- BUILD
+- A REST API and webhook system for the work that needs custom code.
+- When the work needs custom code, Vome offers a full REST API and a custom webhook system. Your developers can read and write across the Vome data model, subscribe to the events that matter to your stack, and build the integration your program actually needs. See the developer docs →
+- Read and write across the Vome data model — volunteers, opportunities, shifts, hours, and custom fields
+- Subscribe webhook endpoints to the events you care about, so your systems react in real time without polling
+- A developer dashboard for issuing keys, inspecting payloads, and auditing past deliveries
+- Pair the API with Zapier or Power Automate flows so each integration gets the right tool for the job
+- Every integration Vome ships with
+- Grouped by category. Native partners are configured from the Vome admin. Identity providers, email domains, no-code automations, and the developer surface all live alongside them in the same settings area.
+- Native integrations
+- Identity & SSO
+- Email domain
+- No-code automations
+- Developer surface
+- Salesforce
+- Lightning app
+- Sterling Volunteers
+- Background checks
+- Verified First
+- Background checks
+- SCORM Cloud
+- E-learning
+- Double the Donation
+- Matching gifts
+- Google Sheets
+- Two-way database sync
+- Google Workspace
+- Send from your domain
+- Microsoft 365
+- Send from your domain
+- Microsoft Entra ID
+- SAML SSO
+- JumpCloud
+- SAML SSO
+- Okta
+- SAML SSO
+- Microsoft ADFS
+- SAML SSO
+- Zapier
+- 5,000+ apps
+- Power Automate
+- Microsoft 365 flows
+- REST API
+- Scoped keys
+- Custom webhooks
+- HMAC-signed
+- Developer dashboard
+- Logs & payload replay
+- Why integrations work better here
+- Most volunteer platforms either bolt on third-party tools or stop at a single export. Vome ships native, no-code, and developer paths in the same product, so you choose the one that fits.
+- Native, not bolted-on
+- Sterling, SCORM, Salesforce, Double the Donation, and Google Sheets are built into Vome. Their data lives on the volunteer profile, not in a separate dashboard.
+- Both no-code and code paths
+- Operations teams build flows in Zapier or Power Automate. Developers ship custom integrations through the REST API and webhooks. Same data model under both.
+- 5,000+ apps reachable on day one
+- Through the native Zapier connector alone, Vome can talk to Mailchimp, Blackbaud products, Notion, and thousands more without an engineer. Power Automate covers the Microsoft 365 side. Auth, audit logs, and key rotation come standard.
+- Integration FAQs
+- Common questions about Vome's native integrations, automations, and developer surface.
+- Have a stack we haven't covered?
+- Talk to our team
+- Which integrations are included with each plan?
+- Salesforce, SAML SSO, Zapier, Power Automate, and the developer surface (REST API, webhooks, developer dashboard) are available on the Ultimate plan. The full breakdown is in the comparison table above.
+- How can I integrate Vome with my other tools?
+- We offer many options to integrate Vome with platforms, with our native integrations or through automated workflows using Zapier or Microsoft Power Automate.
+- What can I do with the Vome Zapier connector?
+- Trigger Zaps on new applicants, status changes, hour claims, and form submissions. Chain Vome with Mailchimp, Slack, HubSpot, Outlook, Teams, Google Sheets, or any other Zapier app. The same triggers and actions are available through the Microsoft Power Automate connector for Microsoft 365 shops.
+- How do the REST API and custom webhooks work?
+- The developer surface gives your team API keys, a dashboard for monitoring, and the ability to create custom webhook subscriptions per event type. Reach out to our team if you'd like to talk through your specific integration plans.
+- Which SSO providers does Vome support?
+- Any SAML 2.0 provider, including Microsoft Entra ID (formerly Azure AD), JumpCloud, Okta, and others. Vome supports JIT provisioning of admins through SAML, enforced SSO at the org level, and offboarding when an admin is removed from your IdP.
+- Can confirmation emails come from our own domain?
+- Yes. Connect a Google Workspace or Microsoft 365 mailbox to Vome and outbound emails (confirmations, reminders, sequence notifications, automations) send from your address with proper SPF and DKIM, not a Vome subdomain.
+- Is there a Verified First integration alongside Sterling?
+- Yes. Vome ships native integrations with both Sterling Volunteers and Verified First, so you can pick the background-check provider you already use. Either way, checks fire from an onboarding step and results land on the volunteer profile.
+- Does Vome support two-factor authentication?
+- Yes. Two-factor authentication can be enabled per admin and enforced across your whole team. Pair it with SAML SSO for the strongest posture, or use it on its own.
+- Advanced features and integrations by plan
+
+---
+
+## Mobile app (cross-cutting overview)
+
+- The app your volunteers love.
+- Designed for every age, skill, and shift.
+- Volunteers can register for opportunities, reserve shifts, check in, and message your team, all from their phone. Admins get the same app to run the whole program from anywhere.
+- Browse and sign up for opportunities
+- Reserve and manage your shifts
+- Earn awards and achievements
+- Check in and track hours
+- Push notifications and shift reminders
+- Chat with admins and volunteers
+- Download on the App Store
+- Get it on Google Play
+
+---
+
+## Enterprise capabilities
+
+- Built for enterprise scale.
+- Run multiple programs, locations, and teams under one account, with the integrations, compliance, and admin controls your organization requires.
+- Segment your portal by site, department, or location
+- Organize your entire portal around how your organization is actually structured. Each location, department, or location can have its own content, admins, and branded experience. Volunteers only see what's relevant to them. Admins only manage what's theirs.
+- Admin roles and permissions, as granular as you need
+- Invite your whole team with scoped access. Department leads see their department. Site managers see their site. Configure granular read or edit permissions by folder, module, or content type, so every admin has exactly the access they need.
+- Integrations that fit your tech stack
+- Native Salesforce app with two-way sync, Zapier, Microsoft Power Automate, Sterling Volunteers, SCORM Cloud, Verified First, and Double the Donation. All built in. Or use our REST API and custom webhooks to achieve any workflow.
+- Book a demo
+- See pricing
+- Organization
+- Downtown site
+- East location
+- Youth programs
+- volunteers
+- Org admin, full access
+- Site manager, Downtown
+- Scheduler, read & edit shifts
+- Invite teammate
+- Custom role
+- + more
+
+---
+
+## Security & compliance
+
+- Security your organization can trust.
+- Enterprise-grade infrastructure built to meet the reliability, authentication, and compliance standards your organization requires.
+- Identity & access
+- Connect to Microsoft Entra ID, ADFS, Jump Cloud, or any SAML-based single sign-on provider. Enforce two-factor authentication across your team with role-based access controls that keep every admin scoped to what they need.
+- Infrastructure & encryption
+- AES-256 encryption at rest, TLS 1.2+ in transit. Hosted on AWS with high availability, redundancy and continuous monitoring. Built to support the privacy and data protection standards expected by healthcare and enterprise clients.
+- Compliance
+- Vome follows industry-leading privacy and security frameworks to protect your organization's data at every layer: HIPAA, SOC 2, GDPR, PIPEDA, CCPA, and PCI DSS.
+- COMPLIANT
+- Compliance certifications
+- Read our privacy policy →
+
+---
+
+## Plans & pricing
+
+- Plans & Pricing | Vome Volunteer
+- Explore Vome's flexible plans and pricing for volunteer management software. Start free — no credit card required — or upgrade to Pro, Enterprise, or Ultimate.
+- Plans & Pricing
+- Choosing the right plan is simple.
+- Get started with the free plan or upgrade to any of our paid plans for a 30-day free trial
+- Flexible pricing
+- Unlimited volunteers
+- 30-day free trial on paid plans
+- Currency
+- Billing cycle
+- Monthly
+- Annual
+- Save 33%
+- For customized pricing on multi-year plans,
+- contact us
+- for a personalized quote.
+- Most Popular
+- Forever free
+- Per admin seat, per month
+- Billed annually
+- Billed monthly
+- Billed annually | Minimum 3 seats
+- Billed annually | Minimum 5 seats
+- Get started
+- Recruit
+- For recruiters that need to collect application forms and manage an onboarding process.
+- Pro
+- For coordinators that need to manage scheduling, hour tracking and generate reports.
+- Enterprise
+- For management teams that need custom database fields and admin role provisioning.
+- Ultimate
+- For any team that needs more security features & the ability to integrate Vome with other apps.
+- Features include:
+- Everything in Recruit, plus:
+- Everything in Pro, plus:
+- Everything in Enterprise, plus:
+- Recruitment page with featured opportunities & access to forms
+- 1 application form
+- 1 onboarding sequence
+- Recruitment workflow automations
+- Manage opportunities & assignments
+- Hour tracking via user-generated hour claims
+- 35 default database fields, profile management with notes & document storage (no export)
+- Integrated communication tools (email & instant messaging)
+- Unlimited forms & sequences
+- Shift management & user reservations
+- Streamline group reservations
+- Advanced hour tracking via Attendance QR Code & Kiosk
+- Unlimited profile tags & database export
+- Advanced mass communication tools (email lists, group chats & auto-generated shift chatrooms)
+- Mobile app, custom & automated notifications, reminders & updates
+- Canned reports & analytics with advanced filtering and sorting
+- Unlimited custom & dynamic database fields
+- Import custom field data
+- Map form fields to database fields
+- Custom admin roles & permissions
+- Multi-site segmentation
+- Two-Factor Authentication (2FA)
+- Advanced group management
+- Recognition module with custom awards
+- API integration & custom webhooks
+- Automations with Zapier & Power Automate
+- Native integration with Salesforce
+- SAML & Azure SSO for admins
+- Tech & operational consulting
+- *Additional sales tax may apply.
+- Feature comparison by plan
+- Plans
+- Show all features by plan
+- Show fewer features
+- * Onboarding sessions & account review sessions: maximum of 2 hours per week
+- Unlimited
+- Unlimited *
+- Basic
+- Standard
+- Priority
+- Advanced
+- 1 form
+- 1 sequence
+- 1
+- 4
+- 5
+- Included
+- Not included
+- Fundamentals
+- Recruitment
+- Onboarding
+- Scheduling
+- Hour tracking
+- Data & reports
+- Communications
+- Recognition
+- Advanced
+- Customer success
+- Max number of manageable users & profiles
+- You can grow your volunteer base without worrying about paying more — we don't charge for volunteer records.
+- Max number of admin seats
+- You can invite an unlimited number of admins to the portal. On paid plans you're charged per seat you activate.
+- Access on any device (iOS & Android apps, web & mobile browser)
+- Our platform is accessible from any device. The Vome Volunteer mobile app on the App Store and Google Play is free to download for all users.
+- Custom-branded recruitment page
+- Promote a volunteer recruitment page featuring volunteer opportunities and application forms.
+- Feature volunteer opportunities
+- Build volunteer opportunities structured by activity, role, or anything you want.
+- Group opportunities by category
+- Group your opportunities by location, program, event, department, or whatever works best for you.
+- Access to opportunity dashboards
+- View everything about your opportunity from a single page — applicants, shift requests, hour claims, analytics and more.
+- Opportunity-specific application forms
+- Customize application forms for your opportunities and events, including templates to reuse across opportunities.
+- Customize forms for recruitment, data collection & surveys
+- Get access to a dynamic form-builder that allows you to collect any information you need from volunteers.
+- Custom recruitment process
+- Choose the volunteer recruitment workflow that works best for your organization.
+- Generate direct landing page links to your page, forms, opportunities, programs, events, locations, etc.
+- Dynamic shareable links open the mobile app if the person is already logged into the Vome Volunteer app.
+- App & email notifications for new applicants
+- Choose which admin users will receive app and/or email notifications when you receive new applicants.
+- Build onboarding sequences to manage your entire screening process
+- Put volunteers through step-by-step onboarding processes to complete, with optional visibility for the volunteer.
+- Manage interviews, orientation & training sessions for opportunities
+- Put together a screening checklist to use across your opportunities to stay on track about who completed what.
+- Sterling Volunteers background check integration
+- Integrate background checks directly into volunteer sequences with automatic status updates and ongoing monitoring.
+- SCORM Cloud E-Learning integration
+- Add SCORM-compliant e-learning courses directly into volunteer sequences with automatic progress tracking.
+- Manage submitted waivers
+- Allow volunteers to submit signed forms and waivers as part of your screening process.
+- Create and manage notes
+- Create notes on volunteer profiles and specific components of their onboarding process.
+- Onboarding status tracking
+- Easily keep track of whether volunteers completed their screening requirements and if there are any expiration dates.
+- Generate one-time and recurring shifts
+- Easily add available shifts on your calendar in a few clicks, with bulk creation for recurring time slots.
+- Allow volunteers to self-schedule pre-determined shifts
+- Volunteers who are eligible for your opportunities can directly reserve their spots to available shifts.
+- Double the Donation corporate matching gifts integration
+- Unlock corporate matching gifts during volunteer registration and shift reservations.
+- Allow instant bookings for approved volunteers
+- Choose to allow approved volunteers to instantly reserve spots to shifts or require them to submit a request first.
+- Allow volunteers to create their own schedule
+- Allow approved volunteers to create shifts based on their availabilities, which automatically populate your calendar.
+- Create custom scheduling policies to manage check-ins, cancellations and more
+- Control how many reservations volunteers can create, when they can check-in, and much more.
+- Recurring schedule assignments
+- Bulk-assign volunteers to shifts, log hours, and manage cancellations directly from your schedule view.
+- Auto-generated shift chatrooms
+- Streamline communication among attendees with auto-generated shift chatrooms for each shift.
+- Export & print your schedule in PDF, Excel or .CSV format
+- Export your calendar in various formats with customizable field visibility.
+- Mobile app & email scheduling reminders
+- Automate all sorts of scheduling notifications to keep volunteers and administrators in the loop.
+- Receive hour claims
+- Allow volunteers to submit hour claims for shifts they completed. Once approved, their hours are added to their profiles.
+- QR-code attendance tracking
+- Print and display a QR code to allow volunteers to scan via the mobile app to check-in/out of shifts and automate hour tracking.
+- Tap-to-check-in (no scan needed)
+- Let volunteers confirm a shift with a single tap in the Vome app, no QR scan required. Configurable per opportunity for programs that prefer a frictionless check-in.
+- On-site Attendance Kiosk
+- Customize unlimited on-site attendance kiosks to let volunteers self check-in/out from any device (tablet, computer, smartphone).
+- GPS proximity validation
+- Require volunteers to be within range of the site before they can check in from their phone. Set the radius per site or per shift to keep attendance honest.
+- Auto check-in & check-out
+- Skip check-in entirely. Vome can automatically log hours based on the shift's scheduled start and end times — ideal for programs that don't need to track attendance per shift.
+- Custom attendance & claim settings
+- Configure check-in methods, GPS rules, grace windows, and claim policies per opportunity so each program runs the way it needs to.
+- Mass hour loggings
+- Bulk log hours for volunteers in a few clicks, keeping accurate date/time records without manual work.
+- Hours reports
+- Easily generate reservation and hours reports with integrated analytics.
+- Access volunteer profiles
+- View everything you need about a volunteer from a single view — contacts, opportunities, shifts, notes and more.
+- Import volunteer profiles
+- Add up to 10,000 volunteer contacts from Excel per import with batch assignment of tags, opportunities, and shifts.
+- Import custom field data
+- Import and map data into any custom field in your database via Excel or .CSV.
+- Offline profile management
+- Create offline profiles for volunteers who will not claim their profile on Vome — ideal for seniors or non-digital participants.
+- Unlimited custom database fields
+- Field types include text, number, date, time, single and multi-select, email, URL, address, attachment, boolean, and unique ID.
+- Profile tags
+- Group volunteers in your database by anything you want — great for bulk actions like emails or shift assignments.
+- Advanced group management
+- Unlock the Groups module to associate group reservations to dedicated groups for cleaner workflows and analytics.
+- Filtering, sorting & exporting
+- Use filters and sorting to get the data you need quickly, plus export everything to Excel at any time.
+- Saved custom views
+- Save any combination of filters, sort order, and visible columns as a named view. Each admin can keep their own and share with the team.
+- Custom-formula filters
+- Combine field conditions for advanced segments — for example, active volunteers with over 50 hours and a specific tag.
+- Bulk actions from any view
+- Assign tags, sequences, shifts, opportunities, languages, or skills; bulk-update custom fields; broadcast emails; merge duplicate profiles — all from selected rows.
+- Google Sheets ↔ Vome Database integration
+- Sync your Vome database with a Google Sheet to automatically keep a backup or perform additional operations on your data.
+- Access instant reports
+- Instantly generate different types of reports about attendees, hours, volunteers, shifts and more.
+- Access instant analytics dashboards
+- Integrated analytics dashboards show you key metrics about your volunteers and activity to detail performance.
+- Individual & bulk emailing
+- Send targeted emails to specific contact lists or one-off emails to individuals directly from Vome.
+- Integrate your email domain using Google or Microsoft
+- Send more personalized emails on Vome from your own mailbox using our integrations with Google and Microsoft.
+- Private chats
+- Use Vome's integrated instant messaging feature to message volunteers directly from the platform.
+- Custom group chats
+- Build custom group chats with volunteers and other administrators to simplify coordination.
+- Auto-generated chatrooms
+- Choose to use auto-generated chatrooms for your opportunities or shifts with automatic participant management.
+- Email templates & shared template folders
+- Build a library of reusable email templates and folder them so every coordinator pulls from the same shared library.
+- Dynamic variable placeholders
+- Personalize email subjects and bodies with dynamic placeholders like first name, role, site, shift name, shift time, and any custom field.
+- Rich media in chats (images, video, audio, docs, links)
+- Send and receive images, video, voice notes, documents, and links inside any chat without leaving Vome.
+- Assign or share a shift inside chat
+- Assign a shift to a volunteer or share a shift link directly inside a private or group chat, without switching to the schedule.
+- Shared outbox & email sharing policy
+- Audit every email sent from Vome (one-off, bulk, shift-notification, birthday) in a shared outbox; control admin visibility with the email sharing policy.
+- Shift notification policies
+- Build reusable policies with pre-shift reminders, change alerts, and post-shift follow-ups (with optional survey link); attach to one shift or to a shift generator.
+- Birthday notifications
+- Send automatic birthday wishes to volunteers and/or alerts to admins, with site-level recipient rules and template-based content.
+- Hand-off notifications
+- Notify coordinators and watchers whenever a profile is assigned (manually or automatically) to a site, sequence, opportunity, or shift they own.
+- Vome Achievements (Bronze → Platinum)
+- A platform-wide four-tier badge ladder fueled by Vome Points. Every volunteer earns these by completing platform challenges, on every plan including Recruit.
+- Custom awards (rule-based & manual)
+- Design your own awards with custom name, icon, and description. Pick an auto rule on hours or shifts (any window), or send manually to one volunteer or a hand-picked group with a personal note.
+- Award notifications & watcher admins
+- When an award fires, Vome emails the volunteer at a time and timezone you choose, using your template, sender, and signature. Watcher admins get notified too, with personalized variables per recipient.
+- Advanced eligibility scoping
+- Restrict any award by tag, opportunity, site, finished onboarding sequence, active database status, or age range. Volunteers outside scope never see it in catalog or progress.
+- Custom admin roles & permissions
+- Restrict administrative access by assigning admin roles with custom permission sets.
+- Two-Factor Authentication (2FA)
+- Protect your account with Two-Factor Authentication. Add a secure phone number and enter a code upon each login attempt.
+- Built-in KPI & metric dashboards
+- Access integrated analytics dashboards and reports to gain a deeper understanding of your operation.
+- Multi-site segmentation
+- Setup your portal to better manage multiple sites under a single account.
+- Map form fields to database fields
+- Map any question or attachment field on a form to a database field to centralize your data.
+- API integration & custom webhooks
+- Access a developer dashboard to create integrations with Vome using APIs or custom webhooks.
+- Automations with Zapier & Power Automate
+- Choose from thousands of custom automations using our integrations with Zapier and Microsoft Power Automate.
+- Native integration with Salesforce
+- Access an installable Vome package on Salesforce to achieve a native integration.
+- SAML & Azure SSO for admins
+- Ensure you're compliant by provisioning admin users and enforcing SSO for their accounts.
+- Sterling Volunteers integration
+- Trigger background checks from an onboarding step. Results land on the volunteer profile.
+- Verified First integration
+- Alternative native background-check provider. Same in-flow trigger, results back on the profile.
+- Double the Donation matching gifts
+- Surface employer matching gifts on every hour claim. Match status visible on the volunteer profile and in reports.
+- Google Sheets two-way sync
+- Mirror your Vome database to a live Google Sheet for downstream reporting and BI tools. Updates flow both ways.
+- Send emails from your own domain
+- Connect Google Workspace or Microsoft 365 so confirmations, reminders, and sequence emails send from your address with proper SPF and DKIM.
+- FAQ & Knowledge base
+- Access many articles for quick answers to frequently asked questions.
+- Email support
+- Personalized customer support with guaranteed quick response times.
+- Technical support
+- We offer base tech support when you come across a technical issue that needs to be resolved by a developer.
+- Onboarding sessions
+- One-hour calls with a platform specialist to get you fully set up on Vome. Unlocked as a one-time benefit upon upgrading.
+- Account review sessions
+- Check-ins with a Vome specialist to go through new features, improvements, or any questions your team has. Unlocked as a one-time benefit upon upgrading.
+- Dedicated account management
+- Gain access to a dedicated Vome expert to help you optimize your portal and share best practices for managing volunteers at scale.
+- New Admin & Transition Onboarding
+- When your team brings on a new admin or transitions coordinators, we provide a complimentary onboarding session for a smooth handoff.
+- Tech & operational consulting
+- Get access to Vome's software engineers and onboarding experts to help you strategize your tech setup.
+- Personalized customer service
+- Our team is passionate about helping organizations effectively manage volunteer programs & events. We'll help you migrate your data, build the foundation of the admin portal, and show you best practices when it comes to volunteer management & engagement. We also offer extensive customer support resources: email tickets, FAQ knowledge base, and a dedicated account manager to make sure you're taken care of.
+- Want to see the difference for yourself?
+- Book a demo
+- Frequently asked questions
+- Still have questions?
+- Talk to our team →
+- What if I have more questions?
+- That's what we're here for! You can contact us to share your questions, or book a demo to see the platform in action.
+- Ready to get started?
+- Sign up for free or schedule a demo to see why thousands of volunteer managers choose Vome.
+- Start for free
+- Schedule a demo
+
+---
+
+## FAQ
+
+- Frequently asked questions
+- Everything coordinators ask before switching to Vome.
+- Still have questions?
+- Talk to our team →
+- What is Vome?
+- Vome is a volunteer management software that helps administrators streamline their workflows and the volunteer journey. It offers a complete end-to-end volunteer app that helps organizations with volunteer recruitment, onboarding, scheduling, hour tracking, database management, reporting and integrations.
+- Does Vome offer integrations?
+- Vome offers API integrations, custom webhooks, and automations via Zapier and Microsoft Power Automate. That means that Vome can integrate with other systems such as Salesforce, Blackbaud products (i.e. Raiser's Edge), CRM systems, HRIS, donor management platforms, etc. Integration features are only accessible via the Ultimate plan.
+- Why is instant messaging important for a volunteer management platform?
+- Instant messaging facilitates real-time communication between administrators and volunteers, eliminating the need for email chains, text messaging, or phone calls. Combined with the Vome mobile app, it keeps admins and volunteers connected wherever they are. Vome's proprietary chats feature generates auto-chatrooms for every opportunity and shift, alleviating the administrative burden of coordinating group chats manually.
+- Do all my volunteers need to create a Vome account?
+- No. As an administrator, you can manage offline profiles for volunteers directly in Vome, scheduling and tracking their activity without requiring them to create an account. Inviting volunteers to claim their own profile unlocks the full experience — form submissions, shift reservations, automated reminders, QR check-in, and chats — but it is never required.
+- Are automatic updates included in my subscription?
+- Yes. As part of your subscription, you can expect automatic software updates. Vome is continuously evolving to meet the changing needs of volunteer managers, with regular releases that include improvements to existing features, new tools and functionalities, and performance and stability enhancements.
+- Do you offer a free trial for any of the premium plans?
+- Yes, we offer a 30-day free trial for all premium plans — Pro, Enterprise, and Ultimate. The free trial begins automatically as soon as you upgrade from your admin portal.
+- Which organizations are eligible to use Vome?
+- Any organization looking to streamline community engagement for volunteers, staff, members, clients, or event attendees. We serve hospitals and healthcare networks, membership associations, grassroots organizations, multi-national NGOs, community centres, food banks and shelters, municipalities and government agencies, festivals, school districts and universities, and businesses. Vome's Enterprise plan is well-suited for multi-site entities.
+- How many volunteers am I allowed to manage?
+- As many as you have. There is no limit to the number of volunteers you can recruit or import. Our pricing depends on the number of administrative seats you wish to use on any paid plan.
+- Why do you charge per administrator?
+- We charge per administrative seat to help you with budgetary planning. Most organizations know how many administrators will need access to Vome, but the number of active volunteers may vary throughout the year.
+- Can I use monthly and annual pricing at the same time for different administrators?
+- Yes. We allow organizations to purchase a combination of monthly and annual seats for maximum flexibility. For example, you can purchase annual seats for your full-time employees and monthly seats for part-time employees who do not require year-round access.
+- What happens if we decide to cancel our plan?
+- If you no longer wish to use a premium plan, you may cancel at any time. You will be able to use your premium plan until your current billing cycle is over, and will then be downgraded to the free base plan.
+- Do you offer any discounts?
+- Yes. When you choose the annual billing option on Vome Pro, you receive a 33% discount compared to 12 monthly payments. We also offer additional savings for organizations that require a sizeable number of admin seats, have unique organizational structures, or are looking to partner for longer terms.
+- What languages do you support?
+- Vome is a bilingual platform, available in both English and French.
+
+---
+
+## About Vome
+
+- About Us | Vome Volunteer
+- Learn about Vome's mission to make volunteering easy and accessible for everyone — our story, our team, and our commitment to volunteer managers worldwide.
+- About Us
+- By partnering with Vome, you are choosing to work with a team of dedicated, passionate and innovative professionals.
+- Vome volunteer management platform in action
+- About Us
+- Vome is a volunteer management platform that was built with a clear mission in mind — to make volunteering easy and accessible for everyone. We believe that volunteering is the cornerstone of building strong communities, and that everyone should have the opportunity to give back in a way that is meaningful to them.
+- Our platform was designed to meet the needs of volunteer managers, so they can easily streamline their workflows and focus on the most important part of their job — managing their volunteers. We understand that managing and engaging volunteers can be a challenging and time-consuming process, which is why we built Vome to be intuitive, powerful, and affordable.
+- At Vome, we believe that the volunteer journey should be just as seamless as booking a hotel, flight or a table at your favorite restaurant. That's why we've made it incredibly easy for volunteers to sign up for opportunities and reserve shifts, all within just a few clicks.
+- We take pride in our commitment to listening to our customers' feedback and continuously improving the platform. Our team is dedicated to adding new features and capabilities that make it even easier for volunteer managers to do their jobs. We strive to continue building a community of individuals who are passionate about volunteer management and share our vision of making volunteering accessible to everyone.
+- We understand the vital role that volunteers play in the success of many organizations and their operations. Without the selfless dedication and hard work of volunteers, many organizations would not have the resources to achieve their missions and continue making a positive impact. As a technology provider, it is our responsibility to continue making their lives as easy as possible to continue giving their time.
+- Our team also recognizes the challenge of quantifying the value (or ROI) of volunteer contribution for organizations. That's why our platform makes it super easy to track and report on various forms of volunteer activity, including hours contributed. By integrating with other tools and data sources, we've set out to provide clear visibility into organizational KPIs, empowering our partners to secure funding, engage stakeholders, and make better informed decisions.
+- For organizations evaluating using Vome to manage their volunteers, we can guarantee that working with the Vome team will be unlike any other platform. You can consider us a partner to help you accomplish your technology goals, go the extra mile to understand your operations and provide levels of customer support you won't find anywhere else. You'll immediately feel the difference after your first meeting with us.
+- See for yourself and
+- sign up for free
+- or
+- book a demo
+- .
+- Need more information?
+- We would love to hear more about your organization and learn how volunteers help drive your mission. We can't wait to hear from you!
+- 2900 Loyalist St, Cornwall, ON K6H 6C8
+
+---
+
+## Customer testimonials
+
+- See what our customers
+- are saying
+- From hospital systems to national nonprofits, thousands of coordinators trust Vome to manage their volunteers.
+- Very easy to use and navigate; it is intuitive, visually appealing, and has great features - both for administrators and users. Vome support is helpful, responsive, and effective. Communication and tracking features make the program a great tool for our uses and needs.
+- Program Coordinator, Hospice Care Ottawa
+- We gave Vome a shot - you should too. As a manager of volunteers, I've worked with five other volunteer software companies. This is the first time I've felt valued as a customer - instead of just one of the masses. Vome is easy to navigate, easy to customize, and affordable.
+- Volunteer Coordinator, Dawn Health
+- We've been using this volunteer management system for a while now, and it has exceeded our expectations in every way. The platform itself is intuitive, easy to navigate, and has streamlined the way we organise, schedule, and communicate with our volunteers. What really sets this system apart, however, is the outstanding customer care. Highly recommend to any organization that values both great tools and outstanding service.
+- Human Resources, Red Cross Malta
+- Vome suits our needs and more! The main reason we looked for volunteer management software was to offer the flexibility for our volunteers to schedule and change shifts on their own. Vome allows this with ease, and is quite user friendly for most of our volunteers and has created efficiency for our Volunteer Manager.
+- Event and Volunteer Manager, Habitat for Humanity Victoria
+- Vome has been a game changer for us! We are pretty unique in the way we utilize 2000+ volunteers a year and Vome has been the only site I've come across that is this flexible and meets our budget needs. The automation has been a huge time saver.
+- Manager of Volunteer Programs & Internships, WaterFire
+- We've been using Vome Volunteer for a little over six months, and it's been a game-changer. The check-in kiosk has been a wonderful resource, and it has helped to streamline our volunteer check-in/check out processes. This centralization has helped bring in new volunteers, as well as increased the number of young adults interested in participating in our programs and events. Additionally, everyone on the Vome team is a delight to work with. Questions are answered promptly, and Vome is very receptive to customer feedback.
+- Volunteer Coordinator, Raising Readers in Story County
+- 10/10 Volunteer Platform! It is very user-friendly for our volunteers and admin. It has features that make it more engaging for volunteers which really helps our program. I also appreciate the access to Vome staff for training - it really makes it easier to use to implement in our agency!
+- Volunteer Coordinator, Grow with Trellis
+- Love VOME! Everything from the ease of use, reporting, cost and the scheduling. I am able to set up a whole section for my trainers and that allows volunteers to sign up for the training very easily. Vome lets the volunteers to be flexible and add a shift quickly and last minute. Vome also helped me set it up from start to finish.
+- Volunteer Manager, Humane Society of Utah
+- Loving Vome. Definitely has been a huge help. It has been so much easier keeping track of hours and who we have on our team of volunteers using this technology. During our busiest time, Vome has helped our center streamline applications. So glad we made the change!
+- Director of Day Program Services, Long Island Alzheimer's & Dementia Center
+- Implementing Vome has revolutionized our volunteer management operations at the Ronald McDonald House Charities of Columbia, SC. The automated scheduling system is a standout feature, saving us significant time and reducing errors. Our volunteers appreciate the flexibility and ease of being able to schedule shifts, which has led to a notable 55% increase in participation and significant improvements in retention.
+- Marketing & Communications Manager, RMHC Columbia SC
+- Vome has been saving me a lot of time managing volunteers across my programs. It offers a robust set of tools that make it simple to recruit and onboard new volunteers, while also providing the functionality needed to communicate with them. They made our transition straightforward, respond to my questions immediately, and incorporate feedback into the platform in record time.
+- Manager, Volunteer & Guest Services
+- I like that I can search for particular volunteers and track their shifts. I love that we can get a quick total of all volunteers and their hours. Customer service is the best — I usually hear right back if not by the next day. And Vome is always trying to improve. Feedback is welcomed and improvements are always being rolled out.
+- Community Engagement Manager
+- The ease of doing reports is faaaar better than our previous platform. I have zero issues creating volunteer reports for our team.
+- Volunteer Engagement Manager
+- The database is easy to use. I can quickly get the monthly total hours of volunteering and it is incredibly easy to speak with their team. They are also constantly improving.
+- Volunteer & Donations Coordinator
+- 5 out of 5
+
+---
