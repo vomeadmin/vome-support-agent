@@ -1095,6 +1095,46 @@ def _handle_auth_bypass_email_ticket(
         print(f"[AUTH BYPASS] Already active, reply sent — ticket {ticket_id}")
         return True
 
+    # Offline/created profile — the account exists (address on alternate_email,
+    # UUID username, unusable password) but isn't claimed. Can't auto-activate;
+    # tell them to claim it by registering with this same email so the merge
+    # flow links their existing profile.
+    if auth_result.get("is_offline_profile"):
+        if is_french:
+            reply = (
+                f"Bonjour {name},\n\n"
+                "Bonne nouvelle — votre profil bénévole existe déjà dans "
+                "notre système. Il a été créé par votre organisation, il "
+                "vous suffit donc de l'activer en créant vos identifiants "
+                "de connexion.\n\n"
+                f"Veuillez vous inscrire avec cette même adresse e-mail "
+                f"({contact_email}) ici :\n"
+                "https://www.vomevolunteer.com/register-volunteer\n\n"
+                "Une fois inscrit avec cette adresse, votre profil et votre "
+                "historique existants seront automatiquement liés.\n\n"
+                "Si vous rencontrez le moindre problème, répondez simplement "
+                "à ce message et nous vous aiderons.\n\n"
+                "Cordialement,\nÉquipe Vome"
+            )
+        else:
+            reply = (
+                f"Hi {name},\n\n"
+                "Good news — your volunteer profile already exists in our "
+                "system. It was set up by your organization, so you just "
+                "need to claim it by creating your login.\n\n"
+                f"Please register using this same email address "
+                f"({contact_email}) here:\n"
+                "https://www.vomevolunteer.com/register-volunteer\n\n"
+                "Once you sign up with this email, your existing profile and "
+                "activity will be linked automatically.\n\n"
+                "If you run into any trouble, just reply here and we'll "
+                "help.\n\n"
+                "Best,\nVome Support"
+            )
+        _send_auth_reply(ticket_id, contact_email, reply)
+        print(f"[AUTH BYPASS] Offline profile, claim reply sent — ticket {ticket_id}")
+        return True
+
     # Account not found — reply and return True so we skip the generic ack/ClickUp
     if is_french:
         reply = (

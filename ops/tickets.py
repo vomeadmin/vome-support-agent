@@ -17,7 +17,7 @@ from agent import (
     _unwrap_mcp_result,
     _normalize_tier,
 )
-from database import _get_engine
+from database import _get_engine, count_vic_resolved_today
 from sqlalchemy import text
 
 from ops.scoring import compute_priority_score
@@ -639,7 +639,10 @@ def get_dashboard_stats(tickets: list[dict]) -> dict:
         1 for t in tickets
         if t["zoho_status_normalized"] == "waiting"
     )
-    resolved_today = 0  # TODO: compute from resolved tickets today
+    # Chats Vic closed on its own today (no ticket filed). This is the
+    # one resolution signal we can measure directly; team-side closures
+    # are not yet tracked here.
+    resolved_today = count_vic_resolved_today()
 
     return {
         "need_response": need_response,

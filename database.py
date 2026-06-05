@@ -67,6 +67,28 @@ kb_deflection_log = Table(
     Column("created_at", DateTime, default=datetime.now(timezone.utc)),
 )
 
+
+# Widget intake outcomes -- one row per conversation that reached a
+# terminal state. This is the raw data behind the "how is Vic doing"
+# overview: how many chats Vic resolved on its own vs. escalated to
+# the team as a ticket.
+#   outcome:         "resolved" (no ticket) | "escalated" (ticket filed)
+#   resolution_type: kb_deflection | info_answered | out_of_scope_redirect
+#                    | auth_self_serve | ticket_created
+vic_resolution_log = Table(
+    "vic_resolution_log",
+    _metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("outcome", String, nullable=False, index=True),
+    Column("resolution_type", String, nullable=True),
+    Column("issue_fingerprint", String, nullable=True),
+    Column("org_id", String, nullable=True),
+    Column("user_email", String, nullable=True),
+    Column("user_role", String, nullable=True),
+    Column("ticket_id", String, nullable=True),
+    Column("created_at", DateTime, default=datetime.now(timezone.utc), index=True),
+)
+
 # Ticket analysis tracking -- records which tickets have been
 # processed by the knowledge book builder
 analyzed_tickets = Table(
@@ -677,6 +699,151 @@ def kb_index_status() -> dict:
             modified[1].isoformat() if modified and modified[1] else None
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Vic intake outcomes (resolved-by-Vic vs escalated-to-team)
+# ---------------------------------------------------------------------------
+
+def log_vic_outcome(
+    outcome: str,
+    resolution_type: str | None = None,
+    issue_fingerprint: str | None = None,
+    org_id: str | None = None,
+    user_email: str | None = None,
+    user_role: str | None = None,
+    ticket_id: str | None = None,
+):
+    """Record a terminal widget-intake outcome for reporting.
+
+    outcome is "resolved" (Vic closed it, no ticket) or "escalated"
+    (a Zoho ticket was filed for the team). Best-effort: never raise,
+    so a logging hiccup can't break the user-facing chat.
+    """
+    if not DATABASE_URL or not outcome:
+        return
+    try:
+        engine = _get_engine()
+        now = datetime.now(timezone.utc)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO vic_resolution_log "
+                    "(outcome, resolution_type, issue_fingerprint, "
+                    " org_id, user_email, user_role, ticket_id, created_at) "
+                    "VALUES (:outcome, :rtype, :fp, :org, :email, "
+                    " :role, :tid, :ts)"
+                ),
+                {
+                    "outcome": outcome,
+                    "rtype": resolution_type,
+                    "fp": issue_fingerprint,
+                    "org": org_id,
+                    "email": user_email,
+                    "role": user_role,
+                    "tid": ticket_id,
+                    "ts": now,
+                },
+            )
+    except Exception as e:
+        print(f"[DB] log_vic_outcome failed: {e}")
+
+
+def count_vic_resolved_today() -> int:
+    """Number of chats Vic resolved without a ticket since midnight (server tz)."""
+    if not DATABASE_URL:
+        return 0
+    try:
+        engine = _get_engine()
+        with engine.connect() as conn:
+            return conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM vic_resolution_log "
+                    "WHERE outcome = 'resolved' "
+                    "AND created_at >= date_trunc('day', NOW())"
+                )
+            ).scalar() or 0
+    except Exception as e:
+        print(f"[DB] count_vic_resolved_today failed: {e}")
+        return 0
+
+
+def get_vic_metrics(days: int = 30) -> dict:
+    """Aggregate widget-intake outcomes over the last `days` days.
+
+    Returns the resolved-vs-escalated split, a deflection rate, today's
+    counts, a breakdown by resolution type, and the top topics Vic
+    resolved on its own.
+    """
+    if not DATABASE_URL:
+        return {"error": "DATABASE_URL not set"}
+    try:
+        engine = _get_engine()
+        with engine.connect() as conn:
+            outcome_rows = conn.execute(
+                text(
+                    "SELECT outcome, COUNT(*) AS n FROM vic_resolution_log "
+                    "WHERE created_at > NOW() - make_interval(days => :days) "
+                    "GROUP BY outcome"
+                ),
+                {"days": days},
+            ).all()
+            counts = {o: int(n) for o, n in outcome_rows}
+            resolved = counts.get("resolved", 0)
+            escalated = counts.get("escalated", 0)
+            total = resolved + escalated
+
+            type_rows = conn.execute(
+                text(
+                    "SELECT resolution_type, COUNT(*) AS n "
+                    "FROM vic_resolution_log "
+                    "WHERE created_at > NOW() - make_interval(days => :days) "
+                    "GROUP BY resolution_type ORDER BY n DESC"
+                ),
+                {"days": days},
+            ).all()
+
+            today_rows = conn.execute(
+                text(
+                    "SELECT outcome, COUNT(*) AS n FROM vic_resolution_log "
+                    "WHERE created_at >= date_trunc('day', NOW()) "
+                    "GROUP BY outcome"
+                )
+            ).all()
+            today = {o: int(n) for o, n in today_rows}
+
+            topic_rows = conn.execute(
+                text(
+                    "SELECT issue_fingerprint, COUNT(*) AS n "
+                    "FROM vic_resolution_log "
+                    "WHERE outcome = 'resolved' "
+                    "AND issue_fingerprint IS NOT NULL "
+                    "AND created_at > NOW() - make_interval(days => :days) "
+                    "GROUP BY issue_fingerprint ORDER BY n DESC LIMIT 10"
+                ),
+                {"days": days},
+            ).all()
+
+        return {
+            "window_days": days,
+            "resolved": resolved,
+            "escalated": escalated,
+            "total": total,
+            "resolution_rate": round(resolved / total, 3) if total else 0.0,
+            "today": {
+                "resolved": today.get("resolved", 0),
+                "escalated": today.get("escalated", 0),
+            },
+            "by_resolution_type": {
+                (rt or "unknown"): int(n) for rt, n in type_rows
+            },
+            "top_resolved_topics": [
+                {"fingerprint": fp, "count": int(n)} for fp, n in topic_rows
+            ],
+        }
+    except Exception as e:
+        print(f"[DB] get_vic_metrics failed: {e}")
+        return {"error": str(e)}
 
 
 def _parse_zoho_time(zoho_str: str | None) -> datetime | None:

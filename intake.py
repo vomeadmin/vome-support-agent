@@ -31,6 +31,7 @@ from kb_search import (
 )
 from kb_sync import search_kb_articles
 from slack_ticket_brief import send_ticket_brief
+from database import log_vic_outcome
 
 _client = anthropic.Anthropic()
 
@@ -722,6 +723,7 @@ def run_intake_turn(
     auth_check_email = parsed.get("auth_check")
 
     # Step 2b: Handle auth check if Claude requested one
+    auth_self_served = False
     if auth_check_email:
         auth_result = _run_auth_check(auth_check_email)
         if auth_result:
@@ -736,7 +738,11 @@ def run_intake_turn(
                         "your password here: "
                         "https://www.vomevolunteer.com/forgot"
                     )
-                    status = "complete"
+                    # Self-served: account activated in-chat. This
+                    # closes as "resolved" with no ticket (previously
+                    # it set "complete", which filed a needless ticket).
+                    status = "resolved"
+                    auth_self_served = True
             elif auth_result.get("is_active"):
                 reply_text += (
                     "\n\nI can see your account is already "
@@ -767,26 +773,49 @@ def run_intake_turn(
     # Step 4: Apply completeness gate
     is_complete, missing = check_completeness(extracted, session_context)
 
-    # Override status based on completeness
-    if status == "complete":
-        # Redirect short-circuit: if Vic is closing the conversation
-        # because the question is org-controlled (or otherwise not a
-        # Vome support matter), do not create a ticket. The warm
-        # redirect IS the resolution.
-        if issue_fingerprint == "out-of-scope-redirect":
-            print(
-                f"[INTAKE] Skipping ticket creation: "
-                f"out-of-scope-redirect for "
-                f"{session_context.get('user_email')}"
-            )
-            return {
-                "reply": reply_text,
-                "status": "complete",
-                "kb_article": kb_article_response,
-                "ticket_created": False,
-                "ticket_id": None,
-            }
+    # Terminal outcome A: resolved WITHOUT a ticket.
+    # Vic met the customer's need in-chat and there is nothing for the
+    # team to action -- a how-to or product/overview question answered,
+    # a KB article accepted as helpful, an org-controlled redirect, or
+    # an auth issue self-served. These must NOT create a Zoho ticket.
+    # (Previously they closed as status "complete", which filed a
+    # ticket unconditionally -- the source of the "tickets with nothing
+    # to process" problem.) "out-of-scope-redirect" is honored even on
+    # the legacy "complete" status for backward compatibility.
+    is_redirect = issue_fingerprint == "out-of-scope-redirect"
+    if status == "resolved" or is_redirect or auth_self_served:
+        if auth_self_served:
+            resolution_type = "auth_self_serve"
+        elif is_redirect:
+            resolution_type = "out_of_scope_redirect"
+        elif kb_article_response:
+            resolution_type = "kb_deflection"
+        else:
+            resolution_type = "info_answered"
 
+        print(
+            f"[INTAKE] Resolved without ticket "
+            f"({resolution_type}) for "
+            f"{session_context.get('user_email')}"
+        )
+        log_vic_outcome(
+            outcome="resolved",
+            resolution_type=resolution_type,
+            issue_fingerprint=issue_fingerprint,
+            org_id=session_context.get("org_id"),
+            user_email=session_context.get("user_email"),
+            user_role=session_context.get("user_role"),
+        )
+        return {
+            "reply": reply_text,
+            "status": "resolved",
+            "kb_article": kb_article_response,
+            "ticket_created": False,
+            "ticket_id": None,
+        }
+
+    # Terminal outcome B: an actionable issue -- create a ticket.
+    if status == "complete":
         # Sanity guard: refuse to create a content-less ticket. If
         # there's no description AND no prior conversation AND no
         # current user message, Claude completed prematurely. Fall
@@ -818,6 +847,7 @@ def run_intake_turn(
             current_message=message,
             current_reply=reply_text,
         )
+        created = ticket_result.get("ticket_created", False)
 
         # Log unmatched issue for KB gap tracking
         if issue_fingerprint and not kb_article_response:
@@ -827,8 +857,19 @@ def run_intake_turn(
                 user_email=session_context.get("user_email"),
             )
 
-        # If ticket creation failed, override Claude's optimistic reply
-        if not ticket_result.get("ticket_created"):
+        if created:
+            # Escalated to the team for processing.
+            log_vic_outcome(
+                outcome="escalated",
+                resolution_type="ticket_created",
+                issue_fingerprint=issue_fingerprint,
+                org_id=session_context.get("org_id"),
+                user_email=session_context.get("user_email"),
+                user_role=session_context.get("user_role"),
+                ticket_id=ticket_result.get("ticket_id"),
+            )
+        else:
+            # Ticket creation failed -- override Claude's optimistic reply
             print(
                 f"[INTAKE] Ticket creation failed for "
                 f"{session_context.get('user_email')} — "
@@ -846,7 +887,7 @@ def run_intake_turn(
             "reply": reply_text,
             "status": "complete",
             "kb_article": kb_article_response,
-            "ticket_created": ticket_result.get("ticket_created", False),
+            "ticket_created": created,
             "ticket_id": ticket_result.get("ticket_id"),
         }
 

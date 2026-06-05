@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from ops.auth import verify_ops_token
 from ops.tickets import fetch_active_tickets, get_dashboard_stats
+from database import get_vic_metrics
 from ops.thread import fetch_thread
 from ops.draft import generate_draft
 from ops.send import send_reply
@@ -70,6 +71,16 @@ def get_tickets(
         "stats": stats,
         "total": len(tickets),
     }
+
+
+@ops_router.get("/metrics")
+def get_metrics(days: int = Query(30, ge=1, le=365)):
+    """Vic performance overview: how many widget chats Vic resolved on
+    its own vs. escalated to the team as a ticket, over the last `days`
+    days. Includes the deflection rate, today's split, a breakdown by
+    resolution type, and the top topics Vic resolved without a ticket.
+    """
+    return get_vic_metrics(days=days)
 
 
 @ops_router.get("/ticket/{zoho_ticket_id}/thread")
