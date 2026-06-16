@@ -1,18 +1,19 @@
 """
 clickup_waiting_client_handler.py
 
-Handles ClickUp taskStatusUpdated -> "Waiting on Client".
+Handles ClickUp taskStatusUpdated -> "needs client info".
 
-When an engineer sets a task to "Waiting on Client":
-  1. Fetch the linked Zoho ticket via Zoho Ticket Link custom field
-  2. Fetch ClickUp task comments for engineer context
-  3. Look up the client's language from thread_map
-  4. Have Claude draft a contextual message using the engineer's notes
-  5. Route draft to Slack (#admin-tickets) for Sam to review
-  6. Tag the Zoho ticket with "waiting-client"
-  7. Update thread_map status to "waiting-client"
+When an engineer sets a task to "needs client info":
+  1. Fetch the linked Zoho ticket + ClickUp engineer notes (what's needed)
+  2. Review the thread: is this info already requested, or already provided?
+  3. If still needed: draft the request (signed Vic) and AUTO-SEND it
+  4. Park the task at "awaiting client response" (Zoho -> Awaiting Client
+     Response); it auto-resurfaces to "queued" on the client's reply
+  5. If already asked -> park without a duplicate; if already answered ->
+     re-queue for the engineer; if it can't auto-send -> Slack review draft
 """
 
+import json
 import os
 import re
 
@@ -37,12 +38,24 @@ from database import (
     save_thread,
     update_thread,
 )
+from status_constants import (
+    THREAD_OPEN,
+    THREAD_WAITING_CLIENT,
+    CU_AWAITING_CLIENT,
+    CU_WRITE_QUEUED_LOWER,
+    ZOHO_AWAITING_CLIENT_RESPONSE,
+    ZOHO_TAG_WAITING_CLIENT,
+)
+from signatures import signature, sign_message
 
 _anthropic = anthropic.Anthropic()
 _slack = WebClient(token=os.environ.get("SLACK_BOT_TOKEN", ""))
 
 CLICKUP_API_TOKEN = os.environ.get("CLICKUP_API_TOKEN", "")
 CLICKUP_BASE = "https://api.clickup.com/api/v2"
+ZOHO_FROM_ADDRESS = os.environ.get(
+    "ZOHO_FROM_ADDRESS", "support@vomevolunteer.zohodesk.com"
+)
 
 CHANNEL_FINAL_REVIEW = os.environ.get(
     "SLACK_CHANNEL_SUPPORT_FINAL_REVIEW", ""
@@ -216,8 +229,9 @@ def _generate_need_info_message(
         " ClickUp\n"
         "- Say 'we' not 'I' when referring to the team's"
         " investigation\n"
-        "- Sign off as: Sam | Vome support /"
-        " support.vomevolunteer.com\n"
+        "- Do not write a closing or signature; end at the"
+        " last sentence (a signature is appended"
+        " automatically)\n"
         "- Output the message only, no labels or preamble\n"
         f"{lang_instruction}"
         f"{engineer_block}\n"
@@ -233,7 +247,8 @@ def _generate_need_info_message(
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
     )
-    return response.content[0].text.strip()
+    # Auto-send category: needs-client-info requests are signed "Vic".
+    return sign_message(response.content[0].text.strip(), "vic", language)
 
 
 # ---------------------------------------------------------------------------
@@ -410,87 +425,383 @@ def _create_new_thread(
 
 
 # ---------------------------------------------------------------------------
+# Auto-send (info request -> park at "awaiting client response")
+# ---------------------------------------------------------------------------
+
+def _set_clickup_status(task_id: str, status: str) -> bool:
+    """Set a ClickUp task's status."""
+    if not CLICKUP_API_TOKEN or not task_id:
+        return False
+    try:
+        r = httpx.put(
+            f"{CLICKUP_BASE}/task/{task_id}",
+            json={"status": status},
+            headers={
+                "Authorization": CLICKUP_API_TOKEN,
+                "Content-Type": "application/json",
+            },
+            timeout=15,
+        )
+        r.raise_for_status()
+        print(f"[NEEDS INFO] ClickUp task {task_id} -> {status}")
+        return True
+    except Exception as e:
+        print(f"[NEEDS INFO] ClickUp status update failed ({task_id}): {e}")
+        return False
+
+
+def _set_zoho_status(ticket_id: str, status: str) -> bool:
+    """Set a Zoho ticket's status."""
+    result = _zoho_desk_call("ZohoDesk_updateTicket", {
+        "body": {"status": status},
+        "path_variables": {"ticketId": str(ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+    if not result:
+        print(f"[NEEDS INFO] Zoho status update failed for {ticket_id}")
+        return False
+    data = _unwrap_mcp_result(result)
+    if isinstance(data, dict) and data.get("errorCode"):
+        print(f"[NEEDS INFO] Zoho status error for {ticket_id}: {data}")
+        return False
+    print(f"[NEEDS INFO] Zoho ticket {ticket_id} -> {status}")
+    return True
+
+
+def _send_info_email(
+    ticket_id: str, content: str, to_email: str, cc_email: str = ""
+) -> bool:
+    """Email the info request to the client via ZohoDesk_sendReply."""
+    body: dict = {
+        "channel": "EMAIL",
+        "fromEmailAddress": ZOHO_FROM_ADDRESS,
+        "content": content,
+        "contentType": "plainText",
+    }
+    if to_email:
+        body["to"] = to_email
+    if cc_email:
+        body["cc"] = cc_email
+    result = _zoho_desk_call("ZohoDesk_sendReply", {
+        "body": body,
+        "path_variables": {"ticketId": str(ticket_id)},
+        "query_params": {"orgId": str(ZOHO_ORG_ID)},
+    })
+    if not result:
+        print(f"[NEEDS INFO] sendReply failed (no result) — ticket {ticket_id}")
+        return False
+    if isinstance(result, dict) and result.get("isError"):
+        print(f"[NEEDS INFO] sendReply error — ticket {ticket_id}: {result}")
+        return False
+    data = _unwrap_mcp_result(result)
+    if isinstance(data, dict) and data.get("errorCode"):
+        print(f"[NEEDS INFO] sendReply Zoho error — ticket {ticket_id}: {data}")
+        return False
+    print(f"[NEEDS INFO] Info request emailed to client — ticket {ticket_id}")
+    return True
+
+
+def _assess_info_request_state(
+    ticket_fields: dict, conversations_text: str, engineer_context: str
+) -> dict:
+    """Decide whether the engineer's info request should be sent.
+
+    Returns {"recommendation", "reason", "last_relevant"} where
+    recommendation is one of:
+      - "send": the needed info has not been requested yet.
+      - "skip_already_asked": an equivalent request is already outstanding
+        and we are still waiting -> park, no duplicate.
+      - "skip_already_answered": the client already provided it -> re-queue
+        for the engineer, no email.
+    Defaults to "send" on uncertainty or error (a blocked engineer is worse
+    than a rare redundant ask).
+    """
+    contact_name = ticket_fields.get("contact_name", "")
+    subject = ticket_fields.get("subject", "")
+    prompt = (
+        "An engineer flagged this ticket as needing more information from "
+        "the client. Before we email the client, decide whether the request "
+        "should actually go out.\n\n"
+        "Use the engineer's notes to understand WHAT information is needed, "
+        "then read the conversation thread and decide:\n"
+        "- 'send': that information has not been asked for yet (or the "
+        "engineer needs a new detail not previously requested).\n"
+        "- 'skip_already_asked': we have ALREADY asked the client for this "
+        "same information and have not received an answer yet. Sending again "
+        "would be a duplicate nag.\n"
+        "- 'skip_already_answered': the client has ALREADY provided this "
+        "information in the thread, so we should not ask again.\n"
+        "Weigh timing and order (who said what, and when). When unsure, "
+        "choose 'send'.\n\n"
+        f"Subject: {subject}\nClient: {contact_name}\n\n"
+        "What the engineer needs (their notes):\n"
+        f"{engineer_context or '(none provided)'}\n\n"
+        "Conversation thread (oldest to newest, with timestamps):\n"
+        f"{conversations_text}\n\n"
+        "Return valid JSON only, no prose, no code fences:\n"
+        "{\n"
+        '  "recommendation": "send" | "skip_already_asked" '
+        '| "skip_already_answered",\n'
+        '  "reason": "one sentence explaining the decision",\n'
+        '  "last_relevant": "one-line summary of the most recent relevant '
+        'message, or empty"\n'
+        "}"
+    )
+    try:
+        resp = _anthropic.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        data = json.loads(raw)
+    except Exception as e:
+        print(f"[NEEDS INFO] Request-state review failed: {e}")
+        return {
+            "recommendation": "send",
+            "reason": f"review failed ({e}); defaulting to send",
+            "last_relevant": "",
+        }
+    rec = str(data.get("recommendation") or "").strip().lower()
+    if rec not in ("send", "skip_already_asked", "skip_already_answered"):
+        rec = "send"
+    return {
+        "recommendation": rec,
+        "reason": str(data.get("reason", "")),
+        "last_relevant": str(data.get("last_relevant", "")),
+    }
+
+
+def _needs_info_record_message(
+    kind: str,
+    ticket_number: str,
+    engineer_name: str,
+    ticket_fields: dict | None = None,
+    zoho_ticket_id: str = "",
+    clickup_task_id: str = "",
+    draft: str = "",
+    reason: str = "",
+    last_relevant: str = "",
+) -> str:
+    """Build the informational Slack record for a needs-client-info outcome."""
+    zoho_url = (
+        "https://desk.zoho.com/support/vomevolunteer"
+        f"/ShowHomePage.do#Cases/dv/{zoho_ticket_id}"
+    ) if zoho_ticket_id else ""
+    clickup_url = (
+        f"https://app.clickup.com/t/{clickup_task_id}"
+    ) if clickup_task_id else ""
+
+    if kind == "sent":
+        head = (
+            f":outbox_tray: *Needs client info — #{ticket_number}"
+            " — auto-sent (Vic)*"
+        )
+        sub = (
+            f"*{engineer_name} needs detail from the client. Vic emailed"
+            " the request; task parked at 'awaiting client response'.*"
+        )
+    elif kind == "skip_already_asked":
+        head = (
+            f":no_bell: *Needs client info — #{ticket_number}"
+            " — no email sent*"
+        )
+        sub = (
+            f"*{engineer_name} flagged this, but we've already asked the"
+            " client and are still waiting. Parked, no duplicate sent.*"
+        )
+    else:  # skip_already_answered
+        head = (
+            f":leftwards_arrow_with_hook: *Needs client info —"
+            f" #{ticket_number} — re-queued, no email*"
+        )
+        sub = (
+            f"*{engineer_name} flagged this, but the client already"
+            " provided the info. Re-queued for the engineer; no email.*"
+        )
+
+    lines = [head, sub]
+    if ticket_fields:
+        contact_name = ticket_fields.get("contact_name", "")
+        contact_email = ticket_fields.get("contact_email", "")
+        subject = ticket_fields.get("subject", "")
+        contact_line = (
+            f"{contact_name} ({contact_email})"
+            if contact_email
+            else contact_name or "Unknown"
+        )
+        lines.append(f"*Contact:* {contact_line}")
+        lines.append(f"*Subject:* {subject}")
+
+    link_parts = []
+    if zoho_url:
+        link_parts.append(f"<{zoho_url}|Zoho>")
+    if clickup_url:
+        link_parts.append(f"<{clickup_url}|ClickUp>")
+    if link_parts:
+        lines.append(" | ".join(link_parts))
+
+    lines.append("")
+    lines.append(_SEP)
+    if kind == "sent":
+        lines.append(":speech_balloon: *SENT TO CLIENT (signed Vic)*")
+        lines.append("")
+        lines.append(draft)
+        lines.append(_SEP)
+        lines.append("Zoho -> Awaiting Client Response.")
+    else:
+        if reason:
+            lines.append(f"Why: {reason}")
+        if last_relevant:
+            lines.append(f"Last relevant message: {last_relevant}")
+        lines.append(_SEP)
+    return "\n".join(lines)
+
+
+def _post_record(
+    zoho_ticket_id: str,
+    clickup_task_id: str,
+    text: str,
+    status: str,
+    ticket_fields: dict,
+    thread_ts: str | None,
+) -> None:
+    """Post a needs-info outcome record to Slack and set the thread status."""
+    if thread_ts:
+        thread_entry = get_thread(thread_ts) or {}
+        channel = thread_entry.get("channel") or CHANNEL_FINAL_REVIEW
+        try:
+            _slack.chat_postMessage(
+                channel=channel, thread_ts=thread_ts, text=text
+            )
+        except SlackApiError as e:
+            print(f"[NEEDS INFO] Record post failed: {e.response['error']}")
+        update_thread(thread_ts, status=status, pending_send=None)
+        return
+    try:
+        resp = _slack.chat_postMessage(channel=CHANNEL_FINAL_REVIEW, text=text)
+        new_ts = resp["ts"]
+        save_thread(
+            thread_ts=new_ts,
+            ticket_id=zoho_ticket_id,
+            ticket_number=zoho_ticket_id,
+            subject=ticket_fields.get("subject", ""),
+            channel=CHANNEL_FINAL_REVIEW,
+            clickup_task_id=clickup_task_id,
+        )
+        update_thread(new_ts, status=status)
+    except SlackApiError as e:
+        print(f"[NEEDS INFO] Record post failed: {e.response['error']}")
+
+
+# ---------------------------------------------------------------------------
 # Main handler
 # ---------------------------------------------------------------------------
 
-def handle_waiting_on_client(
+def handle_needs_client_info(
     task_id: str, engineer_name: str
 ) -> bool:
-    """Process a ClickUp task moving to 'Waiting on Client'.
+    """Process a ClickUp task moving to 'needs client info'.
 
-    Drafts a contextual message using the engineer's notes
-    and posts it to Slack for Sam's review before sending.
-    Returns True on success.
+    Reviews the thread, then AUTO-SENDS the engineer-triggered info request
+    to the client (signed Vic) and parks the task at 'awaiting client
+    response' (Zoho -> Awaiting Client Response). It auto-resurfaces to
+    'queued' when the client replies (handled in process_ticket_update).
+
+    Skips the email when the info was already requested (parks, no duplicate)
+    or already provided (re-queues for the engineer). Falls back to a Slack
+    review draft if it cannot auto-send. Returns True on success.
     """
     print(
-        f"[WAITING] Task {task_id} set to Waiting on Client"
+        f"[NEEDS INFO] Task {task_id} set to needs client info"
         f" by {engineer_name}"
     )
 
     # 1. Fetch ClickUp task
     task = _get_clickup_task(task_id)
     if not task:
-        print(f"[WAITING] Could not fetch task {task_id}")
+        print(f"[NEEDS INFO] Could not fetch task {task_id}")
         return False
-
     task_title = task.get("name", task_id)
 
-    # 2. Fetch ClickUp comments (engineer's notes)
+    # 2. Engineer context (task description + comments) — drives WHAT to ask
     comments = _get_clickup_task_comments(task_id)
-    engineer_context = _format_engineer_context(
-        task, comments
-    )
-    if engineer_context:
-        print(
-            f"[WAITING] Got engineer context"
-            f" ({len(comments)} comments)"
-        )
-    else:
-        print("[WAITING] No engineer context found")
+    engineer_context = _format_engineer_context(task, comments)
 
     # 3. Extract Zoho ticket ID
     zoho_ticket_id = _extract_zoho_ticket_id(task)
     if not zoho_ticket_id:
         print(
-            f"[WAITING] No Zoho Ticket Link on task"
+            f"[NEEDS INFO] No Zoho Ticket Link on task"
             f" {task_id} ({task_title})"
         )
         return False
-
-    print(f"[WAITING] Zoho ticket ID: {zoho_ticket_id}")
+    print(f"[NEEDS INFO] Zoho ticket ID: {zoho_ticket_id}")
 
     # 4. Fetch Zoho ticket + conversations
     zoho_ticket = fetch_ticket_from_zoho(zoho_ticket_id)
-    conversations_result = fetch_ticket_conversations(
-        zoho_ticket_id
-    )
-
-    fields = (
-        _extract_ticket_fields(zoho_ticket)
-        if zoho_ticket else {}
-    )
-    conversations_text = _format_conversations(
-        conversations_result
-    )
-
+    conversations_result = fetch_ticket_conversations(zoho_ticket_id)
+    fields = _extract_ticket_fields(zoho_ticket) if zoho_ticket else {}
+    conversations_text = _format_conversations(conversations_result)
     contact_email = fields.get("contact_email", "")
-    if not contact_email:
-        print(
-            f"[WAITING] No contact email on ticket"
-            f" {zoho_ticket_id}"
-        )
-        return False
+    cc_email = fields.get("cc_email", "")
 
-    # 5. Get language from thread_map
+    # 5. Language + thread lookup
+    thread_ts, thread_data = _find_thread_and_data(zoho_ticket_id)
     language = None
-    thread_ts, thread_data = _find_thread_and_data(
-        zoho_ticket_id
-    )
     if thread_data:
         cls = thread_data.get("classification") or {}
         language = cls.get("language")
+    ticket_number = (
+        (thread_data or {}).get("ticket_number") or zoho_ticket_id
+    )
 
-    # 6. Generate draft with engineer context
+    # 6. Pre-send review — should this request actually go out?
+    assessment = _assess_info_request_state(
+        fields, conversations_text, engineer_context
+    )
+    rec = assessment["recommendation"]
+    print(
+        f"[NEEDS INFO] Request review — ticket {zoho_ticket_id}:"
+        f" recommendation={rec} reason={assessment['reason']}"
+    )
+
+    # 6a. Client already provided the info -> re-queue, no email
+    if rec == "skip_already_answered":
+        _set_clickup_status(task_id, CU_WRITE_QUEUED_LOWER)
+        text = _needs_info_record_message(
+            "skip_already_answered", ticket_number, engineer_name,
+            ticket_fields=fields, zoho_ticket_id=zoho_ticket_id,
+            clickup_task_id=task_id, reason=assessment["reason"],
+            last_relevant=assessment["last_relevant"],
+        )
+        _post_record(
+            zoho_ticket_id, task_id, text, THREAD_OPEN, fields, thread_ts
+        )
+        print(f"[NEEDS INFO] Client already answered — re-queued {task_id}")
+        return True
+
+    # 6b. Already asked and still waiting -> park, no duplicate
+    if rec == "skip_already_asked":
+        _set_clickup_status(task_id, CU_AWAITING_CLIENT)
+        _set_zoho_status(zoho_ticket_id, ZOHO_AWAITING_CLIENT_RESPONSE)
+        _tag_zoho_ticket(zoho_ticket_id, ZOHO_TAG_WAITING_CLIENT)
+        text = _needs_info_record_message(
+            "skip_already_asked", ticket_number, engineer_name,
+            ticket_fields=fields, zoho_ticket_id=zoho_ticket_id,
+            clickup_task_id=task_id, reason=assessment["reason"],
+            last_relevant=assessment["last_relevant"],
+        )
+        _post_record(
+            zoho_ticket_id, task_id, text,
+            THREAD_WAITING_CLIENT, fields, thread_ts,
+        )
+        print(f"[NEEDS INFO] Already asked, parked {task_id}")
+        return True
+
+    # 7. Generate the Vic request from the engineer's notes
     try:
         draft = _generate_need_info_message(
             ticket_fields=fields,
@@ -499,33 +810,58 @@ def handle_waiting_on_client(
             language=language,
         )
     except Exception as e:
-        print(f"[WAITING] Claude draft failed: {e}")
-        first_name = (
-            fields.get("contact_name") or "there"
-        ).split()[0]
+        print(f"[NEEDS INFO] Claude draft failed: {e}")
+        first_name = (fields.get("contact_name") or "there").split()[0]
         draft = (
             f"Hi {first_name}, we've been looking into"
             " this and need a bit more information to"
             " continue. Could you provide any additional"
             " details, such as screenshots, steps to"
             " reproduce, or the affected user's email?\n"
-            "Best,\n\nSam | Vome support\n"
-            "support.vomevolunteer.com"
+            + signature("vic")
         )
 
-    # 7. Post to Slack for review (NOT auto-send)
-    if not thread_ts:
-        thread_ts, thread_data = _find_thread_and_data(
-            zoho_ticket_id
+    # 8. Auto-send the request to the client (signed Vic)
+    can_send = (
+        bool(contact_email) and bool(draft) and len(draft.strip()) >= 20
+    )
+    sent = (
+        _send_info_email(
+            zoho_ticket_id, draft,
+            to_email=contact_email, cc_email=cc_email,
         )
+        if can_send
+        else False
+    )
 
+    if sent:
+        _set_clickup_status(task_id, CU_AWAITING_CLIENT)
+        _set_zoho_status(zoho_ticket_id, ZOHO_AWAITING_CLIENT_RESPONSE)
+        _tag_zoho_ticket(zoho_ticket_id, ZOHO_TAG_WAITING_CLIENT)
+        text = _needs_info_record_message(
+            "sent", ticket_number, engineer_name,
+            ticket_fields=fields, zoho_ticket_id=zoho_ticket_id,
+            clickup_task_id=task_id, draft=draft,
+        )
+        _post_record(
+            zoho_ticket_id, task_id, text,
+            THREAD_WAITING_CLIENT, fields, thread_ts,
+        )
+        print(
+            f"[NEEDS INFO] Auto-sent + parked — ticket {zoho_ticket_id},"
+            f" task {task_id}"
+        )
+        return True
+
+    # 9. Fallback — cannot auto-send (no contact email, empty draft, or send
+    # error). Post the draft to Slack with confirm/send/cancel for manual send.
+    print(
+        f"[NEEDS INFO] Auto-send unavailable for ticket {zoho_ticket_id}"
+        " — falling back to Slack review"
+    )
     if thread_ts:
-        ticket_number = (
-            thread_data.get("ticket_number")
-            or zoho_ticket_id
-        )
         original_channel = (
-            thread_data.get("channel") or CHANNEL_FINAL_REVIEW
+            (thread_data or {}).get("channel") or CHANNEL_FINAL_REVIEW
         )
         msg_ts = _post_to_existing_thread(
             thread_ts=thread_ts,
@@ -540,10 +876,6 @@ def handle_waiting_on_client(
         if not msg_ts:
             return False
     else:
-        print(
-            f"[WAITING] No Slack thread for ticket"
-            f" {zoho_ticket_id} — creating new one"
-        )
         thread_ts = _create_new_thread(
             zoho_ticket_id=zoho_ticket_id,
             ticket_fields=fields,
@@ -554,19 +886,8 @@ def handle_waiting_on_client(
         if not thread_ts:
             return False
 
-    # 8. Store draft as pending + update status
     _store_pending_send(thread_ts, draft)
-    update_thread(thread_ts, status="waiting-client")
-    print(
-        f"[WAITING] Draft posted to Slack for review,"
-        f" thread_ts={thread_ts}"
-    )
-
-    # 9. Tag the Zoho ticket
-    _tag_zoho_ticket(zoho_ticket_id, "waiting-client")
-
-    print(
-        f"[WAITING] Done for task {task_id}"
-        f" / ticket {zoho_ticket_id}"
-    )
+    update_thread(thread_ts, status=THREAD_WAITING_CLIENT)
+    _tag_zoho_ticket(zoho_ticket_id, ZOHO_TAG_WAITING_CLIENT)
+    print(f"[NEEDS INFO] Review draft posted, thread_ts={thread_ts}")
     return True

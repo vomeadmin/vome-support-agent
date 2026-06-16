@@ -10,6 +10,8 @@ import re
 
 import httpx
 
+from status_constants import CU_WRITE_QUEUED_LOWER, CU_WRITE_CLOSED_UPPER
+
 CLICKUP_API_TOKEN = os.environ.get("CLICKUP_API_TOKEN", "")
 CLICKUP_BASE = "https://api.clickup.com/api/v2"
 
@@ -557,7 +559,7 @@ def create_clickup_task(
             "name": title,
             "description": description,
             "priority": cu_priority,
-            "status": "queued",
+            "status": CU_WRITE_QUEUED_LOWER,
             "custom_fields": custom_fields,
         }
         if assignee:
@@ -608,7 +610,7 @@ def close_clickup_task(task_id: str) -> bool:
         url = f"{CLICKUP_BASE}/task/{task_id}"
         r = httpx.put(
             url,
-            json={"status": "CLOSED"},
+            json={"status": CU_WRITE_CLOSED_UPPER},
             headers={
                 "Authorization": CLICKUP_API_TOKEN,
                 "Content-Type": "application/json",

@@ -22,13 +22,19 @@ from kb_search import run_kb_health_scan
 from kb_sync import run_kb_sync
 from clickup_assignee_handler import handle_assignee_updated
 from clickup_needs_review_handler import handle_needs_review
-from clickup_waiting_client_handler import handle_waiting_on_client
+from clickup_waiting_client_handler import handle_needs_client_info
 from database import init_db
 from field_feedback import handle_field_feedback
 from on_prod_handler import handle_on_prod
 from slack_agent_mention_handler import handle_agent_mention
 from slack_reply_handler import handle_reply
 from slack_digest import send_daily_digest
+from status_constants import (
+    normalize_status,
+    CU_ON_PROD,
+    CU_NEEDS_CLIENT_INFO,
+    CU_NEEDS_REVIEW,
+)
 
 REQUIRED_ENV = [
     "ANTHROPIC_API_KEY",
@@ -366,7 +372,9 @@ async def clickup_status_webhook(request: Request):
             )
             break
 
-        if new_status in ("on prod", "on_prod", "on prod ✅"):
+        norm_status = normalize_status(new_status)
+
+        if norm_status == CU_ON_PROD:
             print(
                 f"[{timestamp}] ON PROD detected — "
                 f"task {task_id} by {engineer_name}"
@@ -374,15 +382,15 @@ async def clickup_status_webhook(request: Request):
             handle_on_prod(task_id, engineer_name)
             break
 
-        if new_status in ("waiting on client", "waiting_on_client"):
+        if norm_status == CU_NEEDS_CLIENT_INFO:
             print(
-                f"[{timestamp}] WAITING ON CLIENT detected — "
+                f"[{timestamp}] NEEDS CLIENT INFO detected — "
                 f"task {task_id} by {engineer_name}"
             )
-            handle_waiting_on_client(task_id, engineer_name)
+            handle_needs_client_info(task_id, engineer_name)
             break
 
-        if new_status in ("needs review", "needs_review"):
+        if norm_status == CU_NEEDS_REVIEW:
             print(
                 f"[{timestamp}] NEEDS REVIEW detected — "
                 f"task {task_id} by {engineer_name}"

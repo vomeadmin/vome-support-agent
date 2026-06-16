@@ -19,26 +19,39 @@ from ops.zoho_sync import (
     set_clickup_assignee,
     get_zoho_ticket_contact_email,
 )
+from status_constants import (
+    ACTION_LEAVE,
+    ACTION_CLOSE_TEMPORARILY,
+    ACTION_IN_PROGRESS,
+    ACTION_WAITING_ON_CLIENT,
+    ACTION_DONE,
+    ACTION_SLEEPING,
+    CU_IN_PROGRESS,
+    CU_WAITING_ON_CLIENT,
+    CU_DONE,
+    CU_SLEEPING,
+    ZOHO_ON_HOLD,
+)
 
 # Slack (optional audit trail)
 SLACK_CHANNEL_AGENT_LOG = os.environ.get("SLACK_CHANNEL_AGENT_LOG", "")
 
 # ClickUp action -> status name mapping
 CLICKUP_ACTION_MAP = {
-    "leave": None,
-    "close_temporarily": "waiting on client",
-    "in_progress": "in progress",
-    "waiting_on_client": "waiting on client",
-    "done": "done",
-    "sleeping": "sleeping",
+    ACTION_LEAVE: None,
+    ACTION_CLOSE_TEMPORARILY: CU_WAITING_ON_CLIENT,
+    ACTION_IN_PROGRESS: CU_IN_PROGRESS,
+    ACTION_WAITING_ON_CLIENT: CU_WAITING_ON_CLIENT,
+    ACTION_DONE: CU_DONE,
+    ACTION_SLEEPING: CU_SLEEPING,
 }
 
 
 def send_reply(
     zoho_ticket_id: str,
     content: str,
-    zoho_status_after: str = "On Hold",
-    clickup_action: str = "leave",
+    zoho_status_after: str = ZOHO_ON_HOLD,
+    clickup_action: str = ACTION_LEAVE,
     assignee_clickup_id: int | None = None,
     assignee_zoho_id: str | None = None,
 ) -> dict:

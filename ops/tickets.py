@@ -30,6 +30,22 @@ from ops.zoho_sync import (
     extract_zoho_ticket_id_from_task,
     TEAM,
 )
+from status_constants import (
+    CU_QUEUED,
+    CU_IN_PROGRESS,
+    CU_ON_DEV,
+    CU_NEEDS_REVIEW,
+    CU_WAITING_ON_CLIENT,
+    CU_ON_PROD,
+    ZNORM_NEW,
+    ZNORM_PROCESSING,
+    ZNORM_WAITING,
+    ZNORM_FINAL_REVIEW,
+    ZNORM_CLOSED,
+    ZNORM_NEEDS_REVIEW,
+    THREAD_HANDLED,
+    THREAD_CLOSED,
+)
 
 
 # ClickUp field IDs
@@ -53,16 +69,18 @@ CLICKUP_USER_NAMES = {
 def _normalize_zoho_status(status: str | None) -> str:
     """Normalize Zoho status to lowercase key for scoring."""
     if not status:
-        return "new"
+        return ZNORM_NEW
     s = status.strip().lower()
+    # Keys are raw Zoho status names (lowercased); values are the
+    # normalized vocabulary consumed by ops.scoring / dashboard filters.
     mapping = {
-        "new": "new",
-        "open": "new",
-        "processing": "processing",
-        "in progress": "processing",
-        "on hold": "waiting",
-        "final review": "final_review",
-        "closed": "closed",
+        "new": ZNORM_NEW,
+        "open": ZNORM_NEW,
+        "processing": ZNORM_PROCESSING,
+        "in progress": ZNORM_PROCESSING,
+        "on hold": ZNORM_WAITING,
+        "final review": ZNORM_FINAL_REVIEW,
+        "closed": ZNORM_CLOSED,
     }
     return mapping.get(s, s)
 
@@ -128,7 +146,7 @@ def fetch_active_tickets(
             rows = conn.execute(
                 text(
                     "SELECT * FROM ticket_threads "
-                    "WHERE status NOT IN ('handled', 'closed') "
+                    f"WHERE status NOT IN ('{THREAD_HANDLED}', '{THREAD_CLOSED}') "
                     "ORDER BY created_at DESC "
                     "LIMIT 200"
                 )
@@ -267,7 +285,7 @@ def fetch_active_tickets(
         zoho_status_normalized = _normalize_zoho_status(zoho_status)
 
         # Skip closed tickets unless viewing resolved
-        if zoho_status_normalized == "closed" and filter_type != "resolved":
+        if zoho_status_normalized == ZNORM_CLOSED and filter_type != "resolved":
             continue
 
         contact = zoho.get("contact") or {}
@@ -369,7 +387,7 @@ def fetch_active_tickets(
                     pass
 
                 # Fetch latest engineer comment if status needs it
-                if cu_status in ("needs review", "waiting on client") and not engineer_comment:
+                if cu_status in (CU_NEEDS_REVIEW, CU_WAITING_ON_CLIENT) and not engineer_comment:
                     comments = get_clickup_comments(cu_task_id)
                     for c in reversed(comments):
                         commenter = c.get("user", {}).get("username", "")
@@ -385,10 +403,10 @@ def fetch_active_tickets(
         # Also check: ClickUp status may override what we show
         # "needs_review" from ClickUp means Sam needs to act
         effective_status = zoho_status_normalized
-        if cu_status in ("needs review",):
-            effective_status = "needs_review"
-        elif cu_status in ("waiting on client",):
-            effective_status = "waiting"
+        if cu_status in (CU_NEEDS_REVIEW,):
+            effective_status = ZNORM_NEEDS_REVIEW
+        elif cu_status in (CU_WAITING_ON_CLIENT,):
+            effective_status = ZNORM_WAITING
 
         # Determine Zoho link
         zoho_link = (
@@ -419,15 +437,15 @@ def fetch_active_tickets(
         # Dev owns it if ClickUp status shows active dev work
         # UNLESS ClickUp is "needs review" or "waiting on client"
         # (those mean the dev kicked it back to Sam).
-        sam_statuses = {"needs review", "waiting on client"}
-        dev_statuses = {"in progress", "queued", "on dev", "on prod"}
+        sam_statuses = {CU_NEEDS_REVIEW, CU_WAITING_ON_CLIENT}
+        dev_statuses = {CU_IN_PROGRESS, CU_QUEUED, CU_ON_DEV, CU_ON_PROD}
         if cu_task_id and cu_status in dev_statuses:
             needs_sam = False
         elif cu_task_id and cu_status in sam_statuses:
             needs_sam = True
-        elif zoho_status_normalized == "final_review":
+        elif zoho_status_normalized == ZNORM_FINAL_REVIEW:
             needs_sam = True
-        elif zoho_status_normalized == "new" and not cu_task_id:
+        elif zoho_status_normalized == ZNORM_NEW and not cu_task_id:
             needs_sam = True  # untriaged, no ClickUp task
         elif not cu_task_id:
             needs_sam = True  # no ClickUp link, Sam owns it
@@ -462,7 +480,7 @@ def fetch_active_tickets(
             "priority_score": priority_score,
             "language": language,
             "has_attachment": has_attachment,
-            "resolved": zoho_status_normalized == "closed",
+            "resolved": zoho_status_normalized == ZNORM_CLOSED,
             "needs_sam": needs_sam,
         }
 
@@ -548,8 +566,8 @@ def _fetch_clickup_active_tasks() -> list[dict]:
     # Fetch from Priority Queue list
     list_id = LIST_PRIORITY_QUEUE
     active_statuses = [
-        "queued", "in progress", "needs review",
-        "waiting on client", "on dev", "on prod",
+        CU_QUEUED, CU_IN_PROGRESS, CU_NEEDS_REVIEW,
+        CU_WAITING_ON_CLIENT, CU_ON_DEV, CU_ON_PROD,
     ]
 
     for status in active_statuses:
@@ -601,19 +619,19 @@ def _apply_filter(tickets: list[dict], filter_type: str) -> list[dict]:
     if filter_type == "needs_review":
         return [
             t for t in tickets
-            if t["zoho_status_normalized"] == "needs_review"
-            or t["clickup_status"] in ("needs review",)
+            if t["zoho_status_normalized"] == ZNORM_NEEDS_REVIEW
+            or t["clickup_status"] in (CU_NEEDS_REVIEW,)
         ]
     if filter_type == "waiting":
         return [
             t for t in tickets
-            if t["zoho_status_normalized"] == "waiting"
-            or t["clickup_status"] in ("waiting on client",)
+            if t["zoho_status_normalized"] == ZNORM_WAITING
+            or t["clickup_status"] in (CU_WAITING_ON_CLIENT,)
         ]
     if filter_type == "final_review":
         return [
             t for t in tickets
-            if t["zoho_status_normalized"] == "final_review"
+            if t["zoho_status_normalized"] == ZNORM_FINAL_REVIEW
         ]
     if filter_type == "resolved":
         return [t for t in tickets if t["resolved"]]
@@ -629,15 +647,15 @@ def get_dashboard_stats(tickets: list[dict]) -> dict:
     """Compute summary stats for the dashboard header."""
     need_response = sum(
         1 for t in tickets
-        if t["zoho_status_normalized"] in ("new", "needs_review")
+        if t["zoho_status_normalized"] in (ZNORM_NEW, ZNORM_NEEDS_REVIEW)
     )
     needs_review = sum(
         1 for t in tickets
-        if t["clickup_status"] in ("needs review",)
+        if t["clickup_status"] in (CU_NEEDS_REVIEW,)
     )
     waiting_on_client = sum(
         1 for t in tickets
-        if t["zoho_status_normalized"] == "waiting"
+        if t["zoho_status_normalized"] == ZNORM_WAITING
     )
     # Chats Vic closed on its own today (no ticket filed). This is the
     # one resolution signal we can measure directly; team-side closures

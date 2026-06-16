@@ -21,34 +21,44 @@ from agent import (
 )
 from database import get_thread_by_ticket_id
 from ops.zoho_sync import get_clickup_task, get_clickup_comments
+from status_constants import (
+    ACTION_IN_PROGRESS,
+    ACTION_WAITING_ON_CLIENT,
+    ACTION_DONE,
+    ZOHO_PROCESSING,
+    ZOHO_ON_HOLD,
+    ZOHO_FINAL_REVIEW,
+    ZOHO_CLOSED,
+)
+from signatures import signature_name, SIGNATURE_DOMAIN
 
 _anthropic = anthropic.Anthropic()
 
 # Draft type -> suggested Zoho status + ClickUp action
 DRAFT_DEFAULTS = {
     "acknowledge": {
-        "zoho_status": "Processing",
-        "clickup_action": "in_progress",
+        "zoho_status": ZOHO_PROCESSING,
+        "clickup_action": ACTION_IN_PROGRESS,
     },
     "request_info": {
-        "zoho_status": "On Hold",
-        "clickup_action": "waiting_on_client",
+        "zoho_status": ZOHO_ON_HOLD,
+        "clickup_action": ACTION_WAITING_ON_CLIENT,
     },
     "resolution": {
-        "zoho_status": "Final Review",
-        "clickup_action": "done",
+        "zoho_status": ZOHO_FINAL_REVIEW,
+        "clickup_action": ACTION_DONE,
     },
     "close": {
-        "zoho_status": "Closed",
-        "clickup_action": "done",
+        "zoho_status": ZOHO_CLOSED,
+        "clickup_action": ACTION_DONE,
     },
     "admin_action": {
-        "zoho_status": "Processing",
-        "clickup_action": "waiting_on_client",
+        "zoho_status": ZOHO_PROCESSING,
+        "clickup_action": ACTION_WAITING_ON_CLIENT,
     },
     "escalation": {
-        "zoho_status": "Processing",
-        "clickup_action": "in_progress",
+        "zoho_status": ZOHO_PROCESSING,
+        "clickup_action": ACTION_IN_PROGRESS,
     },
 }
 
@@ -166,7 +176,7 @@ def generate_draft(
 ## Rules
 - Match the client's language (detected: {language}). If the conversation is in French, reply in French.
 - Never use em-dashes (—). Use regular dashes or rewrite.
-- Sign as "Sam | Vome support" with "support.vomevolunteer.com" below.
+- Sign as "{signature_name('legacy_sam_support')}" with "{SIGNATURE_DOMAIN}" below.
 - Be warm, specific, and concise. Reference specific details from the thread.
 - If engineer notes mention what they need from the client, translate that into friendly client-facing language. Never expose internal engineering language.
 - Do NOT include a subject line — just the reply body.

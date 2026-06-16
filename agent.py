@@ -12,6 +12,24 @@ import random
 from slack_ticket_brief import send_ticket_brief
 from slack import post_to_engineering
 from clickup_tasks import create_clickup_task, close_clickup_task
+from status_constants import (
+    CU_WRITE_QUEUED_UPPER,
+    THREAD_OPEN,
+    THREAD_HANDLED,
+    THREAD_CLOSED,
+    THREAD_ON_PROD_SENT,
+    THREAD_WAITING_CLIENT,
+    CU_AWAITING_CLIENT,
+    ZOHO_OPEN,
+    ZOHO_PROCESSING,
+    ZOHO_IN_PROGRESS,
+    ZOHO_ON_HOLD,
+    ZOHO_PENDING_DEVELOPER_FIX,
+    ZOHO_CLOSED,
+    ZOHO_RESOLVED,
+    ZOHO_AWAITING_CLIENT_RESPONSE,
+)
+from signatures import signature, sign_message
 
 # Fix Windows console encoding for emoji in system_prompt.md
 if sys.stdout.encoding != "utf-8":
@@ -787,7 +805,7 @@ def update_zoho_ticket_assignment(
 
     body: dict = {
         "assigneeId": assignee_id,
-        "status": "In Progress",
+        "status": ZOHO_IN_PROGRESS,
     }
 
     result = _zoho_desk_call("ZohoDesk_updateTicket", {
@@ -821,25 +839,25 @@ _ACK_TEMPLATES_EN = [
         "Hi {name}, thanks for reaching out. We've received your message "
         "and our team is reviewing it. We'll follow up shortly."
         "{widget_tip}\n\n"
-        "Best,\n\nVome team\nsupport.vomevolunteer.com"
+        + signature("legacy_vome_team")
     ),
     (
         "Hi {name}, we've got this and are looking into it. "
         "You'll hear from us soon."
         "{widget_tip}\n\n"
-        "Best,\n\nVome team\nsupport.vomevolunteer.com"
+        + signature("legacy_vome_team")
     ),
     (
         "Hi {name}, thanks for flagging this. Our team is on it "
         "and we'll get back to you with an update."
         "{widget_tip}\n\n"
-        "Best,\n\nVome team\nsupport.vomevolunteer.com"
+        + signature("legacy_vome_team")
     ),
     (
         "Hi {name}, this has been received and is being reviewed "
         "by our team. We'll be in touch shortly."
         "{widget_tip}\n\n"
-        "Best,\n\nVome team\nsupport.vomevolunteer.com"
+        + signature("legacy_vome_team")
     ),
 ]
 
@@ -854,26 +872,26 @@ _ACK_TEMPLATES_FR = [
         "recu votre message et notre equipe l'examine. Nous reviendrons "
         "vers vous sous peu."
         "{widget_tip}\n\n"
-        "Cordialement,\n\nVome team\nsupport.vomevolunteer.com"
+        + signature("legacy_vome_team", lang="fr")
     ),
     (
         "Bonjour {name}, nous avons bien pris note de votre demande "
         "et notre equipe s'en occupe. Vous aurez de nos nouvelles bientot."
         "{widget_tip}\n\n"
-        "Cordialement,\n\nVome team\nsupport.vomevolunteer.com"
+        + signature("legacy_vome_team", lang="fr")
     ),
     (
         "Bonjour {name}, merci d'avoir signale ceci. Notre equipe "
         "examine la situation et nous vous tiendrons informe."
         "{widget_tip}\n\n"
-        "Cordialement,\n\nVome team\nsupport.vomevolunteer.com"
+        + signature("legacy_vome_team", lang="fr")
     ),
     (
         "Bonjour {name}, votre demande a bien ete recue et est "
         "en cours d'examen par notre equipe. Nous vous recontacterons "
         "rapidement."
         "{widget_tip}\n\n"
-        "Cordialement,\n\nVome team\nsupport.vomevolunteer.com"
+        + signature("legacy_vome_team", lang="fr")
     ),
 ]
 
@@ -1556,7 +1574,7 @@ def _email_completeness_gate(
             "Si possible, une capture d'ecran nous aiderait "
             "beaucoup.\n\n"
             "Merci!\n\n"
-            "Best,\n\nVome team\nsupport.vomevolunteer.com"
+            + signature("legacy_vome_team")
         )
     else:
         reply = (
@@ -1569,7 +1587,7 @@ def _email_completeness_gate(
             "A screenshot would also be really helpful if "
             "you have one.\n\n"
             "Thanks!\n\n"
-            "Best,\n\nVome team\nsupport.vomevolunteer.com"
+            + signature("legacy_vome_team")
         )
 
     # Send the reply
@@ -1597,7 +1615,7 @@ def _email_completeness_gate(
 
     # Set ticket to On Hold
     _zoho_desk_call("ZohoDesk_updateTicket", {
-        "body": {"status": "On Hold"},
+        "body": {"status": ZOHO_ON_HOLD},
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {"orgId": str(ZOHO_ORG_ID)},
     })
@@ -1805,6 +1823,8 @@ def process_ticket(ticket_data: dict) -> str | None:
             messages=[{"role": "user", "content": user_message}],
         )
         result = response.content[0].text
+        # Sprint draft: model writes the body only; append Sam's signature.
+        result = sign_message(result, "sam", detected_lang)
         print(f"\n{'='*60}")
         print(result)
         print(f"{'='*60}")
@@ -1994,8 +2014,10 @@ def sync_zoho_to_clickup(ticket_id: str) -> None:
     """Sync a Zoho ticket's status/assignee changes to ClickUp.
 
     Called when a Zoho ticket update webhook fires. Handles:
-    - Ticket reassigned to Sam/Ron -> close ClickUp task (Sam took over)
-    - Ticket closed on Zoho -> close ClickUp task
+    - Ticket closed on Zoho -> close the ClickUp task
+    - Ticket set to Awaiting Client Response on Zoho -> set the ClickUp task
+      to 'awaiting client response' (parked, not closed)
+    - Ticket reassigned to Sam/Ron or unassigned -> close ClickUp task
     """
     from database import get_thread_by_ticket_id, update_thread
 
@@ -2017,10 +2039,22 @@ def sync_zoho_to_clickup(ticket_id: str) -> None:
     assignee_id = ticket.get("assigneeId") or ""
 
     # Closed on Zoho -> close on ClickUp
-    if status in ("closed", "resolved"):
+    if status in (ZOHO_CLOSED.lower(), ZOHO_RESOLVED.lower()):
         print(f"Zoho ticket {ticket_id} is {status} -- closing ClickUp task {clickup_task_id}")
         close_clickup_task(clickup_task_id)
-        update_thread(thread_ts, status="closed")
+        update_thread(thread_ts, status=THREAD_CLOSED)
+        return
+
+    # Awaiting Client Response on Zoho -> mirror on ClickUp (parked).
+    # Checked BEFORE the assignee rules below so the task is parked rather
+    # than closed even when the ticket is owned by Sam/Ron.
+    if status == ZOHO_AWAITING_CLIENT_RESPONSE.lower():
+        print(
+            f"Zoho ticket {ticket_id} awaiting client response -- "
+            f"ClickUp task {clickup_task_id} -> {CU_AWAITING_CLIENT}"
+        )
+        _update_clickup_task_status(clickup_task_id, CU_AWAITING_CLIENT)
+        update_thread(thread_ts, status=THREAD_WAITING_CLIENT)
         return
 
     # Reassigned to Sam or Ron (not an engineer) -> close ClickUp task
@@ -2192,6 +2226,30 @@ def _append_clickup_task_context(
         return False
 
 
+def _add_clickup_comment(task_id: str, text: str) -> bool:
+    """Post a comment on a ClickUp task (used to log the client's reply)."""
+    import httpx as _httpx
+    cu_token = os.environ.get("CLICKUP_API_TOKEN", "")
+    if not cu_token or not task_id:
+        return False
+    try:
+        r = _httpx.post(
+            f"https://api.clickup.com/api/v2/task/{task_id}/comment",
+            json={"comment_text": text, "notify_all": False},
+            headers={
+                "Authorization": cu_token,
+                "Content-Type": "application/json",
+            },
+            timeout=15,
+        )
+        r.raise_for_status()
+        print(f"ClickUp comment added to task {task_id}")
+        return True
+    except Exception as e:
+        print(f"ClickUp comment failed ({task_id}): {e}")
+        return False
+
+
 def _set_zoho_ticket_status(ticket_id: str, status: str) -> bool:
     """Update the Zoho ticket status."""
     result = _zoho_desk_call("ZohoDesk_updateTicket", {
@@ -2224,13 +2282,13 @@ def _get_zoho_assignee_status(ticket_id: str) -> str:
     """
     zoho_ticket = fetch_ticket_from_zoho(ticket_id)
     if not zoho_ticket:
-        return "Processing"
+        return ZOHO_PROCESSING
     ticket = _unwrap_mcp_result(zoho_ticket) or {}
     assignee_id = ticket.get("assigneeId") or ""
     engineer_ids = {ZOHO_AGENT_SANJAY, ZOHO_AGENT_ONLYG}
     if assignee_id in engineer_ids:
-        return "Pending Developer Fix"
-    return "Processing"
+        return ZOHO_PENDING_DEVELOPER_FIX
+    return ZOHO_PROCESSING
 
 
 _processing_updates: dict[str, float] = {}
@@ -2284,15 +2342,15 @@ def process_ticket_update(ticket_id: str) -> str | None:
             thread_ts, thread_data = thread_info
             clickup_task_id = thread_data.get("clickup_task_id")
             thread_status = thread_data.get("status", "")
-            was_waiting = thread_status == "waiting-client"
+            was_waiting = thread_status == THREAD_WAITING_CLIENT
             was_closed = thread_status in (
-                "handled", "closed", "on_prod_sent"
+                THREAD_HANDLED, THREAD_CLOSED, THREAD_ON_PROD_SENT
             )
 
         if reply_type == "ack":
             if was_closed:
                 # Client said "thanks" after resolution — re-close
-                _set_zoho_ticket_status(ticket_id, "Closed")
+                _set_zoho_ticket_status(ticket_id, ZOHO_CLOSED)
                 print(
                     f"Ack reply on closed ticket {ticket_id}"
                     " — re-closed"
@@ -2310,7 +2368,7 @@ def process_ticket_update(ticket_id: str) -> str | None:
                     f" {correct_status}"
                 )
             if was_waiting and thread_ts:
-                update_thread(thread_ts, status="open")
+                update_thread(thread_ts, status=THREAD_OPEN)
             return None
 
         # Substantive reply on a closed ticket — treat as new
@@ -2320,25 +2378,27 @@ def process_ticket_update(ticket_id: str) -> str | None:
                 f" {ticket_id} — treating as new ticket"
             )
             # Re-open on Zoho so it gets full processing
-            _set_zoho_ticket_status(ticket_id, "Open")
+            _set_zoho_ticket_status(ticket_id, ZOHO_OPEN)
             if thread_ts:
-                update_thread(thread_ts, status="open")
+                update_thread(thread_ts, status=THREAD_OPEN)
             # Fall through to full reprocessing below, which
             # will create a new ClickUp task via the normal
             # new-ticket classification + routing flow
 
-        # Substantive reply on waiting-client — re-queue
+        # Substantive reply while awaiting client — re-queue + log the reply
+        # as a ClickUp comment so the engineer sees what the client said.
         elif clickup_task_id and was_waiting:
             _update_clickup_task_status(
-                clickup_task_id, "QUEUED"
+                clickup_task_id, CU_WRITE_QUEUED_UPPER
             )
-            _append_clickup_task_context(
+            _add_clickup_comment(
                 clickup_task_id,
-                reply_summary or reply_content_clean[:500],
+                "Client replied: "
+                + (reply_summary or reply_content_clean[:500]),
             )
             print(
                 f"ClickUp task {clickup_task_id}"
-                " re-queued (was waiting on client)"
+                " re-queued (client replied)"
             )
 
         # Substantive reply on open ticket — append context
@@ -2358,7 +2418,7 @@ def process_ticket_update(ticket_id: str) -> str | None:
             )
 
         if was_waiting and thread_ts:
-            update_thread(thread_ts, status="open")
+            update_thread(thread_ts, status=THREAD_OPEN)
 
         zoho_ticket = fetch_ticket_from_zoho(ticket_id)
         if zoho_ticket:
@@ -2432,6 +2492,9 @@ def process_ticket_update(ticket_id: str) -> str | None:
             messages=[{"role": "user", "content": user_message}],
         )
         result = response.content[0].text
+        # Sprint draft (client reply): model writes the body only; append
+        # Sam's signature to the DRAFT RESPONSE section.
+        result = sign_message(result, "sam", detected_lang)
         print(f"\n{'='*60}")
         print(result)
         print(f"{'='*60}")

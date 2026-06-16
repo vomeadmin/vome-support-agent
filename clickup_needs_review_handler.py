@@ -21,6 +21,7 @@ from database import (
     update_thread,
 )
 from slack import post_to_engineering
+from status_constants import THREAD_NEEDS_REVIEW
 
 CLICKUP_API_TOKEN = os.environ.get("CLICKUP_API_TOKEN", "")
 CLICKUP_BASE = "https://api.clickup.com/api/v2"
@@ -157,7 +158,7 @@ def handle_needs_review(task_id: str, engineer_name: str) -> bool:
 
     # 6. Update thread_map status
     if thread_ts:
-        update_thread(thread_ts, status="needs-review")
+        update_thread(thread_ts, status=THREAD_NEEDS_REVIEW)
         print(f"[NEEDS REVIEW] Thread {thread_ts} status set to needs-review")
 
     print(f"[NEEDS REVIEW] Done for task {task_id}")

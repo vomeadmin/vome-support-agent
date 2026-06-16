@@ -14,6 +14,13 @@ from slack_sdk.errors import SlackApiError
 
 from slack_ticket_brief import CHANNEL_TICKETS
 from database import get_all_threads
+from status_constants import (
+    THREAD_OPEN,
+    THREAD_HANDLED,
+    THREAD_PARKED,
+    THREAD_ON_PROD_PENDING,
+    THREAD_ON_PROD_CANCELLED,
+)
 
 _slack = WebClient(token=os.environ.get("SLACK_BOT_TOKEN", ""))
 
@@ -82,18 +89,18 @@ def send_daily_digest():
     on_prod_pending: list[dict] = []
 
     for ts, entry in thread_map.items():
-        status = entry.get("status", "open")
+        status = entry.get("status", THREAD_OPEN)
         # on_prod_cancelled can be from any date — always surface
-        if status == "on_prod_cancelled":
+        if status == THREAD_ON_PROD_CANCELLED:
             on_prod_pending.append(entry)
             continue
         if entry.get("date") != today:
             continue
-        if status == "handled":
+        if status == THREAD_HANDLED:
             handled.append(entry)
-        elif status == "parked":
+        elif status == THREAD_PARKED:
             parked.append(entry)
-        elif status == "on_prod_pending":
+        elif status == THREAD_ON_PROD_PENDING:
             on_prod_pending.append(entry)
         else:
             open_tickets.append(entry)

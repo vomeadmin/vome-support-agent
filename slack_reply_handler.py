@@ -51,6 +51,20 @@ from database import (
     mark_event_processed,
     update_thread,
 )
+from status_constants import (
+    THREAD_PARKED,
+    THREAD_HANDLED,
+    THREAD_ON_PROD_PENDING,
+    THREAD_ON_PROD_CANCELLED,
+    THREAD_WAITING_CLIENT,
+    ZOHO_PROCESSING,
+    ZOHO_PENDING_DEVELOPER_FIX,
+    ZOHO_CLOSED,
+    ZOHO_AWAITING_CLIENT_RESPONSE,
+    CU_WRITE_CLOSED_TITLE,
+    CU_AWAITING_CLIENT,
+)
+from signatures import signature
 
 # ---------------------------------------------------------------------------
 # Clients & config
@@ -94,10 +108,10 @@ _ZOHO_AGENT_IDS = {
 
 # Canonical key → Zoho ticket status after assignment
 _ZOHO_STATUS = {
-    "sam":    "Processing",
-    "onlyg":  "Pending Developer Fix",
-    "sanjay": "Pending Developer Fix",
-    "ron":    "Processing",
+    "sam":    ZOHO_PROCESSING,
+    "onlyg":  ZOHO_PENDING_DEVELOPER_FIX,
+    "sanjay": ZOHO_PENDING_DEVELOPER_FIX,
+    "ron":    ZOHO_PROCESSING,
 }
 
 # Canonical key → human-readable display label
@@ -187,7 +201,7 @@ ASSIGNEE_MAP = _ASSIGNEE_IDS
 # FIELD_HIGHEST_TIER, FIELD_COMBINED_ARR, FIELD_AUTO_SCORE
 
 # Standard signature block
-_SIGNATURE = "Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+_SIGNATURE = signature("legacy_sam_support")
 
 # Patterns that mean Sam wants the previous draft back
 _RESTORE_DRAFT_RE = re.compile(
@@ -438,9 +452,9 @@ def _recover_orphaned_thread(
         # original status was overwritten
         original_status = original_data.get("status", "open")
         if "On Prod" in parent_text:
-            original_status = "on_prod_pending"
+            original_status = THREAD_ON_PROD_PENDING
         elif "Waiting on Client" in parent_text:
-            original_status = "waiting-client"
+            original_status = THREAD_WAITING_CLIENT
 
         # Re-save under the new thread_ts so it works going
         # forward (preserves pending_send, classification, etc.)
@@ -1060,7 +1074,7 @@ def _generate_draft_from_instruction(
         "Write a clean client-facing response following the voice guidelines "
         "in the system prompt. Keep it short and warm. "
         "Do not use em-dash. "
-        "Sign off: Best,\n\nSam | Vome support\nsupport.vomevolunteer.com"
+        f"Sign off: {signature('legacy_sam_support')}"
     )
 
     response = _anthropic.messages.create(
@@ -1800,7 +1814,7 @@ def handle_reply(event: dict):
                     f"Sam parked this on {date_str} — pending follow-up"
                 )},
             )
-        _set_thread_status(thread_ts, "parked")
+        _set_thread_status(thread_ts, THREAD_PARKED)
         return
 
     if text_lower in ("thread", "history"):
@@ -1836,9 +1850,9 @@ def handle_reply(event: dict):
 
     if text_lower == "cancel":
         _pop_pending_send(thread_ts)
-        if thread_data.get("status") == "on_prod_pending":
+        if thread_data.get("status") == THREAD_ON_PROD_PENDING:
             # Mark as on_prod_cancelled so digest flags it
-            update_thread(thread_ts, status="on_prod_cancelled")
+            update_thread(thread_ts, status=THREAD_ON_PROD_CANCELLED)
             _reply(
                 channel, thread_ts,
                 "Held — will appear in tonight's digest"
@@ -2100,20 +2114,20 @@ def handle_reply(event: dict):
             return
 
         _add_reaction(channel, thread_ts, "white_check_mark")
-        _set_thread_status(thread_ts, "handled")
+        _set_thread_status(thread_ts, THREAD_HANDLED)
 
         # Clear close_after_send flag
         if close_after:
             update_thread(thread_ts, close_after_send="false")
         is_on_prod = (
-            thread_data.get("status") == "on_prod_pending"
+            thread_data.get("status") == THREAD_ON_PROD_PENDING
         )
 
         if close_after:
             # Close Zoho ticket and finish ClickUp task
-            _zoho_set_status(ticket_id, "Closed")
+            _zoho_set_status(ticket_id, ZOHO_CLOSED)
             if clickup_task_id:
-                _cu_update_task(clickup_task_id, {"status": "Closed"})
+                _cu_update_task(clickup_task_id, {"status": CU_WRITE_CLOSED_TITLE})
             _reply(
                 channel, thread_ts,
                 "✓ Sent to client\n"
@@ -2126,14 +2140,14 @@ def handle_reply(event: dict):
                     update_clickup_status_finished,
                 )
                 update_clickup_status_finished(clickup_task_id)
-                _zoho_set_status(ticket_id, "Closed")
+                _zoho_set_status(ticket_id, ZOHO_CLOSED)
             else:
                 _cu_update_task(
                     clickup_task_id,
-                    {"status": "WAITING ON CLIENT"},
+                    {"status": CU_AWAITING_CLIENT},
                 )
                 _zoho_set_status(
-                    ticket_id, "Awaiting Client Response"
+                    ticket_id, ZOHO_AWAITING_CLIENT_RESPONSE
                 )
             if is_on_prod:
                 _reply(
@@ -2152,7 +2166,7 @@ def handle_reply(event: dict):
                 )
         else:
             # No ClickUp task — just send and update Zoho status
-            status_ok = _zoho_set_status(ticket_id, "Awaiting Client Response")
+            status_ok = _zoho_set_status(ticket_id, ZOHO_AWAITING_CLIENT_RESPONSE)
             status_line = (
                 "✓ Zoho status → Awaiting Client Response"
                 if status_ok
@@ -2441,7 +2455,7 @@ def handle_reply(event: dict):
 
     if nl.get("skip"):
         _add_reaction(channel, thread_ts, "double_vertical_bar")
-        _set_thread_status(thread_ts, "parked")
+        _set_thread_status(thread_ts, THREAD_PARKED)
         if clickup_task_id:
             date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             _cu_update_task(
@@ -2719,10 +2733,10 @@ def handle_reply(event: dict):
         # Close-only with no draft requested — close ticket directly
         zoho_base = "https://desk.zoho.com/support/vomevolunteer"
         zoho_url = f"{zoho_base}/ShowHomePage.do#Cases/dv/{ticket_id}"
-        status_ok = _zoho_set_status(ticket_id, "Closed")
+        status_ok = _zoho_set_status(ticket_id, ZOHO_CLOSED)
         if clickup_task_id:
-            _cu_update_task(clickup_task_id, {"status": "Closed"})
-        _set_thread_status(thread_ts, "handled")
+            _cu_update_task(clickup_task_id, {"status": CU_WRITE_CLOSED_TITLE})
+        _set_thread_status(thread_ts, THREAD_HANDLED)
         if status_ok:
             cu_line = (
                 "\n✓ ClickUp marked Closed"

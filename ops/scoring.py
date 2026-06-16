@@ -5,6 +5,14 @@ Composite priority scoring for the ticket dashboard.
 Cards are sorted by score descending — higher = needs attention sooner.
 """
 
+from status_constants import (
+    ZNORM_NEW,
+    ZNORM_PROCESSING,
+    ZNORM_NEEDS_REVIEW,
+    ZNORM_FINAL_REVIEW,
+    ZNORM_WAITING,
+)
+
 
 def compute_priority_score(ticket: dict) -> int:
     score = 0
@@ -34,11 +42,11 @@ def compute_priority_score(ticket: dict) -> int:
 
     # Status urgency
     status_weights = {
-        "new": 20,
-        "processing": 5,
-        "needs_review": 15,
-        "final_review": 10,
-        "waiting": 0,
+        ZNORM_NEW: 20,
+        ZNORM_PROCESSING: 5,
+        ZNORM_NEEDS_REVIEW: 15,
+        ZNORM_FINAL_REVIEW: 10,
+        ZNORM_WAITING: 0,
     }
     score += status_weights.get(
         ticket.get("zoho_status_normalized"), 0
