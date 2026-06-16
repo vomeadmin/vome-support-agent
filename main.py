@@ -1,4 +1,15 @@
 import os
+import sys
+
+# Containers (Railway, Docker) give Python a *block-buffered* stdout, so print()
+# output can sit in an 8KB buffer for a long time and never show up in the live
+# logs (stderr is unbuffered, which is why tracebacks appear but print() does
+# not). Force line buffering so every diagnostic line flushes immediately.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except (AttributeError, ValueError):
+    pass
 
 from dotenv import load_dotenv
 
