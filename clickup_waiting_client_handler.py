@@ -47,6 +47,7 @@ from status_constants import (
     ZOHO_TAG_WAITING_CLIENT,
 )
 from signatures import signature, sign_message
+from model_config import SUPPORT_MODEL
 
 _anthropic = anthropic.Anthropic()
 _slack = WebClient(token=os.environ.get("SLACK_BOT_TOKEN", ""))
@@ -242,7 +243,7 @@ def _generate_need_info_message(
     )
 
     response = _anthropic.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=SUPPORT_MODEL,
         max_tokens=600,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
@@ -549,7 +550,7 @@ def _assess_info_request_state(
     )
     try:
         resp = _anthropic.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )

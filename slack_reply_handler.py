@@ -65,6 +65,7 @@ from status_constants import (
     CU_AWAITING_CLIENT,
 )
 from signatures import signature
+from model_config import SUPPORT_MODEL
 
 # ---------------------------------------------------------------------------
 # Clients & config
@@ -1039,7 +1040,7 @@ def _generate_draft(ticket_id: str) -> str:
     )
 
     response = _anthropic.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=SUPPORT_MODEL,
         max_tokens=1000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
@@ -1078,7 +1079,7 @@ def _generate_draft_from_instruction(
     )
 
     response = _anthropic.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=SUPPORT_MODEL,
         max_tokens=800,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
@@ -1396,7 +1397,7 @@ def _analyze_thread_for_task(
     )
     try:
         response = _anthropic.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=800,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -1477,7 +1478,7 @@ def _auto_update_clickup_from_thread(
     )
     try:
         response = _anthropic.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -1701,7 +1702,7 @@ def _parse_with_claude(text: str, thread_data: dict) -> dict:
     )
     try:
         response = _anthropic.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=500,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -1895,7 +1896,7 @@ def handle_reply(event: dict):
 
         try:
             resp = _claude.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=SUPPORT_MODEL,
                 max_tokens=600,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": redraft_prompt}],

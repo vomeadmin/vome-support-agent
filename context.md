@@ -13,7 +13,9 @@ The agent never sends anything directly to clients. All client-facing responses 
 ## Tech stack
 
 - **Python + FastAPI** — webhook server ([main.py](main.py))
-- **Anthropic API** — claude-sonnet-4-20250514 for classification and drafting
+- **Anthropic API** — model IDs centralized in [model_config.py](model_config.py)
+  (`SUPPORT_MODEL` for classification/drafting, `SUPPORT_MODEL_FAST` for cheap
+  classifiers); override via the `SUPPORT_MODEL` / `SUPPORT_MODEL_FAST` env vars
 - **Zoho Desk MCP** — read tickets, post internal notes, save draft replies
 - **Zoho CRM MCP** — contact/account lookup, deal/ARR enrichment
 - **ClickUp REST API** — task creation and management (direct HTTP, not MCP)

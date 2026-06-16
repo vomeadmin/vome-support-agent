@@ -26,6 +26,8 @@ from slack_sdk.errors import SlackApiError
 # Clients & config
 # ---------------------------------------------------------------------------
 
+from model_config import SUPPORT_MODEL
+
 _slack = WebClient(token=os.environ.get("SLACK_BOT_TOKEN", ""))
 _anthropic = anthropic.Anthropic()
 
@@ -664,7 +666,7 @@ def _run_agent(thread_ts: str, new_message: str, user_name: str, thread_context:
     for _ in range(max_iterations):
         try:
             response = _anthropic.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=SUPPORT_MODEL,
                 max_tokens=1024,
                 system=system_prompt,
                 tools=TOOLS,

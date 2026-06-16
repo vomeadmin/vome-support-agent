@@ -32,6 +32,7 @@ from kb_search import (
 from kb_sync import search_kb_articles
 from slack_ticket_brief import send_ticket_brief
 from database import log_vic_outcome
+from model_config import SUPPORT_MODEL, SUPPORT_MODEL_FAST
 
 _client = anthropic.Anthropic()
 
@@ -307,7 +308,7 @@ def _generate_ticket_subject(
 
     try:
         response = _client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=SUPPORT_MODEL_FAST,
             max_tokens=60,
             messages=[{
                 "role": "user",
@@ -699,7 +700,7 @@ def run_intake_turn(
 
     try:
         response = _client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=1024,
             system=system_prompt,
             messages=messages,

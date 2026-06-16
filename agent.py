@@ -39,6 +39,7 @@ from status_constants import (
     ZOHO_AWAITING_CLIENT_RESPONSE,
 )
 from signatures import signature, sign_message
+from model_config import SUPPORT_MODEL, SUPPORT_MODEL_FAST
 
 # Fix Windows console encoding for emoji in system_prompt.md
 if sys.stdout.encoding != "utf-8":
@@ -955,7 +956,7 @@ def _detect_auth_bypass_issue(subject: str, body: str) -> bool:
         return False
     try:
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=SUPPORT_MODEL_FAST,
             max_tokens=5,
             system=(
                 "You determine whether a support ticket is about an "
@@ -1826,7 +1827,7 @@ def process_ticket(ticket_data: dict) -> str | None:
 
     try:
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=2000,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
@@ -2156,7 +2157,7 @@ def _classify_client_reply(reply_content: str) -> dict:
     )
     try:
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=200,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -2359,7 +2360,7 @@ def _classify_no_action_reply(reply_content: str) -> bool:
     )
     try:
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=SUPPORT_MODEL_FAST,
             max_tokens=50,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -2730,7 +2731,7 @@ def process_ticket_update(ticket_id: str) -> str | None:
         )
 
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=2000,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],

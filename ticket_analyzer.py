@@ -49,6 +49,7 @@ from agent import (
     TEAM_EMAILS,
 )
 from database import _get_engine, DATABASE_URL, init_db
+from model_config import SUPPORT_MODEL
 
 # Fix Windows encoding
 if sys.stdout.encoding != "utf-8":
@@ -338,7 +339,7 @@ def analyze_ticket(thread: dict) -> dict | None:
 
     try:
         response = _client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -603,7 +604,7 @@ def generate_knowledge_book():
 
         try:
             response = _client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=SUPPORT_MODEL,
                 max_tokens=4000,
                 messages=[
                     {"role": "user", "content": prompt}
@@ -696,7 +697,7 @@ Be extremely specific. Quote actual phrases. This guide should allow someone (or
 
     try:
         response = _client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=4000,
             messages=[{"role": "user", "content": prompt}],
         )

@@ -31,6 +31,7 @@ from status_constants import (
     ZOHO_CLOSED,
 )
 from signatures import signature_name, SIGNATURE_DOMAIN
+from model_config import SUPPORT_MODEL
 
 _anthropic = anthropic.Anthropic()
 
@@ -189,7 +190,7 @@ Generate ONLY the reply text. No meta-commentary."""
     # -----------------------------------------------------------------------
     try:
         response = _anthropic.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=1024,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],

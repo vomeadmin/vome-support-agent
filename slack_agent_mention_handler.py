@@ -22,6 +22,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from clickup_tasks import move_clickup_task
+from model_config import SUPPORT_MODEL
 
 # ---------------------------------------------------------------------------
 # Clients & config
@@ -426,7 +427,7 @@ def _resolve_destination_with_claude(
 
     try:
         resp = _anthropic.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=50,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -519,7 +520,7 @@ def _extract_task_with_claude(
 
     try:
         resp = _anthropic.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -697,7 +698,7 @@ def _update_clickup_task(
 
     try:
         resp = _anthropic.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )

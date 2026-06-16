@@ -47,6 +47,7 @@ from status_constants import (
     THREAD_ON_PROD_SENT,
 )
 from signatures import signature, sign_message
+from model_config import SUPPORT_MODEL
 
 ZOHO_FROM_ADDRESS = os.environ.get(
     "ZOHO_FROM_ADDRESS", "support@vomevolunteer.zohodesk.com"
@@ -213,7 +214,7 @@ def _generate_resolution_draft(
     )
 
     response = _anthropic.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=SUPPORT_MODEL,
         max_tokens=600,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
@@ -282,7 +283,7 @@ def _assess_resolution_state(
 
     try:
         resp = _anthropic.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=SUPPORT_MODEL,
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
