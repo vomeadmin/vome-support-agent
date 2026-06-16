@@ -674,14 +674,15 @@ def run_intake_turn(
             session_context.get("locale"),
         )
         if upfront_match:
-            if upfront_match["action"] == "flag_stale":
+            # Older articles (suggest_with_strong_caveat) are still shown
+            # to the user -- we just log a refresh task for the team and
+            # let Claude add the "may have changed, reach out" caveat.
+            if upfront_match["action"] == "suggest_with_strong_caveat":
                 flag_stale_article(upfront_match)
-                kb_searched_no_results = True
-            else:
-                kb_context = _format_kb_context(upfront_match)
-                kb_article_response = _build_kb_article_response(
-                    upfront_match,
-                )
+            kb_context = _format_kb_context(upfront_match)
+            kb_article_response = _build_kb_article_response(
+                upfront_match,
+            )
         else:
             kb_searched_no_results = True
 
@@ -763,12 +764,12 @@ def run_intake_turn(
             session_context.get("locale"),
         )
         if kb_match:
-            # If stale, flag it -- don't show the article at all
-            if kb_match["action"] == "flag_stale":
+            # Older articles are still shown -- log a refresh task for the
+            # team, but surface the article (Claude adds the freshness
+            # caveat per the KB DEFLECTION prompt rules).
+            if kb_match["action"] == "suggest_with_strong_caveat":
                 flag_stale_article(kb_match)
-                kb_article_response = None
-            else:
-                kb_article_response = _build_kb_article_response(kb_match)
+            kb_article_response = _build_kb_article_response(kb_match)
 
     # Step 4: Apply completeness gate
     is_complete, missing = check_completeness(extracted, session_context)
@@ -942,7 +943,9 @@ def _build_kb_article_response(kb_match: dict) -> dict:
         "title": kb_match["title"],
         "url": kb_match["url"],
         "days_stale": (
-            days if action in ("suggest_with_caveat", "flag_stale")
+            days if action in (
+                "suggest_with_caveat", "suggest_with_strong_caveat",
+            )
             else None
         ),
     }
@@ -952,7 +955,8 @@ def _format_kb_context(kb_match: dict) -> str:
     """Render a KB match as a structured prompt block with article bodies.
 
     The body is what lets Claude paraphrase real instructions instead of
-    inferring from the title alone. Stale articles already filtered upstream.
+    inferring from the title alone. Older articles are kept (not filtered)
+    and carry a stronger freshness caveat via suggest_with_strong_caveat.
     """
     title = kb_match.get("title", "")
     url = kb_match.get("url", "")
@@ -974,6 +978,17 @@ def _format_kb_context(kb_match: dict) -> str:
         f"Days since last update: {days_str}",
         f"Recommendation: {action}",
     ]
+    if action == "suggest_with_strong_caveat":
+        lines.append(
+            "Note: this article is over 2 years old. Many features are "
+            "unchanged for years, so still use it to answer and link it -- "
+            "but add a brief caveat that it was published a while ago and "
+            "some features may have changed since then. Invite the user to "
+            "reach out if they need to confirm whether a specific feature "
+            "still exists or works that way, and let them know you can open "
+            "a ticket so the team can verify and follow up. Keep the caveat "
+            "qualitative -- do not state a specific number of days or years."
+        )
     if body:
         lines.append("Body:")
         lines.append(body)
@@ -1012,7 +1027,7 @@ def _search_kb_combined(
     # Try the local kb_articles index (Postgres FTS)
     try:
         kb_results = search_kb_articles(
-            query, n_results=2, language=locale,
+            query, n_results=5, language=locale,
         )
         # The SQL @@ filter already excludes non-matches; keep a tiny
         # floor to drop near-zero-rank rows.
@@ -1023,28 +1038,26 @@ def _search_kb_combined(
         if usable:
             best = usable[0]
             days = best.get("days_stale")
-            # Most KB articles stay accurate for over a year. Only
-            # caveat or flag if truly old (see kb_search.score_article
-            # for the matching thresholds).
+            # Most KB articles stay accurate for over a year. Older
+            # articles are still shared -- many features are unchanged
+            # for years -- but with a stronger "verify with us" caveat
+            # the older they are (see _format_kb_context).
             if days is not None and days > 730:
-                action = "flag_stale"
+                action = "suggest_with_strong_caveat"
             elif days is not None and days > 365:
                 action = "suggest_with_caveat"
             else:
                 action = "suggest"
 
+            # Keep older extras too -- an unchanged 2-year-old article is
+            # still useful context for Claude to paraphrase from.
             extras = []
             for r in usable[1:]:
-                r_days = r.get("days_stale")
-                # Drop genuinely stale extras (over 2 years) so Claude
-                # doesn't get outdated context from them.
-                if r_days is not None and r_days > 730:
-                    continue
                 extras.append({
                     "title": r["title"],
                     "url": r["url"],
                     "body": r.get("body", ""),
-                    "days_stale": r_days,
+                    "days_stale": r.get("days_stale"),
                 })
 
             return {

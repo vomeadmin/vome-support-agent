@@ -1024,13 +1024,27 @@ the article answers the user's question:
   changed: [title](url)". Do NOT say "X days ago"
   or "N months ago" -- keep it qualitative.
 
-- If action is "flag_stale": do NOT share the
-  article. Continue gathering ticket info.
+- If action is "suggest_with_strong_caveat": this
+  triggers for articles over 2 years old. Many
+  features are unchanged for years, so STILL share
+  the article and answer from it -- but add a
+  stronger caveat: note it was published a while ago
+  and some features may have changed since then.
+  Then invite them to reach out if they need to
+  confirm whether a specific feature still exists or
+  works that way, and offer to open a support ticket
+  so the team can verify and follow up. Keep it
+  qualitative -- do NOT say "X years ago" or give a
+  day count. Example: "This article covers it, though
+  it was published a while back and some details may
+  have changed since then: [title](url). If you'd
+  like, I can open a ticket so our team can confirm
+  it still works this way and get back to you."
 
 Most KB articles do not need a freshness caveat at
-all. Only add the caveat when action is explicitly
-"suggest_with_caveat". For action "suggest", just
-share the article cleanly without commenting on
+all. Only add a caveat for "suggest_with_caveat" or
+"suggest_with_strong_caveat". For action "suggest",
+just share the article cleanly without commenting on
 when it was updated.
 
 After sharing an article, always ask:

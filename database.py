@@ -124,13 +124,29 @@ knowledge_sections = Table(
 )
 
 
+# Language-aware FTS expression for the generated search_vector column.
+# Uses 'french' stemming for FR articles and 'english' for everything else
+# (the language column is set per-article by the nightly sync). Stemming
+# lets "volunteers" match "volunteer", "cancellation" match "cancel", etc.
+# The (regconfig, text) form of to_tsvector is IMMUTABLE, so it's valid
+# inside a STORED generated column; the (text, text) form is not.
+_KB_SEARCH_VECTOR_EXPR = (
+    "setweight(to_tsvector("
+    "  CASE WHEN language = 'fr' THEN 'french'::regconfig "
+    "       ELSE 'english'::regconfig END, coalesce(title, '')), 'A') ||"
+    "setweight(to_tsvector("
+    "  CASE WHEN language = 'fr' THEN 'french'::regconfig "
+    "       ELSE 'english'::regconfig END, coalesce(body, '')), 'B')"
+)
+
+
 def _kb_articles_create_sql() -> str:
     """Raw SQL for the kb_articles table.
 
     Uses a STORED generated tsvector column so FTS is automatic on UPSERT
-    without a trigger. 'simple' config (no language stemming) is good enough
-    for ~hundreds of articles across en/fr -- queries match the same tokens
-    that get indexed.
+    without a trigger. The vector is built with language-aware stemming
+    (see _KB_SEARCH_VECTOR_EXPR) so queries match word variants, not just
+    exact tokens.
     """
     return (
         "CREATE TABLE IF NOT EXISTS kb_articles ("
@@ -146,11 +162,40 @@ def _kb_articles_create_sql() -> str:
         "  created_time TIMESTAMP NULL,"
         "  synced_at TIMESTAMP NOT NULL DEFAULT NOW(),"
         "  search_vector tsvector GENERATED ALWAYS AS ("
-        "    setweight(to_tsvector('simple', coalesce(title, '')), 'A') ||"
-        "    setweight(to_tsvector('simple', coalesce(body, '')), 'B')"
+        f"    {_KB_SEARCH_VECTOR_EXPR}"
         "  ) STORED"
         ")"
     )
+
+
+def _migrate_kb_search_vector(conn) -> None:
+    """Rebuild search_vector with language-aware stemming if it's still on
+    the old 'simple' config.
+
+    The prod table already exists, so CREATE TABLE IF NOT EXISTS won't pick
+    up the new generation expression. This detects the legacy 'simple'
+    definition and recreates the column (instant on a few hundred rows).
+    Idempotent: once rebuilt, the expression no longer contains 'simple'
+    and this is a no-op.
+    """
+    expr = conn.execute(text(
+        "SELECT generation_expression FROM information_schema.columns "
+        "WHERE table_name = 'kb_articles' AND column_name = 'search_vector'"
+    )).scalar()
+    # Only rebuild the legacy 'simple' vector. If the column is missing
+    # (fresh DB) the CREATE TABLE above already used the new expression.
+    if not expr or "simple" not in expr.lower():
+        return
+    print("[DB] Migrating kb_articles.search_vector to language-aware stemming")
+    conn.execute(text("DROP INDEX IF EXISTS kb_articles_search_idx"))
+    conn.execute(text(
+        "ALTER TABLE kb_articles DROP COLUMN IF EXISTS search_vector"
+    ))
+    conn.execute(text(
+        "ALTER TABLE kb_articles ADD COLUMN search_vector tsvector "
+        f"GENERATED ALWAYS AS ({_KB_SEARCH_VECTOR_EXPR}) STORED"
+    ))
+    conn.execute(text(_kb_articles_index_sql()))
 
 
 def _kb_articles_index_sql() -> str:
@@ -190,6 +235,7 @@ def init_db():
         with engine.begin() as conn:
             conn.execute(text(_kb_articles_create_sql()))
             conn.execute(text(_kb_articles_index_sql()))
+            _migrate_kb_search_vector(conn)
         # Migrate: add columns if missing
         with engine.begin() as conn:
             migrations = [
@@ -602,14 +648,26 @@ def search_kb_articles_db(
         return []
     engine = _get_engine()
 
+    # Match the tsquery config to the article language so stemming lines up
+    # with how the stored vector was built (see _KB_SEARCH_VECTOR_EXPR).
+    cfg = "french" if language == "fr" else "english"
+
+    # OR the query terms instead of requiring all of them. plainto_tsquery
+    # ANDs lexemes with ' & '; rewriting to ' | ' means an article that
+    # matches *some* of the words still surfaces, ranked by ts_rank_cd
+    # (which favours matching more terms). plainto sanitises user input,
+    # so the rewritten string is always a valid to_tsquery.
     sql = (
         "SELECT zoho_article_id, title, body, url, permalink, category, "
         "       language, modified_time, "
-        "       ts_rank_cd(search_vector, plainto_tsquery('simple', :q)) AS score "
-        "FROM kb_articles "
-        "WHERE search_vector @@ plainto_tsquery('simple', :q) "
+        "       ts_rank_cd(search_vector, kbq.q) AS score "
+        "FROM kb_articles, "
+        "     to_tsquery(:cfg::regconfig, "
+        "       replace(plainto_tsquery(:cfg::regconfig, :q)::text, "
+        "               ' & ', ' | ')) AS kbq(q) "
+        "WHERE search_vector @@ kbq.q "
     )
-    params = {"q": query.strip(), "limit": limit}
+    params = {"q": query.strip(), "limit": limit, "cfg": cfg}
     if language in ("en", "fr"):
         sql += "  AND language = :lang "
         params["lang"] = language

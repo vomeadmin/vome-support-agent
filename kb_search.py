@@ -124,12 +124,17 @@ def _compute_days_stale(modified_time_str: str) -> int | None:
 def get_best_kb_match(query: str, locale: str | None = None) -> dict | None:
     """Search KB and return the best article suitable for deflection.
 
-    Returns the top article with action "suggest" or "suggest_with_caveat",
-    or None if no suitable article is found.
+    Returns the top usable article. Articles over 2 years old (scored as
+    "flag_stale") are still returned, relabelled "suggest_with_strong_caveat"
+    so the caller shares them with a stronger freshness caveat instead of
+    suppressing them. Returns None if no article is found.
     """
     results = search_kb(query, limit=3, locale=locale)
     for article in results:
         if article["action"] in ("suggest", "suggest_with_caveat"):
+            return article
+        if article["action"] == "flag_stale":
+            article["action"] = "suggest_with_strong_caveat"
             return article
     return None
 
