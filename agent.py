@@ -2020,6 +2020,75 @@ def process_ticket(ticket_data: dict) -> str | None:
         return None
 
 
+def _find_clickup_task_by_zoho_ticket(ticket_id: str) -> str | None:
+    """Fallback locator: find a ClickUp task by its 'Zoho Ticket Link' field.
+
+    Used when the thread_map row has no clickup_task_id (older or
+    manually-created tasks). Matches by the Zoho ticket *ID substring*, NOT the
+    full URL, because the stored link can use either the desk.zoho.com domain
+    (agent-created) or the white-labeled support.vomevolunteer.com domain
+    (manually pasted) -- only the trailing ticket ID is stable across both.
+
+    Scans the workspace's tasks (the filtered team-tasks endpoint already used
+    in slack_digest.py) including closed ones. Returns the task id or None.
+    """
+    import httpx as _httpx
+
+    cu_token = os.environ.get("CLICKUP_API_TOKEN", "")
+    team_id = os.environ.get("CLICKUP_TEAM_ID", "")
+    if not cu_token or not team_id or not ticket_id:
+        print(
+            f"[ZOHO->CU] cannot run ClickUp link fallback "
+            f"(token/team_id/ticket_id missing) for ticket {ticket_id}"
+        )
+        return None
+
+    field_id = "4776215b-c725-4d79-8f20-c16f0f0145ac"  # Zoho Ticket Link
+    headers = {"Authorization": cu_token}
+    scanned = 0
+    try:
+        for page in range(15):  # safety cap (~1500 tasks)
+            r = _httpx.get(
+                f"https://api.clickup.com/api/v2/team/{team_id}/task",
+                params={
+                    "include_closed": "true",
+                    "subtasks": "true",
+                    "page": page,
+                },
+                headers=headers,
+                timeout=20,
+            )
+            r.raise_for_status()
+            tasks = r.json().get("tasks", [])
+            if not tasks:
+                break
+            for t in tasks:
+                scanned += 1
+                for f in t.get("custom_fields") or []:
+                    if f.get("id") != field_id:
+                        continue
+                    if ticket_id in str(f.get("value") or ""):
+                        print(
+                            f"[ZOHO->CU] matched ClickUp task {t.get('id')} "
+                            f"to ticket {ticket_id} via Zoho Ticket Link "
+                            f"field (scanned {scanned})"
+                        )
+                        return t.get("id")
+            if len(tasks) < 100:  # last page
+                break
+        print(
+            f"[ZOHO->CU] no ClickUp task references ticket {ticket_id} "
+            f"(scanned {scanned} tasks)"
+        )
+        return None
+    except Exception as e:
+        print(
+            f"[ZOHO->CU] ClickUp lookup by Zoho Ticket Link failed "
+            f"({ticket_id}): {e}"
+        )
+        return None
+
+
 def sync_zoho_to_clickup(ticket_id: str) -> None:
     """Sync a Zoho ticket's status/assignee changes to ClickUp.
 
@@ -2045,11 +2114,25 @@ def sync_zoho_to_clickup(ticket_id: str) -> None:
     thread_ts, thread_data = thread_info
     clickup_task_id = thread_data.get("clickup_task_id")
     if not clickup_task_id:
+        # Safety fallback: the DB row never recorded the task ID (older or
+        # manually-created task). Locate it by the ClickUp "Zoho Ticket Link"
+        # custom field, then backfill the row so future syncs are instant.
         print(
             f"[ZOHO->CU] thread {thread_ts} for ticket {ticket_id} has no "
-            f"clickup_task_id stored -- cannot sync. Skipping."
+            f"clickup_task_id stored -- searching ClickUp by Zoho Ticket Link."
         )
-        return
+        clickup_task_id = _find_clickup_task_by_zoho_ticket(ticket_id)
+        if not clickup_task_id:
+            print(
+                f"[ZOHO->CU] no linked ClickUp task found for ticket "
+                f"{ticket_id} -- cannot sync. Skipping."
+            )
+            return
+        update_thread(thread_ts, clickup_task_id=clickup_task_id)
+        print(
+            f"[ZOHO->CU] backfilled thread {thread_ts} with "
+            f"clickup_task_id={clickup_task_id}"
+        )
 
     # Fetch current ticket state from Zoho
     zoho_ticket = fetch_ticket_from_zoho(ticket_id)
