@@ -13,6 +13,7 @@ from slack_ticket_brief import send_ticket_brief
 from slack import post_to_engineering
 from clickup_tasks import create_clickup_task, close_clickup_task
 from status_constants import (
+    normalize_status,
     CU_WRITE_QUEUED_UPPER,
     THREAD_OPEN,
     THREAD_HANDLED,
@@ -20,6 +21,14 @@ from status_constants import (
     THREAD_ON_PROD_SENT,
     THREAD_WAITING_CLIENT,
     CU_AWAITING_CLIENT,
+    CU_WAITING_ON_CLIENT,
+    CU_ON_PROD,
+    CU_QUEUED,
+    CU_IN_PROGRESS,
+    CU_ON_DEV,
+    CU_DONE,
+    CU_ESCALATED,
+    CU_NEEDS_REVIEW,
     ZOHO_OPEN,
     ZOHO_PROCESSING,
     ZOHO_IN_PROGRESS,
@@ -2291,6 +2300,212 @@ def _get_zoho_assignee_status(ticket_id: str) -> str:
     return ZOHO_PROCESSING
 
 
+# ---------------------------------------------------------------------------
+# No-action client replies (courtesy acks) — realign Zoho to mirror ClickUp.
+# NO email is ever sent here; ClickUp is left exactly as-is.
+# ---------------------------------------------------------------------------
+
+# Out-of-office / autoresponder guard. A match means we do NOT treat the
+# message as a genuine client reply (leave the ticket untouched for a human).
+_AUTO_REPLY_RE = re.compile(
+    r"(?i)("
+    r"out of (the )?office|auto(?:matic)?[ -]?repl|away from (my )?(desk|office)"
+    r"|on (vacation|holiday|leave|annual leave|parental leave|maternity leave)"
+    r"|currently (away|out of (the )?office)|i am (currently )?out of"
+    r"|i will be out of|réponse automatique|absence du bureau|de retour le"
+    r"|en (congé|vacances)"
+    r")"
+)
+
+# Obvious action signals. ANY match forces action-needed regardless of the
+# model. Precision over recall: a false action-needed is safe (it just falls
+# through to the normal flow); a false no-action could wrongly realign status.
+_ACTION_SIGNAL_RE = re.compile(
+    r"(?i)("
+    r"\?|\bbut\b|\balso\b|\bstill\b|not working|\bdoesn'?t\b|\bdidn'?t\b"
+    r"|\bisn'?t\b|\bcan'?t\b|\bcannot\b|\bwon'?t\b|\berror\b|\bissue\b"
+    r"|\bproblem\b|\bbroken\b|\bfail|\bcrash|\bhow\b|\bwhen\b|\bwhy\b"
+    r"|\bwhere\b|can you|could you|\bhelp\b|\bunable\b|\bwrong\b|\bagain\b"
+    r")"
+)
+
+
+def _looks_like_auto_reply(text: str) -> bool:
+    """True if the text looks like an out-of-office / autoresponder."""
+    return bool(_AUTO_REPLY_RE.search(text or ""))
+
+
+def _classify_no_action_reply(reply_content: str) -> bool:
+    """Cheap Claude classifier: True ONLY for a pure courtesy ack that needs
+    no response. Conservative -- returns False on anything substantive or on
+    error (precision over recall).
+    """
+    text = (reply_content or "").strip()
+    if not text:
+        return False
+    prompt = (
+        "Classify this client reply to a support ticket.\n\n"
+        f"Reply:\n\"{text}\"\n\n"
+        "Return valid JSON only: {\"no_action\": true} or "
+        "{\"no_action\": false}.\n\n"
+        "no_action = true ONLY for a pure acknowledgment or closing "
+        "pleasantry that needs no response: 'thanks', 'thank you', 'got it', "
+        "'ok', 'will do', 'sounds good', \"I'll check that later\", "
+        "'appreciate it', and similar.\n"
+        "no_action = false for ANYTHING else: any question, any new "
+        "information, any new or continuing problem, anything mentioning it "
+        "is still broken / not working / erroring, any request, or any "
+        "uncertainty. Precision over recall: when in doubt, false."
+    )
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=50,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        return bool(json.loads(raw).get("no_action"))
+    except Exception as e:
+        print(f"[NO-ACTION] classifier failed: {e}")
+        return False
+
+
+def _is_no_action_reply(reply_content: str, has_attachment: bool) -> bool:
+    """Decide if a client reply is a no-action courtesy message.
+
+    Guards force action-needed before trusting the model: an attachment or any
+    obvious action signal both mean action-needed.
+    """
+    if has_attachment:
+        return False
+    if _ACTION_SIGNAL_RE.search(reply_content or ""):
+        return False
+    return _classify_no_action_reply(reply_content)
+
+
+def _get_clickup_status(task_id: str) -> str:
+    """Return the live ClickUp task status (raw string), or '' on failure."""
+    import httpx as _httpx
+    cu_token = os.environ.get("CLICKUP_API_TOKEN", "")
+    if not cu_token or not task_id:
+        return ""
+    try:
+        r = _httpx.get(
+            f"https://api.clickup.com/api/v2/task/{task_id}",
+            headers={"Authorization": cu_token},
+            timeout=15,
+        )
+        r.raise_for_status()
+        return (r.json().get("status") or {}).get("status", "") or ""
+    except Exception as e:
+        print(f"[NO-ACTION] ClickUp get status failed ({task_id}): {e}")
+        return ""
+
+
+def _map_clickup_to_zoho_status(cu_norm: str) -> str | None:
+    """Map a NORMALIZED ClickUp status to the Zoho status that mirrors it.
+
+    Matches both new and legacy ClickUp names. Returns None for statuses we
+    don't mirror (leave Zoho unchanged).
+    """
+    if cu_norm in ("closed", CU_DONE):
+        return ZOHO_CLOSED
+    if cu_norm == CU_ON_PROD:
+        return ZOHO_CLOSED
+    if cu_norm in (CU_AWAITING_CLIENT, CU_WAITING_ON_CLIENT):
+        return ZOHO_AWAITING_CLIENT_RESPONSE
+    if cu_norm in (CU_QUEUED, CU_IN_PROGRESS, CU_ON_DEV):
+        return ZOHO_IN_PROGRESS
+    return None
+
+
+def _log_auto_handled(
+    ticket_id: str, reply_text: str, clickup_state: str, zoho_status: str
+) -> None:
+    """Log an auto-handled no-action reply to #vome-agent-log."""
+    channel = os.environ.get("SLACK_CHANNEL_AGENT_LOG", "")
+    if not channel:
+        return
+    try:
+        from slack_sdk import WebClient
+        wc = WebClient(token=os.environ.get("SLACK_BOT_TOKEN", ""))
+        preview = " ".join((reply_text or "").split())
+        if len(preview) > 200:
+            preview = preview[:200] + "..."
+        zoho_url = (
+            "https://desk.zoho.com/support/vomevolunteer"
+            f"/ShowHomePage.do#Cases/dv/{ticket_id}"
+        )
+        text = (
+            ":robot_face: *Auto-handled no-action reply*\n"
+            f"Ticket: <{zoho_url}|#{ticket_id}>\n"
+            f"Reply: \"{preview or '(no text)'}\"\n"
+            f"ClickUp state read: {clickup_state or '(none)'}\n"
+            f"Zoho status set: {zoho_status or '(unchanged)'}"
+        )
+        wc.chat_postMessage(channel=channel, text=text)
+    except Exception as e:
+        print(f"[NO-ACTION] agent-log post failed: {e}")
+
+
+def _handle_no_action_reply(ticket_id: str, reply_text: str) -> None:
+    """Realign the Zoho status to mirror the linked ClickUp task. No email, no
+    draft, no resurface; ClickUp is left exactly as-is. STATUS ONLY -- the
+    Zoho owner is never touched.
+    """
+    from database import get_thread_by_ticket_id
+
+    thread_info = get_thread_by_ticket_id(ticket_id)
+    clickup_task_id = None
+    if thread_info:
+        _, thread_data = thread_info
+        clickup_task_id = thread_data.get("clickup_task_id")
+
+    # No linked ClickUp task -> Zoho Closed
+    if not clickup_task_id:
+        _set_zoho_ticket_status(ticket_id, ZOHO_CLOSED)
+        print(f"[NO-ACTION] ticket {ticket_id}: no ClickUp task -> Zoho Closed")
+        _log_auto_handled(
+            ticket_id, reply_text, "(no linked ClickUp task)", ZOHO_CLOSED
+        )
+        return
+
+    cu_status_raw = _get_clickup_status(clickup_task_id)
+    cu_norm = normalize_status(cu_status_raw)
+
+    # Escalated -> skip entirely, leave in Processing for Sam.
+    # Match both the new "escalated" and legacy "needs review".
+    if cu_norm in (CU_ESCALATED, CU_NEEDS_REVIEW):
+        print(
+            f"[NO-ACTION] ticket {ticket_id}: ClickUp '{cu_status_raw}'"
+            " is escalated -- leaving for Sam"
+        )
+        _log_auto_handled(
+            ticket_id, reply_text, cu_status_raw or cu_norm,
+            "(skipped -- escalated)",
+        )
+        return
+
+    zoho_status = _map_clickup_to_zoho_status(cu_norm)
+    if zoho_status:
+        _set_zoho_ticket_status(ticket_id, zoho_status)
+        print(
+            f"[NO-ACTION] ticket {ticket_id}: ClickUp '{cu_status_raw}'"
+            f" -> Zoho {zoho_status}"
+        )
+    else:
+        print(
+            f"[NO-ACTION] ticket {ticket_id}: ClickUp '{cu_status_raw}'"
+            " has no Zoho mapping -- left unchanged"
+        )
+    _log_auto_handled(
+        ticket_id, reply_text, cu_status_raw or cu_norm or "(unknown)",
+        zoho_status or "(unchanged)",
+    )
+
+
 _processing_updates: dict[str, float] = {}
 
 def process_ticket_update(ticket_id: str) -> str | None:
@@ -2320,6 +2535,35 @@ def process_ticket_update(ticket_id: str) -> str | None:
         reply_content_clean = re.sub(
             r"<[^>]+>", "", reply_content
         ).strip()
+
+        # OOO / autoresponder guard -- never treat an out-of-office as a reply.
+        if _looks_like_auto_reply(reply_content_clean):
+            print(
+                f"[NO-ACTION] OOO/autoresponder on ticket {ticket_id}"
+                " -- not treating as a reply"
+            )
+            return None
+
+        # NO-ACTION fast path. A pure courtesy ack needs no response: realign
+        # the Zoho status to mirror the linked ClickUp task and stop here --
+        # never draft, never resurface, never email. This runs BEFORE the
+        # resurface/draft logic below, so a courtesy reply on an
+        # awaiting-client task does NOT pull it back into the queue.
+        _latest_has_attach = bool(latest.get("hasAttach"))
+        if not _latest_has_attach:
+            try:
+                _latest_has_attach = int(
+                    latest.get("attachmentCount") or 0
+                ) > 0
+            except (ValueError, TypeError):
+                _latest_has_attach = False
+        if _is_no_action_reply(reply_content_clean, _latest_has_attach):
+            print(
+                f"[NO-ACTION] courtesy reply on ticket {ticket_id}"
+                " -- realigning Zoho to ClickUp (no draft/resurface/email)"
+            )
+            _handle_no_action_reply(ticket_id, reply_content_clean)
+            return None
 
         classification = _classify_client_reply(
             reply_content_clean or "(no text content)"

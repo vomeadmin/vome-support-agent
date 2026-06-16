@@ -21,7 +21,7 @@ from intake import run_intake_turn
 from kb_search import run_kb_health_scan
 from kb_sync import run_kb_sync
 from clickup_assignee_handler import handle_assignee_updated
-from clickup_needs_review_handler import handle_needs_review
+from clickup_needs_review_handler import handle_escalated
 from clickup_waiting_client_handler import handle_needs_client_info
 from database import init_db
 from field_feedback import handle_field_feedback
@@ -33,7 +33,7 @@ from status_constants import (
     normalize_status,
     CU_ON_PROD,
     CU_NEEDS_CLIENT_INFO,
-    CU_NEEDS_REVIEW,
+    CU_ESCALATED,
 )
 
 REQUIRED_ENV = [
@@ -390,12 +390,12 @@ async def clickup_status_webhook(request: Request):
             handle_needs_client_info(task_id, engineer_name)
             break
 
-        if norm_status == CU_NEEDS_REVIEW:
+        if norm_status == CU_ESCALATED:
             print(
-                f"[{timestamp}] NEEDS REVIEW detected — "
+                f"[{timestamp}] ESCALATED detected — "
                 f"task {task_id} by {engineer_name}"
             )
-            handle_needs_review(task_id, engineer_name)
+            handle_escalated(task_id, engineer_name)
             break
 
     return {"status": "ok"}

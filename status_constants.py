@@ -99,6 +99,7 @@ THREAD_ON_PROD_CANCELLED = "on_prod_cancelled"
 THREAD_ON_PROD_SENT = "on_prod_sent"
 THREAD_WAITING_CLIENT = "waiting-client"
 THREAD_NEEDS_REVIEW = "needs-review"
+THREAD_ESCALATED = "escalated"
 
 
 # ---------------------------------------------------------------------------
