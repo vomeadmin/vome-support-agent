@@ -303,11 +303,22 @@ async def zoho_ticket_webhook(request: Request):
 async def zoho_update_webhook(request: Request):
     raw_body = await request.body()
     ticket = _extract_zoho_payload(raw_body)
-    ticket_id = str(ticket.get("id", "unknown"))
+    # Event-type-dependent payload shape:
+    #   * Ticket-level events (Ticket_Update, status/assignee change) put the
+    #     ticket ID in `id`.
+    #   * Thread-level events (Ticket_Thread_Add, i.e. a client reply) put the
+    #     *reply* ID in `id` and the real ticket ID in `ticketId`.
+    # Prefer `ticketId` when present so we always look up by the actual ticket;
+    # using `id` blindly fed the reply ID into get_thread_by_ticket_id() and
+    # broke both reply-resurface and the ClickUp status sync.
+    ticket_id = str(ticket.get("ticketId") or ticket.get("id") or "unknown")
     ticket_number = str(ticket.get("ticketNumber", ""))
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    print(f"[{timestamp}] Ticket update #{ticket_number} (ID: {ticket_id})")
+    print(
+        f"[{timestamp}] Ticket update #{ticket_number} (ID: {ticket_id}, "
+        f"event id: {ticket.get('id')})"
+    )
 
     process_ticket_update(ticket_id)
 
