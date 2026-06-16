@@ -2031,26 +2031,49 @@ def sync_zoho_to_clickup(ticket_id: str) -> None:
     """
     from database import get_thread_by_ticket_id, update_thread
 
+    print(f"[ZOHO->CU] sync_zoho_to_clickup called for ticket {ticket_id}")
+
     # Look up the ClickUp task ID from our database
     thread_info = get_thread_by_ticket_id(ticket_id)
     if not thread_info:
+        print(
+            f"[ZOHO->CU] no thread_map row for ticket {ticket_id} -- "
+            f"cannot sync (ticket may predate the link, or never got a "
+            f"ClickUp task). Skipping."
+        )
         return
     thread_ts, thread_data = thread_info
     clickup_task_id = thread_data.get("clickup_task_id")
     if not clickup_task_id:
+        print(
+            f"[ZOHO->CU] thread {thread_ts} for ticket {ticket_id} has no "
+            f"clickup_task_id stored -- cannot sync. Skipping."
+        )
         return
 
     # Fetch current ticket state from Zoho
     zoho_ticket = fetch_ticket_from_zoho(ticket_id)
     if not zoho_ticket:
+        print(
+            f"[ZOHO->CU] fetch_ticket_from_zoho returned nothing for "
+            f"ticket {ticket_id} -- cannot read status. Skipping."
+        )
         return
     ticket = _unwrap_mcp_result(zoho_ticket) or {}
     status = (ticket.get("status") or "").lower().strip()
     assignee_id = ticket.get("assigneeId") or ""
 
+    print(
+        f"[ZOHO->CU] ticket {ticket_id}: status={status!r} "
+        f"assignee_id={assignee_id!r} clickup_task_id={clickup_task_id} "
+        f"(expecting closed={ZOHO_CLOSED.lower()!r}/"
+        f"{ZOHO_RESOLVED.lower()!r}, "
+        f"awaiting={ZOHO_AWAITING_CLIENT_RESPONSE.lower()!r})"
+    )
+
     # Closed on Zoho -> close on ClickUp
     if status in (ZOHO_CLOSED.lower(), ZOHO_RESOLVED.lower()):
-        print(f"Zoho ticket {ticket_id} is {status} -- closing ClickUp task {clickup_task_id}")
+        print(f"[ZOHO->CU] ticket {ticket_id} is {status} -- closing ClickUp task {clickup_task_id}")
         close_clickup_task(clickup_task_id)
         update_thread(thread_ts, status=THREAD_CLOSED)
         return
@@ -2060,7 +2083,7 @@ def sync_zoho_to_clickup(ticket_id: str) -> None:
     # than closed even when the ticket is owned by Sam/Ron.
     if status == ZOHO_AWAITING_CLIENT_RESPONSE.lower():
         print(
-            f"Zoho ticket {ticket_id} awaiting client response -- "
+            f"[ZOHO->CU] ticket {ticket_id} awaiting client response -- "
             f"ClickUp task {clickup_task_id} -> {CU_AWAITING_CLIENT}"
         )
         _update_clickup_task_status(clickup_task_id, CU_AWAITING_CLIENT)
@@ -2071,7 +2094,7 @@ def sync_zoho_to_clickup(ticket_id: str) -> None:
     engineer_ids = {ZOHO_AGENT_SANJAY, ZOHO_AGENT_ONLYG}
     if assignee_id and assignee_id not in engineer_ids:
         print(
-            f"Zoho ticket {ticket_id} reassigned to non-engineer "
+            f"[ZOHO->CU] ticket {ticket_id} reassigned to non-engineer "
             f"({assignee_id}) -- closing ClickUp task {clickup_task_id}"
         )
         close_clickup_task(clickup_task_id)
@@ -2080,11 +2103,22 @@ def sync_zoho_to_clickup(ticket_id: str) -> None:
     # Unassigned -> also close ClickUp (Sam will handle)
     if not assignee_id:
         print(
-            f"Zoho ticket {ticket_id} unassigned -- "
+            f"[ZOHO->CU] ticket {ticket_id} unassigned -- "
             f"closing ClickUp task {clickup_task_id}"
         )
         close_clickup_task(clickup_task_id)
         return
+
+    # No rule matched: status isn't closed/resolved/awaiting and the ticket
+    # is still owned by an engineer. This is the silent no-op that looks like
+    # "nothing happened" -- log it explicitly so we can see the status string
+    # that fell through (e.g. a renamed/recased Zoho status).
+    print(
+        f"[ZOHO->CU] ticket {ticket_id} status={status!r} did not match any "
+        f"sync rule and is still owned by an engineer ({assignee_id!r}) -- "
+        f"no ClickUp change. If you expected one, the Zoho status string "
+        f"above probably doesn't match the expected values logged earlier."
+    )
 
 
 def _is_client_reply(conversations_result: dict | None, ticket_id: str = "unknown") -> tuple[bool, dict]:
