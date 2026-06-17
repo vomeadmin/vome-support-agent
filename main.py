@@ -435,6 +435,7 @@ async def chat_intake(request: Request):
         session_context=body.get("session_context", {}),
         conversation_history=body.get("conversation_history", []),
         attachments=body.get("attachments", []),
+        is_quick_reply=bool(body.get("is_quick_reply", False)),
     )
     return result
 

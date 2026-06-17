@@ -652,26 +652,46 @@ def search_kb_articles_db(
     # with how the stored vector was built (see _KB_SEARCH_VECTOR_EXPR).
     cfg = "french" if language == "fr" else "english"
 
-    # OR the query terms instead of requiring all of them. plainto_tsquery
-    # ANDs lexemes with ' & '; rewriting to ' | ' means an article that
-    # matches *some* of the words still surfaces, ranked by ts_rank_cd
-    # (which favours matching more terms). plainto sanitises user input,
-    # so the rewritten string is always a valid to_tsquery.
+    # We OR the query terms so an article matching *some* of the words
+    # still surfaces -- but a pure OR lets a single common word (e.g.
+    # "account", "question", "feature") pull up an off-topic article,
+    # which is exactly how "Billing or account question" surfaced the
+    # "Can minors volunteer?" article. To keep recall without that junk:
+    #
+    #   * split the plainto lexemes (plainto ANDs them with ' & ')
+    #   * match on the OR of those lexemes (recall)
+    #   * but require a row to match at least LEAST(2, term_count) of the
+    #     lexemes -- so a one-common-word coincidence is dropped while a
+    #     genuine multi-word question that hits most terms still matches
+    #   * rank by how many terms matched first, then ts_rank_cd density
+    #
+    # plainto sanitises user input, so each split lexeme is a valid
+    # single-term to_tsquery.
     sql = (
-        "SELECT zoho_article_id, title, body, url, permalink, category, "
-        "       language, modified_time, "
-        "       ts_rank_cd(search_vector, kbq.q) AS score "
-        "FROM kb_articles, "
+        "WITH q AS ("
+        "  SELECT regexp_split_to_array("
+        "           plainto_tsquery(:cfg::regconfig, :q)::text, ' & '"
+        "         ) AS lexemes"
+        ") "
+        "SELECT a.zoho_article_id, a.title, a.body, a.url, a.permalink, "
+        "       a.category, a.language, a.modified_time, "
+        "       ts_rank_cd(a.search_vector, q_or.q) AS score, "
+        "       ( SELECT count(*) FROM unnest(q.lexemes) lx "
+        "          WHERE lx <> '' AND a.search_vector @@ lx::tsquery "
+        "       ) AS match_count "
+        "FROM kb_articles a, q, "
         "     to_tsquery(:cfg::regconfig, "
-        "       replace(plainto_tsquery(:cfg::regconfig, :q)::text, "
-        "               ' & ', ' | ')) AS kbq(q) "
-        "WHERE search_vector @@ kbq.q "
+        "       array_to_string(q.lexemes, ' | ')) AS q_or(q) "
+        "WHERE a.search_vector @@ q_or.q "
+        "  AND ( SELECT count(*) FROM unnest(q.lexemes) lx "
+        "         WHERE lx <> '' AND a.search_vector @@ lx::tsquery "
+        "      ) >= LEAST(2, cardinality(q.lexemes)) "
     )
     params = {"q": query.strip(), "limit": limit, "cfg": cfg}
     if language in ("en", "fr"):
-        sql += "  AND language = :lang "
+        sql += "  AND a.language = :lang "
         params["lang"] = language
-    sql += "ORDER BY score DESC LIMIT :limit"
+    sql += "ORDER BY match_count DESC, score DESC LIMIT :limit"
 
     with engine.connect() as conn:
         rows = conn.execute(text(sql), params).mappings().all()

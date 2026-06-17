@@ -635,6 +635,7 @@ def run_intake_turn(
     session_context: dict,
     conversation_history: list,
     attachments: list | None = None,
+    is_quick_reply: bool = False,
 ) -> dict:
     """Process one turn of the intake conversation.
 
@@ -668,8 +669,19 @@ def run_intake_turn(
     # Upfront KB search: run on the raw user message so Claude has
     # KB results available on the very first turn (instead of waiting
     # for Claude to emit a kb_query that only gets searched next turn).
+    # Quick-reply category clicks (e.g. "Submit a feature request") are
+    # intent selectors, not real questions. Their generic labels can't
+    # reliably match a relevant article, so we skip the upfront KB search
+    # entirely and let Claude ask its targeted follow-up. The real KB
+    # deflection still runs on the next turn once the user describes their
+    # actual issue.
     kb_searched_no_results = False
-    if not kb_context and not prior_kb_query and message.strip():
+    if (
+        not kb_context
+        and not prior_kb_query
+        and message.strip()
+        and not is_quick_reply
+    ):
         upfront_match = _search_kb_combined(
             message.strip(),
             session_context.get("locale"),
@@ -758,8 +770,15 @@ def run_intake_turn(
                     "https://www.vomevolunteer.com/register-volunteer"
                 )
 
-    # Step 3: If this is the first turn and Claude generated a kb_query, search now
-    if kb_query and not prior_kb_query and not kb_article_response:
+    # Step 3: If this is the first turn and Claude generated a kb_query, search now.
+    # Skipped for quick-reply category clicks -- the bare category isn't a real
+    # question yet, so no article should surface until the user describes the issue.
+    if (
+        kb_query
+        and not prior_kb_query
+        and not kb_article_response
+        and not is_quick_reply
+    ):
         kb_match = _search_kb_combined(
             kb_query,
             session_context.get("locale"),

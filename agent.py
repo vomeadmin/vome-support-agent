@@ -2573,15 +2573,29 @@ def _handle_no_action_reply(ticket_id: str, reply_text: str) -> None:
     draft, no resurface; ClickUp is left exactly as-is. STATUS ONLY -- the
     Zoho owner is never touched.
     """
-    from database import get_thread_by_ticket_id
+    from database import get_thread_by_ticket_id, update_thread
 
     thread_info = get_thread_by_ticket_id(ticket_id)
+    thread_ts = None
     clickup_task_id = None
     if thread_info:
-        _, thread_data = thread_info
+        thread_ts, thread_data = thread_info
         clickup_task_id = thread_data.get("clickup_task_id")
 
-    # No linked ClickUp task -> Zoho Closed
+    # DB row missing the link? Locate the task by its Zoho Ticket Link field
+    # before assuming there's nothing to mirror -- otherwise a courtesy reply
+    # on a still-in-progress task would be wrongly closed just because the row
+    # never recorded clickup_task_id.
+    if not clickup_task_id:
+        clickup_task_id = _find_clickup_task_by_zoho_ticket(ticket_id)
+        if clickup_task_id and thread_ts:
+            update_thread(thread_ts, clickup_task_id=clickup_task_id)
+            print(
+                f"[NO-ACTION] backfilled thread {thread_ts} with "
+                f"clickup_task_id={clickup_task_id}"
+            )
+
+    # Still no linked ClickUp task -> Zoho Closed (nothing to mirror)
     if not clickup_task_id:
         _set_zoho_ticket_status(ticket_id, ZOHO_CLOSED)
         print(f"[NO-ACTION] ticket {ticket_id}: no ClickUp task -> Zoho Closed")
