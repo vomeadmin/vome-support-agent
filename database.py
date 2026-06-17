@@ -321,7 +321,15 @@ def save_thread(
                         ticket_number = EXCLUDED.ticket_number,
                         subject = EXCLUDED.subject,
                         channel = EXCLUDED.channel,
-                        clickup_task_id = EXCLUDED.clickup_task_id,
+                        -- Never wipe an existing ClickUp link with NULL: a
+                        -- save_thread() call that omits clickup_task_id (e.g.
+                        -- a reply re-save) must preserve the link the sync and
+                        -- no-action handlers depend on. Only overwrite when a
+                        -- non-NULL value is supplied.
+                        clickup_task_id = COALESCE(
+                            EXCLUDED.clickup_task_id,
+                            ticket_threads.clickup_task_id
+                        ),
                         classification = EXCLUDED.classification,
                         crm = EXCLUDED.crm,
                         updated_at = EXCLUDED.updated_at

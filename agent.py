@@ -259,6 +259,12 @@ def _extract_ticket_fields(raw_result: dict) -> dict:
     else:
         cc_email = raw_cc
 
+    # Origin signals — distinguish a client-submitted ticket (inbound email /
+    # web form) from one an agent created by hand inside Zoho Desk. Zoho marks
+    # agent/UI/API-created tickets with source.type == "SYSTEM".
+    source = ticket.get("source", {}) or {}
+    source_type = (source.get("type") or "").strip()
+
     return {
         "subject": ticket.get("subject", ""),
         "description": ticket.get("description", ""),
@@ -267,7 +273,22 @@ def _extract_ticket_fields(raw_result: dict) -> dict:
         "cc_email": cc_email,
         "status": ticket.get("status", ""),
         "created_time": ticket.get("createdTime", ""),
+        "channel": ticket.get("channel", "") or "",
+        "source_type": source_type,
     }
+
+
+def _is_agent_created(source_type: str) -> bool:
+    """True if an agent created this ticket by hand in Zoho Desk (vs. a client
+    submitting it via email or the web form).
+
+    Zoho stamps agent/UI/API-created tickets with source.type == "SYSTEM";
+    real inbound client tickets carry their channel's type (EMAIL, WEB, ...).
+    We use this to suppress the auto-acknowledgment so that when Sam opens a
+    ticket on a client's behalf, no "we'll follow up shortly" email fires
+    before he has written his own reply.
+    """
+    return (source_type or "").strip().upper() == "SYSTEM"
 
 
 def _detect_attachments(
@@ -1662,6 +1683,13 @@ def process_ticket(ticket_data: dict) -> str | None:
             f"Status: {fields['status']}\n"
             f"Created: {fields['created_time']}"
         )
+        agent_created = _is_agent_created(fields["source_type"])
+        if agent_created:
+            print(
+                f"Ticket {ticket_id} was created by an agent in Zoho Desk"
+                f" (source={fields['source_type']}, channel={fields['channel']})"
+                " -- auto-ack will be suppressed"
+            )
         print(f"Using full Zoho data for ticket {ticket_id}")
     else:
         # Fall back to webhook payload
@@ -1670,6 +1698,10 @@ def process_ticket(ticket_data: dict) -> str | None:
         subject = ticket_data.get("subject", "")
         body = ticket_data.get("body", "")
         extra_context = ""
+        # Unknown origin on the fallback path — treat as a normal inbound
+        # ticket (the Zoho fetch almost always succeeds; don't suppress acks
+        # we can't confirm are agent-created).
+        agent_created = False
         print(f"Zoho fetch failed -- falling back to webhook payload for ticket {ticket_id}")
 
     # Error reports from Vome frontend — Sam handles these directly
@@ -1895,8 +1927,10 @@ def process_ticket(ticket_data: dict) -> str | None:
             ticket_id, routing["assignee_id"]
         )
 
-        # 4. Auto-ack: only for tickets assigned to engineers
-        if routing["assignee_id"]:
+        # 4. Auto-ack: only for client-submitted tickets assigned to engineers.
+        #    Skip agent-created tickets — when Sam opens a ticket on a client's
+        #    behalf he controls the first reply, so no auto-ack should fire.
+        if routing["assignee_id"] and not agent_created:
             send_auto_acknowledgment(
                 ticket_id=ticket_id,
                 contact_name=contact_name,
@@ -1909,11 +1943,12 @@ def process_ticket(ticket_data: dict) -> str | None:
                 ],
             )
         else:
-            reason = (
-                "high-tier, Sam handles"
-                if _sam_handles
-                else "no engineer assigned"
-            )
+            if agent_created:
+                reason = "agent-created ticket"
+            elif _sam_handles:
+                reason = "high-tier, Sam handles"
+            else:
+                reason = "no engineer assigned"
             print(
                 f"Auto-ack skipped for ticket"
                 f" {ticket_id} — {reason}"

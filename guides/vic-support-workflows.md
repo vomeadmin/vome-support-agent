@@ -443,7 +443,14 @@ names / no new unused imports; remaining lint is pre-existing style).
    is not considered).
 4. **Auto-acknowledgment survival is undecided.** The new-ticket auto-ack still
    sends on engineer-assigned tickets (legacy `Vome team` signature). Whether it
-   stays is an open product decision.
+   stays is an open product decision. **Update (June 2026):** it is now
+   **suppressed on agent-created tickets** — when Sam opens a ticket by hand in
+   Zoho Desk on a client's behalf, no auto-ack fires so he controls the first
+   reply. Detection is `_is_agent_created(source_type)` in `agent.py`, keyed on
+   Zoho's `source.type == "SYSTEM"` (client-submitted email/web tickets carry
+   their channel's type instead). The guard sits on the auto-ack call in
+   `process_ticket`; the Slack draft, classification, and engineer assignment
+   still run as normal.
 5. **Optional @-mentions** on escalation cards (and possibly on-prod/needs-info
    records) if the dedicated channel isn't enough signal.
 
