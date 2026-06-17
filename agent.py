@@ -2282,6 +2282,45 @@ def _is_client_reply(conversations_result: dict | None, ticket_id: str = "unknow
     return (False, latest)
 
 
+def is_zoho_reply_event(
+    event_type: str, raw_id: str, raw_ticket_id: str
+) -> bool:
+    """True only when a Zoho ticket-update webhook represents a NEW client
+    reply (a thread-add), not a ticket-field change (status/assignee edit).
+
+    Why this gate exists: the update handler runs reply-handling, which
+    re-derives "the client replied" from the *latest* conversation entry. So a
+    bare field change -- e.g. Sam manually closing a ticket whose last message
+    happens to be from the client -- would be mistaken for a reply and have its
+    status restored, fighting him in a Closed<->Processing loop.
+
+    Signals (either suffices, so a genuine reply is never missed):
+      * eventType mentions "thread" (e.g. Ticket_Thread_Add), or
+      * the reply ID is in `id` while the real ticket ID is in `ticketId`
+        (so `ticketId` is present and differs from `id`). Ticket-level events
+        carry only `id`.
+    """
+    if "thread" in (event_type or "").lower():
+        return True
+    return raw_ticket_id != "" and raw_ticket_id != raw_id
+
+
+def _extract_reply_text(latest: dict) -> str:
+    """Best-effort plain text of a client reply thread.
+
+    CRITICAL: the conversations *list* endpoint returns reply threads with a
+    `summary` field but NO `content` (only comments carry `content`). Reading
+    `content` alone therefore yields an empty string for every client reply,
+    which blinds the no-action / ack classifiers and the action-signal guards —
+    they end up judging "(no text content)" and can misfire (e.g. wrongly
+    re-closing a "it's still broken" reply). Fall back to `summary` and strip
+    HTML so the guards see the words the client actually wrote. Mirrors the
+    content->summary fallback already used in `_format_conversations`.
+    """
+    raw = latest.get("content") or latest.get("summary") or ""
+    return re.sub(r"<[^>]+>", "", raw).strip()
+
+
 def _classify_client_reply(reply_content: str) -> dict:
     """Classify a client reply as acknowledgment or substantive.
 
@@ -2538,6 +2577,30 @@ def _is_no_action_reply(reply_content: str, has_attachment: bool) -> bool:
     return _classify_no_action_reply(reply_content)
 
 
+def _is_confident_ack(reply_text: str, has_attachment: bool) -> bool:
+    """High-confidence pure courtesy ack — the ONLY thing safe to auto-close a
+    resolved ticket on.
+
+    Re-closing a ticket the client just replied to is irreversible from their
+    point of view: if we're wrong, the reply is buried and nobody sees it. So
+    this is biased hard against closing. It returns True only when ALL hold:
+      * we actually have reply text to judge (never close on empty/unreadable
+        text — that was the failure that buried a "it's still broken" reply),
+      * there are no attachments (screenshots/files = substantive),
+      * there is no action signal ("still", "unable", "?", "not working", ...),
+      * AND the model also agrees it's a pure ack.
+    Anything short of that → not a confident ack → surface it instead.
+    """
+    text = (reply_text or "").strip()
+    if not text:
+        return False
+    if has_attachment:
+        return False
+    if _ACTION_SIGNAL_RE.search(text):
+        return False
+    return _classify_no_action_reply(text)
+
+
 def _get_clickup_status(task_id: str) -> str:
     """Return the live ClickUp task status (raw string), or '' on failure."""
     import httpx as _httpx
@@ -2698,10 +2761,10 @@ def process_ticket_update(ticket_id: str) -> str | None:
         # --- Classify the reply and sync ClickUp/Zoho ---
         from database import get_thread_by_ticket_id, update_thread
 
-        reply_content = (latest.get("content") or "").strip()
-        reply_content_clean = re.sub(
-            r"<[^>]+>", "", reply_content
-        ).strip()
+        # Read the reply text from content, falling back to summary -- the
+        # conversations list endpoint omits `content` on reply threads, so
+        # without the fallback every classifier below would judge empty text.
+        reply_content_clean = _extract_reply_text(latest)
 
         # OOO / autoresponder guard -- never treat an out-of-office as a reply.
         if _looks_like_auto_reply(reply_content_clean):
@@ -2758,43 +2821,45 @@ def process_ticket_update(ticket_id: str) -> str | None:
                 THREAD_HANDLED, THREAD_CLOSED, THREAD_ON_PROD_SENT
             )
 
-        if reply_type == "ack":
-            if was_closed:
-                # Client said "thanks" after resolution — re-close
+        # Closed-ticket replies: RE-CLOSE only on a high-confidence courtesy
+        # ack. Re-closing buries the reply (Sam won't see it), so we must be
+        # highly confident; on any doubt — attachments, an action signal, or
+        # text we couldn't read — re-open so a human reviews it. This replaces
+        # the old logic that trusted the ack/substantive classifier alone and
+        # silently re-closed a "it's still broken, please re-check" reply.
+        if was_closed:
+            if _is_confident_ack(reply_content_clean, _latest_has_attach):
+                # Genuine "thanks, all good" after resolution — re-close.
                 _set_zoho_ticket_status(ticket_id, ZOHO_CLOSED)
                 print(
-                    f"Ack reply on closed ticket {ticket_id}"
-                    " — re-closed"
+                    f"Confident courtesy ack on closed ticket"
+                    f" {ticket_id} — re-closed"
                 )
-            else:
-                correct_status = _get_zoho_assignee_status(
-                    ticket_id
-                )
-                _set_zoho_ticket_status(
-                    ticket_id, correct_status
-                )
-                print(
-                    f"Ack reply on ticket {ticket_id}"
-                    f" — Zoho status restored to"
-                    f" {correct_status}"
-                )
-            if was_waiting and thread_ts:
-                update_thread(thread_ts, status=THREAD_OPEN)
-            return None
-
-        # Substantive reply on a closed ticket — treat as new
-        if was_closed:
+                if was_waiting and thread_ts:
+                    update_thread(thread_ts, status=THREAD_OPEN)
+                return None
+            # Not a confident ack — treat as a new/continuing issue. Re-open
+            # and fall through to full reprocessing, which creates a fresh
+            # ClickUp task via the normal classification + routing flow.
             print(
-                f"Substantive reply on closed ticket"
-                f" {ticket_id} — treating as new ticket"
+                f"Reply on closed ticket {ticket_id} is not a"
+                " high-confidence ack — re-opening for review"
             )
-            # Re-open on Zoho so it gets full processing
             _set_zoho_ticket_status(ticket_id, ZOHO_OPEN)
             if thread_ts:
                 update_thread(thread_ts, status=THREAD_OPEN)
-            # Fall through to full reprocessing below, which
-            # will create a new ClickUp task via the normal
-            # new-ticket classification + routing flow
+
+        # Acknowledgment on an open ticket — restore the working status, done.
+        elif reply_type == "ack":
+            correct_status = _get_zoho_assignee_status(ticket_id)
+            _set_zoho_ticket_status(ticket_id, correct_status)
+            print(
+                f"Ack reply on ticket {ticket_id}"
+                f" — Zoho status restored to {correct_status}"
+            )
+            if was_waiting and thread_ts:
+                update_thread(thread_ts, status=THREAD_OPEN)
+            return None
 
         # Substantive reply while awaiting client — re-queue + log the reply
         # as a ClickUp comment so the engineer sees what the client said.

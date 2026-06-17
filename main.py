@@ -26,13 +26,19 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request, Response
 
-from agent import process_ticket, process_ticket_update, sync_zoho_to_clickup
+from agent import (
+    process_ticket,
+    process_ticket_update,
+    sync_zoho_to_clickup,
+    is_zoho_reply_event,
+)
 from ops.router import ops_router
 from intake import run_intake_turn
 from kb_search import run_kb_health_scan
 from kb_sync import run_kb_sync
 from clickup_assignee_handler import handle_assignee_updated
 from clickup_needs_review_handler import handle_escalated
+from clickup_user_education_handler import handle_user_education
 from clickup_waiting_client_handler import handle_needs_client_info
 from database import init_db
 from field_feedback import handle_field_feedback
@@ -44,6 +50,7 @@ from status_constants import (
     normalize_status,
     CU_ON_PROD,
     CU_NEEDS_CLIENT_INFO,
+    CU_USER_EDUCATION,
     CU_ESCALATED,
 )
 
@@ -70,8 +77,13 @@ def _check_env():
         print("ERROR: ZOHO_CRM_MCP_URL not configured")
 
 
-def _extract_zoho_payload(raw_body: bytes) -> dict:
-    """Extract the inner payload dict from Zoho's webhook format."""
+def _extract_zoho_payload(raw_body: bytes) -> tuple[dict, str]:
+    """Extract the inner payload dict and event type from Zoho's webhook format.
+
+    Returns (ticket, event_type). The event type matters: a ticket-field
+    update (e.g. Sam changing the status by hand) must NOT be treated like a
+    client reply, or the reply-handler will overwrite the change he just made.
+    """
     print(f"[RAW PAYLOAD] {raw_body.decode('utf-8', errors='replace')[:3000]}")
 
     data = json.loads(raw_body)
@@ -89,7 +101,7 @@ def _extract_zoho_payload(raw_body: bytes) -> dict:
     print(f"[EVENT TYPE] {event_type}")
     print(f"[PARSED TICKET] {json.dumps(ticket, default=str)[:2000]}")
 
-    return ticket
+    return ticket, event_type
 
 
 def _build_ticket_data(ticket: dict) -> dict:
@@ -283,7 +295,7 @@ async def slack_events_webhook(request: Request):
 @app.post("/webhook/zoho-ticket")
 async def zoho_ticket_webhook(request: Request):
     raw_body = await request.body()
-    ticket = _extract_zoho_payload(raw_body)
+    ticket, _event_type = _extract_zoho_payload(raw_body)
     ticket_data = _build_ticket_data(ticket)
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -302,7 +314,7 @@ async def zoho_ticket_webhook(request: Request):
 @app.post("/webhook/zoho-update")
 async def zoho_update_webhook(request: Request):
     raw_body = await request.body()
-    ticket = _extract_zoho_payload(raw_body)
+    ticket, event_type = _extract_zoho_payload(raw_body)
     # Event-type-dependent payload shape:
     #   * Ticket-level events (Ticket_Update, status/assignee change) put the
     #     ticket ID in `id`.
@@ -311,18 +323,33 @@ async def zoho_update_webhook(request: Request):
     # Prefer `ticketId` when present so we always look up by the actual ticket;
     # using `id` blindly fed the reply ID into get_thread_by_ticket_id() and
     # broke both reply-resurface and the ClickUp status sync.
-    ticket_id = str(ticket.get("ticketId") or ticket.get("id") or "unknown")
+    raw_id = str(ticket.get("id") or "")
+    raw_ticket_id = str(ticket.get("ticketId") or "")
+    ticket_id = raw_ticket_id or raw_id or "unknown"
     ticket_number = str(ticket.get("ticketNumber", ""))
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     print(
         f"[{timestamp}] Ticket update #{ticket_number} (ID: {ticket_id}, "
-        f"event id: {ticket.get('id')})"
+        f"event: {event_type}, event id: {ticket.get('id')})"
     )
 
-    process_ticket_update(ticket_id)
+    # Only run reply-handling (classify / resurface / status-restore) when this
+    # webhook is an actual NEW client reply. A bare ticket-field update -- e.g.
+    # Sam manually closing or changing the status -- must NOT, because
+    # process_ticket_update re-derives "client replied" from the *latest*
+    # conversation entry and would restore the status Sam just set, fighting
+    # him in a Closed<->Processing loop. See is_zoho_reply_event().
+    if is_zoho_reply_event(event_type, raw_id, raw_ticket_id):
+        process_ticket_update(ticket_id)
+    else:
+        print(
+            f"Zoho update on ticket {ticket_id} is not a new client reply "
+            f"(event={event_type}) -- skipping reply handling, syncing only"
+        )
 
-    # Sync Zoho assignee/status changes to ClickUp
+    # Sync Zoho assignee/status changes to ClickUp (always -- this is the
+    # reverse direction and only writes ClickUp, never the Zoho status).
     sync_zoho_to_clickup(ticket_id)
 
     return {"status": "ok"}
@@ -410,6 +437,14 @@ async def clickup_status_webhook(request: Request):
                 f"task {task_id} by {engineer_name}"
             )
             handle_needs_client_info(task_id, engineer_name)
+            break
+
+        if norm_status == CU_USER_EDUCATION:
+            print(
+                f"[{timestamp}] USER EDUCATION detected — "
+                f"task {task_id} by {engineer_name}"
+            )
+            handle_user_education(task_id, engineer_name)
             break
 
         if norm_status == CU_ESCALATED:

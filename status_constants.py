@@ -158,3 +158,9 @@ ACTION_SLEEPING = "sleeping"
 CU_NEEDS_CLIENT_INFO = "needs client info"
 CU_AWAITING_CLIENT = "awaiting client response"
 CU_ESCALATED = "escalated"
+
+# CU_USER_EDUCATION is the engineer-set trigger for the user-education
+# auto-send: the dev explains why the user is misunderstanding the
+# feature/steps and what they can do, Vic turns that into a client email
+# and closes the ticket (handled in clickup_user_education_handler).
+CU_USER_EDUCATION = "user education"

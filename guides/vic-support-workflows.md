@@ -261,6 +261,21 @@ rare redundant ask, so the review only skips when confident.
 realigns the Zoho status to mirror the linked ClickUp task, so courtesy
 messages ("thanks!") stop sitting on the New/Processing dashboard.
 
+> **Critical fix (June 2026): the update webhook now gates on event type.**
+> `/webhook/zoho-update` fires for **every** ticket change, not just replies —
+> including a status/assignee edit Sam makes by hand. `process_ticket_update`
+> re-derives "the client replied" from the **latest conversation entry**, so a
+> manual change to a ticket whose last message is from the client was mistaken
+> for a reply and had its status **restored** — fighting Sam in a
+> `Closed → Processing` loop every time he closed it (the "Support Agent" actor
+> in the history is the shared `admin@` account the app posts as, so both sides
+> of the flip look like the same user). `main.py` now calls
+> `process_ticket_update` **only** when `is_zoho_reply_event(event_type, id,
+> ticketId)` is true — i.e. a thread-add (eventType contains "thread", or the
+> reply ID is in `id` while the real ticket ID is in `ticketId`). A bare field
+> update runs **only** `sync_zoho_to_clickup` (Zoho→ClickUp, which never writes
+> the Zoho status). Covered by `test_closed_reply_guard.py`.
+
 ### Ordering (critical)
 The no-action check runs **before** the existing classify / resurface / draft
 logic in `process_ticket_update`. So a courtesy reply on an
@@ -284,6 +299,25 @@ the unchanged existing behavior.
 A false "action-needed" is safe (it just runs the normal flow); a false
 "no-action" could wrongly move a status — so every guard biases toward
 action-needed.
+
+> **Critical fix (June 2026): the classifiers were running blind.** All of the
+> above guards read the reply text from `latest.get("content")` — but Zoho's
+> conversations **list** endpoint returns reply threads with a `summary` field
+> and **no `content`** (only *comments* carry `content`). So every client reply
+> was judged as empty text / `"(no text content)"`. The keyword guard never
+> matched, and the ack classifier defaulted toward "no new info." On a *resolved*
+> ticket this silently **re-closed** a "it's still broken, please re-check" reply
+> (real incident: ticket #7905). Two changes fixed it:
+> 1. `_extract_reply_text(latest)` now falls back to `summary` (and strips HTML),
+>    so the guards and classifiers see the words the client actually wrote — the
+>    same content→summary fallback `_format_conversations` already used.
+> 2. **Re-closing a closed ticket now requires `_is_confident_ack`** (in
+>    `process_ticket_update`), not a bare ack classification. A closed-ticket
+>    reply re-closes **only** when there is readable text, **no** attachments,
+>    **no** action signal, **and** the model agrees it's a pure ack. Any doubt →
+>    the ticket is **re-opened** and reprocessed so a human sees it. Per Sam: be
+>    highly confident to auto-close, otherwise the reply won't be seen. Covered
+>    by `test_closed_reply_guard.py`.
 
 ### What happens on a no-action reply (`_handle_no_action_reply`)
 - **No draft, no resurface, no email.** ClickUp is left exactly as-is.
