@@ -298,7 +298,7 @@ def _education_record_message(
             lines.append(f"Why: {reason}")
         if last_relevant:
             lines.append(f"Last relevant message: {last_relevant}")
-        lines.append("Left as-is for you to move manually.")
+        lines.append("Closed -- explanation already sent; no duplicate email.")
         lines.append(_SEP)
     return "\n".join(lines)
 
@@ -411,9 +411,13 @@ def handle_user_education(task_id: str, engineer_name: str) -> bool:
         f" recommendation={rec} reason={assessment['reason']}"
     )
 
-    # 6a. Already explained -> skip the email, post a Slack note, leave
-    # the task status as-is for the dev to move manually.
+    # 6a. Already explained -> skip the duplicate email, but STILL clear the
+    # "user education" trigger column so the task doesn't linger there looking
+    # unprocessed. The explanation was already delivered, so close it just
+    # like the send path (a later client reply reopens the Zoho ticket).
     if rec == "skip_already_sent":
+        _set_clickup_status(task_id, CU_WRITE_CLOSED_TITLE)
+        _set_zoho_status(zoho_ticket_id, ZOHO_CLOSED)
         text = _education_record_message(
             "skip_already_sent", ticket_number, engineer_name,
             ticket_fields=fields, zoho_ticket_id=zoho_ticket_id,
@@ -421,9 +425,12 @@ def handle_user_education(task_id: str, engineer_name: str) -> bool:
             last_relevant=assessment["last_relevant"],
         )
         _post_record(
-            zoho_ticket_id, task_id, text, None, fields, thread_ts
+            zoho_ticket_id, task_id, text, THREAD_CLOSED, fields, thread_ts
         )
-        print(f"[USER ED] Already explained — skipped email for {task_id}")
+        print(
+            f"[USER ED] Already explained — closed without"
+            f" duplicate email for {task_id}"
+        )
         return True
 
     # 7. Generate the Vic explanation from the dev's notes
