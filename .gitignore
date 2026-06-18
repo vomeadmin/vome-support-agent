@@ -6,3 +6,6 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+
+# Claude Code agent worktrees (throwaway, never commit)
+.claude/worktrees/
