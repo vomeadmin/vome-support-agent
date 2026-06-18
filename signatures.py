@@ -54,8 +54,8 @@ _SIGNATURE_BLOCKS = {
     # Target senders — now LIVE (wired in the behavior step). Full closing
     # blocks; French variants use "Cordialement,".
     "vic": {
-        "en": "Best,\n\nVic\nsupport.vomevolunteer.com",
-        "fr": "Cordialement,\n\nVic\nsupport.vomevolunteer.com",
+        "en": "Best,\n\nVic\nSupport Team\nVome Volunteer\nsupport.vomevolunteer.com",
+        "fr": "Cordialement,\n\nVic\nSupport Team\nVome Volunteer\nsupport.vomevolunteer.com",
     },
     "sam": {
         "en": "Best,\n\nSam | Vome team\nsupport.vomevolunteer.com",
@@ -107,6 +107,7 @@ _CLOSING_WORDS = {
 _SIGNOFF_NAME_LINES = {
     "vic", "sam", "vome team", "sam | vome team", "sam | vome support",
     "vome support", "equipe vome", "équipe vome",
+    "support team", "vome volunteer",
     "support.vomevolunteer.com",
 }
 

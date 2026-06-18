@@ -58,7 +58,6 @@ from status_constants import (
     THREAD_ON_PROD_CANCELLED,
     THREAD_WAITING_CLIENT,
     ZOHO_PROCESSING,
-    ZOHO_PENDING_DEVELOPER_FIX,
     ZOHO_CLOSED,
     ZOHO_AWAITING_CLIENT_RESPONSE,
     CU_WRITE_CLOSED_TITLE,
@@ -107,11 +106,14 @@ _ZOHO_AGENT_IDS = {
     "ron":    os.environ.get("ZOHO_AGENT_RON", ""),
 }
 
-# Canonical key → Zoho ticket status after assignment
+# Canonical key → Zoho ticket status after assignment.
+# All assignees use "Processing" (the active work queue). The old
+# "Pending Developer Fix" status for engineers is deprecated -- it has a
+# Zoho statusType of On Hold, which parked tickets and buried client replies.
 _ZOHO_STATUS = {
     "sam":    ZOHO_PROCESSING,
-    "onlyg":  ZOHO_PENDING_DEVELOPER_FIX,
-    "sanjay": ZOHO_PENDING_DEVELOPER_FIX,
+    "onlyg":  ZOHO_PROCESSING,
+    "sanjay": ZOHO_PROCESSING,
     "ron":    ZOHO_PROCESSING,
 }
 

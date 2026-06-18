@@ -107,10 +107,18 @@ THREAD_ESCALATED = "escalated"
 # ---------------------------------------------------------------------------
 
 ZOHO_NEW = "New"
+# DEPRECATED -- the team does not use the bare "Open" status. A customer
+# reply (incl. on a closed ticket) goes to ZOHO_PROCESSING instead. Kept
+# only so the string resolves if any historical reference remains; no code
+# should write this.
 ZOHO_OPEN = "Open"
 ZOHO_PROCESSING = "Processing"
 ZOHO_IN_PROGRESS = "In Progress"
 ZOHO_ON_HOLD = "On Hold"
+# DEPRECATED -- no longer written by the agent. This Zoho status has a
+# statusType of "On Hold", which parked tickets and buried inbound client
+# replies. Customer replies and engineer assignment now use ZOHO_PROCESSING.
+# Kept only so the string resolves if any historical reference remains.
 ZOHO_PENDING_DEVELOPER_FIX = "Pending Developer Fix"
 ZOHO_FINAL_REVIEW = "Final Review"
 ZOHO_AWAITING_CLIENT_RESPONSE = "Awaiting Client Response"

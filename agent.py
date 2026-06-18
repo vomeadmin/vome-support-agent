@@ -29,11 +29,9 @@ from status_constants import (
     CU_DONE,
     CU_ESCALATED,
     CU_NEEDS_REVIEW,
-    ZOHO_OPEN,
     ZOHO_PROCESSING,
     ZOHO_IN_PROGRESS,
     ZOHO_ON_HOLD,
-    ZOHO_PENDING_DEVELOPER_FIX,
     ZOHO_CLOSED,
     ZOHO_RESOLVED,
     ZOHO_AWAITING_CLIENT_RESPONSE,
@@ -2475,23 +2473,6 @@ def _set_zoho_ticket_status(ticket_id: str, status: str) -> bool:
     return True
 
 
-def _get_zoho_assignee_status(ticket_id: str) -> str:
-    """Determine the correct Zoho status based on current assignee.
-
-    Engineers -> Pending Developer Fix
-    Sam/Ron/unassigned -> Processing
-    """
-    zoho_ticket = fetch_ticket_from_zoho(ticket_id)
-    if not zoho_ticket:
-        return ZOHO_PROCESSING
-    ticket = _unwrap_mcp_result(zoho_ticket) or {}
-    assignee_id = ticket.get("assigneeId") or ""
-    engineer_ids = {ZOHO_AGENT_SANJAY, ZOHO_AGENT_ONLYG}
-    if assignee_id in engineer_ids:
-        return ZOHO_PENDING_DEVELOPER_FIX
-    return ZOHO_PROCESSING
-
-
 # ---------------------------------------------------------------------------
 # No-action client replies (courtesy acks) — realign Zoho to mirror ClickUp.
 # NO email is ever sent here; ClickUp is left exactly as-is.
@@ -2843,19 +2824,18 @@ def process_ticket_update(ticket_id: str) -> str | None:
             # ClickUp task via the normal classification + routing flow.
             print(
                 f"Reply on closed ticket {ticket_id} is not a"
-                " high-confidence ack — re-opening for review"
+                " high-confidence ack — reopening to Processing"
             )
-            _set_zoho_ticket_status(ticket_id, ZOHO_OPEN)
+            _set_zoho_ticket_status(ticket_id, ZOHO_PROCESSING)
             if thread_ts:
                 update_thread(thread_ts, status=THREAD_OPEN)
 
         # Acknowledgment on an open ticket — restore the working status, done.
         elif reply_type == "ack":
-            correct_status = _get_zoho_assignee_status(ticket_id)
-            _set_zoho_ticket_status(ticket_id, correct_status)
+            _set_zoho_ticket_status(ticket_id, ZOHO_PROCESSING)
             print(
                 f"Ack reply on ticket {ticket_id}"
-                f" — Zoho status restored to {correct_status}"
+                f" — Zoho status restored to {ZOHO_PROCESSING}"
             )
             if was_waiting and thread_ts:
                 update_thread(thread_ts, status=THREAD_OPEN)
@@ -2884,14 +2864,14 @@ def process_ticket_update(ticket_id: str) -> str | None:
                 reply_summary or reply_content_clean[:500],
             )
 
-        # Set Zoho back to the correct status (unless closed)
+        # Customer replied -> the ticket needs eyes again. Always put it
+        # back into the active work queue (Processing), regardless of
+        # assignee or prior status. (Previously called
+        # _get_zoho_assignee_status, which returned the deprecated
+        # "Pending Developer Fix" for engineer-assigned tickets and parked
+        # the reply On Hold, so replies got lost.)
         if not was_closed:
-            correct_status = _get_zoho_assignee_status(
-                ticket_id
-            )
-            _set_zoho_ticket_status(
-                ticket_id, correct_status
-            )
+            _set_zoho_ticket_status(ticket_id, ZOHO_PROCESSING)
 
         if was_waiting and thread_ts:
             update_thread(thread_ts, status=THREAD_OPEN)
