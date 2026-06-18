@@ -49,6 +49,8 @@ from clickup_waiting_client_handler import (
     _format_engineer_context,
     _get_clickup_task,
     _get_clickup_task_comments,
+    _hold_draft_for_confirm,
+    _is_probable_duplicate,
     _post_to_existing_thread,
     _send_info_email,
     _set_clickup_status,
@@ -401,37 +403,10 @@ def handle_user_education(task_id: str, engineer_name: str) -> bool:
         (thread_data or {}).get("ticket_number") or zoho_ticket_id
     )
 
-    # 6. Pre-send review — has this already been explained?
-    assessment = _assess_education_state(
-        fields, conversations_text, engineer_context
-    )
-    rec = assessment["recommendation"]
-    print(
-        f"[USER ED] State review — ticket {zoho_ticket_id}:"
-        f" recommendation={rec} reason={assessment['reason']}"
-    )
-
-    # 6a. Already explained -> skip the duplicate email, but STILL clear the
-    # "user education" trigger column so the task doesn't linger there looking
-    # unprocessed. The explanation was already delivered, so close it just
-    # like the send path (a later client reply reopens the Zoho ticket).
-    if rec == "skip_already_sent":
-        _set_clickup_status(task_id, CU_WRITE_CLOSED_TITLE)
-        _set_zoho_status(zoho_ticket_id, ZOHO_CLOSED)
-        text = _education_record_message(
-            "skip_already_sent", ticket_number, engineer_name,
-            ticket_fields=fields, zoho_ticket_id=zoho_ticket_id,
-            clickup_task_id=task_id, reason=assessment["reason"],
-            last_relevant=assessment["last_relevant"],
-        )
-        _post_record(
-            zoho_ticket_id, task_id, text, THREAD_CLOSED, fields, thread_ts
-        )
-        print(
-            f"[USER ED] Already explained — closed without"
-            f" duplicate email for {task_id}"
-        )
-        return True
+    # 6. The dev explicitly flagged this as user education, so we TRUST that
+    # signal and send the explanation. We no longer pre-skip based on the
+    # thread; the only guard is the high-confidence duplicate check in step
+    # 7b, which asks a human rather than deciding silently.
 
     # 7. Generate the Vic explanation from the dev's notes
     try:
@@ -450,6 +425,24 @@ def handle_user_education(task_id: str, engineer_name: str) -> bool:
             " works so you can get what you need. If anything is still"
             " unclear after this, just reply and we'll be glad to help.\n"
             + signature("vic")
+        )
+
+    # 7b. High-confidence duplicate guard. If this explanation would just
+    # repeat a reply we already sent the client, hold it for human
+    # confirm/send/cancel in Slack instead of auto-sending. Defaults to
+    # sending when it isn't clearly a duplicate.
+    dup = _is_probable_duplicate(draft, conversations_text)
+    if dup["duplicate"]:
+        return _hold_draft_for_confirm(
+            zoho_ticket_id=zoho_ticket_id,
+            clickup_task_id=task_id,
+            draft=draft,
+            dup=dup,
+            fields=fields,
+            thread_ts=thread_ts,
+            thread_data=thread_data,
+            ticket_number=ticket_number,
+            engineer_name=engineer_name,
         )
 
     # 8. Auto-send the explanation to the client (signed Vic)

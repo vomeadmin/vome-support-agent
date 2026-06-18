@@ -2876,102 +2876,16 @@ def process_ticket_update(ticket_id: str) -> str | None:
         if was_waiting and thread_ts:
             update_thread(thread_ts, status=THREAD_OPEN)
 
-        zoho_ticket = fetch_ticket_from_zoho(ticket_id)
-        if zoho_ticket:
-            fields = _extract_ticket_fields(zoho_ticket)
-            contact_name = fields["contact_name"]
-            contact_email = fields["contact_email"]
-            subject = fields["subject"]
-            body = fields["description"]
-            extra_context = (
-                f"Status: {fields['status']}\n"
-                f"Created: {fields['created_time']}"
-            )
-        else:
-            print(f"Zoho fetch failed for update on ticket {ticket_id}")
-            return None
-
-        thread_text = _format_conversations(conversations_result)
-
-        crm = fetch_crm_account(contact_email, contact_name)
-        if crm["found"]:
-            enrichment_block = (
-                "ACCOUNT ENRICHMENT:\n"
-                f"Account: {crm['account_name']}\n"
-                f"Contact type: Admin\n"
-                f"Tier: {crm['tier']}\n"
-                f"ARR: {crm['arr']} {crm['currency']}\n"
-                f"Account ID: {crm['account_id']}"
-            )
-        else:
-            enrichment_block = (
-                "ACCOUNT ENRICHMENT:\n"
-                "Contact type: Volunteer\n"
-                "Not found in CRM -- treat as volunteer"
-            )
-
-        # Language detection
-        lang_note = ""
-        detected_lang = _detect_language(body) or _detect_language(thread_text)
-        if detected_lang:
-            lang_note = (
-                f"\nNote: ticket content appears to be in {detected_lang} "
-                f"-- draft response in {detected_lang}\n"
-            )
-            print(f"Language detected: {detected_lang} (ticket {ticket_id})")
-
-        user_message = (
-            "\u26a0\ufe0f MANDATORY PROCESSING RULE -- READ FIRST:\n"
-            "This is a REPROCESSING of an existing ticket.\n"
-            "The CLIENT HAS REPLIED with new information.\n"
-            "Review the full thread including the new reply.\n"
-            "Update your classification and draft if needed.\n"
-            "Do NOT treat this as a new ticket.\n"
-            "IMPORTANT: Structure your response with two clearly separated sections:\n"
-            "1. DRAFT RESPONSE (the client-facing reply, ready to review and send)\n"
-            "2. AGENT ANALYSIS (enrichment, classification, notes for the reviewer)\n\n"
-            f"{enrichment_block}\n\n"
-            f"SOURCE: Zoho Desk (ticket update -- client replied)\n"
-            f"Ticket ID: {ticket_id}\n"
-            f"Client contact: {contact_name} ({contact_email})\n"
-            f"Subject: {subject}\n"
-            f"{lang_note}"
-            f"\n{extra_context}\n"
-            f"\nOriginal ticket body:\n{body}\n\n"
-            f"Full conversation thread (newest first):\n{thread_text}"
-        )
-
-        response = client.messages.create(
-            model=SUPPORT_MODEL,
-            max_tokens=2000,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        result = response.content[0].text
-        # Sprint draft (client reply): model writes the body only; append
-        # Sam's signature to the DRAFT RESPONSE section.
-        result = sign_message(result, "sam", detected_lang)
-        print(f"\n{'='*60}")
-        print(result)
-        print(f"{'='*60}")
-        print(f"Agent reprocessed ticket {ticket_id} -- response length: {len(result)} chars\n")
-
-        # Post draft reply via Zoho Desk draftsReply API
-        post_draft_reply(ticket_id, result, to_email=contact_email)
-
-        # Also post as internal note for audit trail
-        note_content = f"{UPDATE_HEADER}\n\n{result}"
-        _zoho_desk_call("ZohoDesk_createTicketComment", {
-            "body": {
-                "content": note_content,
-                "contentType": "plainText",
-                "isPublic": False,
-                "attachmentIds": [],
-            },
-            "path_variables": {"ticketId": str(ticket_id)},
-            "query_params": {"orgId": str(ZOHO_ORG_ID)},
-        })
-        print(f"Update note posted to Zoho ticket {ticket_id}")
+        # NOTE (2026-06-18): On a client reply we deliberately DO NOT
+        # auto-generate a draft reply or post the "AGENT UPDATE \u2014 CLIENT
+        # REPLIED" private comment on the Zoho ticket anymore. That dumped the
+        # full draft + AGENT ANALYSIS + notes onto the ticket on every reply,
+        # which buried the real conversation and risked the internal analysis
+        # being sent to the client. The ticket is now left for a human to
+        # process. The important automated steps already ran above: the status
+        # is set back to Processing and the ClickUp task is re-queued / has the
+        # reply appended. A brief Slack heads-up still fires below when the
+        # ticket was waiting on the client.
 
         # Notify in Slack if this was a waiting-client reply
         if was_waiting and thread_ts:
@@ -3020,7 +2934,7 @@ def process_ticket_update(ticket_id: str) -> str | None:
                     f" ticket {ticket_id}: {slack_err}"
                 )
 
-        return result
+        return None
     except Exception as e:
         print(f"Agent error processing ticket update {ticket_id}: {e}")
         return None

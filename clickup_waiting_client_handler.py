@@ -25,6 +25,7 @@ from slack_sdk.errors import SlackApiError
 from agent import (
     SYSTEM_PROMPT,
     ZOHO_ORG_ID,
+    _add_clickup_comment,
     _extract_ticket_fields,
     _format_conversations,
     _unwrap_mcp_result,
@@ -39,10 +40,8 @@ from database import (
     update_thread,
 )
 from status_constants import (
-    THREAD_OPEN,
     THREAD_WAITING_CLIENT,
     CU_AWAITING_CLIENT,
-    CU_WRITE_QUEUED_LOWER,
     ZOHO_AWAITING_CLIENT_RESPONSE,
     ZOHO_TAG_WAITING_CLIENT,
 )
@@ -698,6 +697,129 @@ def _post_record(
 
 
 # ---------------------------------------------------------------------------
+# Duplicate guard (shared by needs-client-info and user-education)
+# ---------------------------------------------------------------------------
+
+def _is_probable_duplicate(draft: str, conversations_text: str) -> dict:
+    """High-confidence check: would sending `draft` repeat a reply we have
+    ALREADY sent the client in this thread?
+
+    Returns {"duplicate": bool, "reason": str, "prior": str}. Deliberately
+    conservative -- defaults to duplicate=False (send) on any uncertainty or
+    error, because we would rather occasionally send a near-duplicate than
+    silently withhold a reply the engineer asked for.
+    """
+    if not draft or not draft.strip():
+        return {"duplicate": False, "reason": "", "prior": ""}
+    prompt = (
+        "We are about to send the message below to a support client. Decide "
+        "ONLY whether sending it would be a DUPLICATE -- i.e., an earlier "
+        "OUTBOUND message in this same thread already says substantially the "
+        "same thing (the same answer, or the same question/request), so the "
+        "client would effectively receive it twice.\n\n"
+        "Be strict and conservative: answer duplicate=true ONLY if you are "
+        "highly confident an earlier message we already sent covers this. "
+        "Reworded-but-same-meaning counts. If there is any real doubt, answer "
+        "duplicate=false -- we would rather occasionally repeat ourselves "
+        "than withhold a reply.\n\n"
+        "Message we are about to send:\n"
+        f"{draft}\n\n"
+        "Conversation thread (oldest to newest):\n"
+        f"{conversations_text}\n\n"
+        "Return valid JSON only, no prose, no code fences:\n"
+        '{"duplicate": true|false, "reason": "one sentence", '
+        '"prior": "short quote of the earlier message it duplicates, or empty"}'
+    )
+    try:
+        resp = _anthropic.messages.create(
+            model=SUPPORT_MODEL,
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        data = json.loads(raw)
+    except Exception as e:
+        print(f"[DUP CHECK] failed ({e}); defaulting to not-duplicate (send)")
+        return {"duplicate": False, "reason": "", "prior": ""}
+    return {
+        "duplicate": bool(data.get("duplicate")),
+        "reason": str(data.get("reason", "")),
+        "prior": str(data.get("prior", "")),
+    }
+
+
+def _hold_draft_for_confirm(
+    *,
+    zoho_ticket_id: str,
+    clickup_task_id: str,
+    draft: str,
+    dup: dict,
+    fields: dict,
+    thread_ts: str | None,
+    thread_data: dict | None,
+    ticket_number: str,
+    engineer_name: str,
+) -> bool:
+    """High-confidence duplicate: do NOT auto-send and do NOT change the
+    status the engineer set. Hold the draft for confirm/send/cancel in Slack
+    and leave a ClickUp note so the engineer knows it's waiting on a human.
+    """
+    warning = (
+        ":warning: *Possible duplicate -- NOT sent.* It looks like we already "
+        f"sent the client a similar reply. {dup.get('reason', '')}".strip()
+    )
+    if dup.get("prior"):
+        warning += f"\n>_Earlier:_ {dup['prior']}"
+    body = _waiting_client_message(
+        ticket_number, engineer_name, draft,
+        ticket_fields=fields, zoho_ticket_id=zoho_ticket_id,
+        clickup_task_id=clickup_task_id,
+    )
+    msg = warning + "\n\n" + body
+    try:
+        if thread_ts:
+            target_channel = (
+                (thread_data or {}).get("channel") or CHANNEL_FINAL_REVIEW
+            )
+            _slack.chat_postMessage(
+                channel=target_channel, thread_ts=thread_ts, text=msg
+            )
+        else:
+            resp = _slack.chat_postMessage(
+                channel=CHANNEL_FINAL_REVIEW, text=msg
+            )
+            thread_ts = resp["ts"]
+            save_thread(
+                thread_ts=thread_ts,
+                ticket_id=zoho_ticket_id,
+                ticket_number=zoho_ticket_id,
+                subject=fields.get("subject", ""),
+                channel=CHANNEL_FINAL_REVIEW,
+                clickup_task_id=clickup_task_id,
+            )
+    except SlackApiError as e:
+        print(f"[DUP CHECK] Slack post failed: {e.response['error']}")
+        return False
+    _store_pending_send(thread_ts, draft)
+    try:
+        _add_clickup_comment(
+            clickup_task_id,
+            "Vic detected a possible duplicate reply and did NOT send it. "
+            f"{dup.get('reason', '')} Confirm or cancel in the support "
+            "Slack thread.",
+        )
+    except Exception as e:
+        print(f"[DUP CHECK] ClickUp comment failed: {e}")
+    print(
+        f"[DUP CHECK] Held possible duplicate for ticket {zoho_ticket_id}, "
+        f"task {clickup_task_id} -- awaiting Slack confirm"
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Main handler
 # ---------------------------------------------------------------------------
 
@@ -759,48 +881,11 @@ def handle_needs_client_info(
         (thread_data or {}).get("ticket_number") or zoho_ticket_id
     )
 
-    # 6. Pre-send review — should this request actually go out?
-    assessment = _assess_info_request_state(
-        fields, conversations_text, engineer_context
-    )
-    rec = assessment["recommendation"]
-    print(
-        f"[NEEDS INFO] Request review — ticket {zoho_ticket_id}:"
-        f" recommendation={rec} reason={assessment['reason']}"
-    )
-
-    # 6a. Client already provided the info -> re-queue, no email
-    if rec == "skip_already_answered":
-        _set_clickup_status(task_id, CU_WRITE_QUEUED_LOWER)
-        text = _needs_info_record_message(
-            "skip_already_answered", ticket_number, engineer_name,
-            ticket_fields=fields, zoho_ticket_id=zoho_ticket_id,
-            clickup_task_id=task_id, reason=assessment["reason"],
-            last_relevant=assessment["last_relevant"],
-        )
-        _post_record(
-            zoho_ticket_id, task_id, text, THREAD_OPEN, fields, thread_ts
-        )
-        print(f"[NEEDS INFO] Client already answered — re-queued {task_id}")
-        return True
-
-    # 6b. Already asked and still waiting -> park, no duplicate
-    if rec == "skip_already_asked":
-        _set_clickup_status(task_id, CU_AWAITING_CLIENT)
-        _set_zoho_status(zoho_ticket_id, ZOHO_AWAITING_CLIENT_RESPONSE)
-        _tag_zoho_ticket(zoho_ticket_id, ZOHO_TAG_WAITING_CLIENT)
-        text = _needs_info_record_message(
-            "skip_already_asked", ticket_number, engineer_name,
-            ticket_fields=fields, zoho_ticket_id=zoho_ticket_id,
-            clickup_task_id=task_id, reason=assessment["reason"],
-            last_relevant=assessment["last_relevant"],
-        )
-        _post_record(
-            zoho_ticket_id, task_id, text,
-            THREAD_WAITING_CLIENT, fields, thread_ts,
-        )
-        print(f"[NEEDS INFO] Already asked, parked {task_id}")
-        return True
+    # 6. An engineer explicitly moved the task to "needs client info", so we
+    # TRUST that signal and send the request. We no longer pre-skip based on
+    # the thread (that silently re-queued/parked the task and overrode the
+    # engineer). The only guard is the high-confidence duplicate check in
+    # step 7b -- and even that asks a human rather than deciding silently.
 
     # 7. Generate the Vic request from the engineer's notes
     try:
@@ -820,6 +905,24 @@ def handle_needs_client_info(
             " details, such as screenshots, steps to"
             " reproduce, or the affected user's email?\n"
             + signature("vic")
+        )
+
+    # 7b. High-confidence duplicate guard. If this draft would just repeat a
+    # reply we already sent the client, hold it for human confirm/send/cancel
+    # in Slack instead of auto-sending (status stays as the engineer set it).
+    # Defaults to sending when it isn't clearly a duplicate.
+    dup = _is_probable_duplicate(draft, conversations_text)
+    if dup["duplicate"]:
+        return _hold_draft_for_confirm(
+            zoho_ticket_id=zoho_ticket_id,
+            clickup_task_id=task_id,
+            draft=draft,
+            dup=dup,
+            fields=fields,
+            thread_ts=thread_ts,
+            thread_data=thread_data,
+            ticket_number=ticket_number,
+            engineer_name=engineer_name,
         )
 
     # 8. Auto-send the request to the client (signed Vic)
