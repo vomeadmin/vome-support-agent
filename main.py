@@ -492,7 +492,9 @@ async def chat_tickets(request: Request):
 # Auth check (calls Django server-to-server)
 # ---------------------------------------------------------------------------
 
-DJANGO_API_URL = os.environ.get("DJANGO_API_URL", "")
+DJANGO_API_URL = os.environ.get("DJANGO_PROD_API_URL") or os.environ.get(
+    "DJANGO_API_URL", ""
+)
 SUPPORT_API_KEY = os.environ.get("SUPPORT_API_KEY", "")
 
 

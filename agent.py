@@ -999,10 +999,13 @@ def _detect_auth_bypass_issue(subject: str, body: str) -> bool:
 
 def _run_auth_check(email: str) -> dict | None:
     """Check user auth status via the Django API."""
-    django_url = os.environ.get("DJANGO_API_URL", "")
+    # Prefer the explicit prod URL; fall back to DJANGO_API_URL for local dev.
+    django_url = os.environ.get("DJANGO_PROD_API_URL") or os.environ.get(
+        "DJANGO_API_URL", ""
+    )
     api_key = os.environ.get("SUPPORT_API_KEY", "")
     if not django_url or not api_key:
-        print("[AUTH] DJANGO_API_URL or SUPPORT_API_KEY not set")
+        print("[AUTH] DJANGO_PROD_API_URL/DJANGO_API_URL or SUPPORT_API_KEY not set")
         return None
     try:
         resp = httpx.get(
@@ -1011,7 +1014,20 @@ def _run_auth_check(email: str) -> dict | None:
             headers={"X-Support-Api-Key": api_key},
             timeout=10,
         )
+        if resp.status_code != 200:
+            # 403 (bad/missing key), 5xx, etc. NEVER treat this as a result --
+            # the error body (e.g. {"error": "Unauthorized"}) has no `found`
+            # key and would otherwise fall through to "account not found".
+            print(
+                f"[AUTH] Check {email}: HTTP {resp.status_code} "
+                f"-- treating as unknown (body: {resp.text[:200]})"
+            )
+            return None
         result = resp.json()
+        if not isinstance(result, dict) or "found" not in result:
+            # Malformed/unexpected payload -- don't guess.
+            print(f"[AUTH] Check {email}: unexpected payload {str(result)[:200]}")
+            return None
         print(
             f"[AUTH] Check {email}: "
             f"found={result.get('found')}, "
@@ -1026,7 +1042,9 @@ def _run_auth_check(email: str) -> dict | None:
 
 def _run_auth_bypass(email: str) -> dict | None:
     """Activate a user's account via the Django API."""
-    django_url = os.environ.get("DJANGO_API_URL", "")
+    django_url = os.environ.get("DJANGO_PROD_API_URL") or os.environ.get(
+        "DJANGO_API_URL", ""
+    )
     api_key = os.environ.get("SUPPORT_API_KEY", "")
     if not django_url or not api_key:
         return None
@@ -1037,7 +1055,16 @@ def _run_auth_bypass(email: str) -> dict | None:
             headers={"X-Support-Api-Key": api_key},
             timeout=10,
         )
+        if resp.status_code != 200:
+            print(
+                f"[AUTH] Bypass {email}: HTTP {resp.status_code} "
+                f"-- not activated (body: {resp.text[:200]})"
+            )
+            return None
         result = resp.json()
+        if not isinstance(result, dict) or "bypassed" not in result:
+            print(f"[AUTH] Bypass {email}: unexpected payload {str(result)[:200]}")
+            return None
         print(f"[AUTH] Bypass {email}: bypassed={result.get('bypassed')}")
         return result
     except Exception as e:
@@ -1181,6 +1208,17 @@ def _handle_auth_bypass_email_ticket(
         _send_auth_reply(ticket_id, contact_email, reply)
         print(f"[AUTH BYPASS] Offline profile, claim reply sent — ticket {ticket_id}")
         return True
+
+    # Account not found — only send the definitive "no account" reply when the
+    # backend explicitly told us found=False. Any other state (found=True but no
+    # branch matched, or a malformed result) is ambiguous: fall through to the
+    # normal pipeline rather than tell a real user their account doesn't exist.
+    if auth_result.get("found") is not False:
+        print(
+            f"[AUTH BYPASS] Ambiguous auth result, not sending not-found "
+            f"reply — ticket {ticket_id}: {str(auth_result)[:200]}"
+        )
+        return False
 
     # Account not found — reply and return True so we skip the generic ack/ClickUp
     if is_french:
