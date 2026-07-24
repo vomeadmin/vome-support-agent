@@ -24,6 +24,7 @@ from database import (
     update_thread,
 )
 from status_constants import THREAD_ESCALATED
+from zoho_links import extract_zoho_ticket_id
 
 CLICKUP_API_TOKEN = os.environ.get("CLICKUP_API_TOKEN", "")
 CLICKUP_BASE = "https://api.clickup.com/api/v2"
@@ -68,17 +69,7 @@ def _get_clickup_task(task_id: str) -> dict | None:
 
 def _extract_zoho_ticket_id(task: dict) -> str | None:
     """Extract Zoho ticket ID from the Zoho Ticket Link custom field."""
-    for field in task.get("custom_fields") or []:
-        if field.get("id") != FIELD_ZOHO_TICKET_LINK:
-            continue
-        value = field.get("value") or ""
-        m = re.search(r"/dv/(\d+)", str(value))
-        if m:
-            return m.group(1)
-        stripped = str(value).strip()
-        if stripped.isdigit():
-            return stripped
-    return None
+    return extract_zoho_ticket_id(task)
 
 
 def _get_current_assignee(task: dict) -> tuple[int | None, str]:

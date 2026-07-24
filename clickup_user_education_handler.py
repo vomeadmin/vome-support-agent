@@ -58,6 +58,7 @@ from clickup_waiting_client_handler import (
     _store_pending_send,
 )
 from database import get_thread, save_thread, update_thread
+from zoho_links import alert_missing_ticket_link
 from status_constants import (
     THREAD_CLOSED,
     CU_WRITE_CLOSED_TITLE,
@@ -382,6 +383,7 @@ def handle_user_education(task_id: str, engineer_name: str) -> bool:
             f"[USER ED] No Zoho Ticket Link on task"
             f" {task_id} ({task_title})"
         )
+        alert_missing_ticket_link("User education", task_id, task_title)
         return False
     print(f"[USER ED] Zoho ticket ID: {zoho_ticket_id}")
 

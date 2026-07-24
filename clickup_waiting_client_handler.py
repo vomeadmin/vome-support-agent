@@ -47,6 +47,7 @@ from status_constants import (
 )
 from signatures import signature, sign_message
 from model_config import SUPPORT_MODEL
+from zoho_links import extract_zoho_ticket_id, alert_missing_ticket_link
 
 _anthropic = anthropic.Anthropic()
 _slack = WebClient(token=os.environ.get("SLACK_BOT_TOKEN", ""))
@@ -135,17 +136,7 @@ def _format_engineer_context(
 
 def _extract_zoho_ticket_id(task: dict) -> str | None:
     """Extract Zoho ticket ID from the Zoho Ticket Link field."""
-    for field in task.get("custom_fields") or []:
-        if field.get("id") != FIELD_ZOHO_TICKET_LINK:
-            continue
-        value = field.get("value") or ""
-        m = re.search(r"/dv/(\d+)", str(value))
-        if m:
-            return m.group(1)
-        stripped = str(value).strip()
-        if stripped.isdigit():
-            return stripped
-    return None
+    return extract_zoho_ticket_id(task)
 
 
 # ---------------------------------------------------------------------------
@@ -860,6 +851,7 @@ def handle_needs_client_info(
             f"[NEEDS INFO] No Zoho Ticket Link on task"
             f" {task_id} ({task_title})"
         )
+        alert_missing_ticket_link("Needs client info", task_id, task_title)
         return False
     print(f"[NEEDS INFO] Zoho ticket ID: {zoho_ticket_id}")
 

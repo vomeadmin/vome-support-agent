@@ -48,6 +48,7 @@ from status_constants import (
 )
 from signatures import signature, sign_message
 from model_config import SUPPORT_MODEL
+from zoho_links import extract_zoho_ticket_id
 
 ZOHO_FROM_ADDRESS = os.environ.get(
     "ZOHO_FROM_ADDRESS", "support@vomevolunteer.zohodesk.com"
@@ -86,19 +87,7 @@ def _get_clickup_task(task_id: str) -> dict | None:
 
 def _extract_zoho_ticket_id(task: dict) -> str | None:
     """Extract Zoho ticket ID from the Zoho Ticket Link custom field."""
-    for field in task.get("custom_fields") or []:
-        if field.get("id") != FIELD_ZOHO_TICKET_LINK:
-            continue
-        value = field.get("value") or ""
-        # URL format: .../ShowHomePage.do#Cases/dv/{ticket_id}
-        m = re.search(r"/dv/(\d+)", str(value))
-        if m:
-            return m.group(1)
-        # Plain numeric ID stored directly
-        stripped = str(value).strip()
-        if stripped.isdigit():
-            return stripped
-    return None
+    return extract_zoho_ticket_id(task)
 
 
 def update_clickup_status_finished(task_id: str) -> bool:

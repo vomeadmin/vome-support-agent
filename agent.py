@@ -2050,6 +2050,34 @@ def process_ticket(ticket_data: dict) -> str | None:
                 "path_variables": {"ticketId": str(ticket_id)},
                 "query_params": {"orgId": str(ZOHO_ORG_ID)},
             })
+
+            # Kick off Vic's codebase scan on a background thread so the
+            # engineer who later picks up this freshly-queued task already has
+            # a context note waiting. Off-thread so it never blocks ticket
+            # processing; the handler is read-only and never raises.
+            try:
+                import threading
+                from clickup_codebase_scan_handler import run_codebase_scan
+                threading.Thread(
+                    target=run_codebase_scan,
+                    kwargs={
+                        "task_id": clickup_task_id,
+                        "analysis": new_class,
+                        "conversations_text": _format_conversations(
+                            conversations_result
+                        ),
+                        "subject": subject,
+                        "issue_summary": _extract_field("ISSUE SUMMARY"),
+                        "ticket_number": ticket_data.get(
+                            "ticket_number", ticket_id
+                        ),
+                    },
+                    daemon=True,
+                ).start()
+            except Exception as e:
+                print(
+                    f"codebase scan kickoff failed for ticket {ticket_id}: {e}"
+                )
         else:
             print(f"No ClickUp task created for ticket {ticket_id} (category may not require one)")
 

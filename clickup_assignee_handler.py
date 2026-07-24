@@ -22,6 +22,7 @@ from agent import (
     _unwrap_mcp_result,
 )
 from slack import post_to_engineering
+from zoho_links import extract_zoho_ticket_id
 
 CLICKUP_API_TOKEN = os.environ.get("CLICKUP_API_TOKEN", "")
 CLICKUP_BASE = "https://api.clickup.com/api/v2"
@@ -73,20 +74,7 @@ def _get_clickup_task(task_id: str) -> dict | None:
 
 def _extract_zoho_ticket_id(task: dict) -> str | None:
     """Extract Zoho ticket ID from the Zoho Ticket Link custom field."""
-    for field in task.get("custom_fields") or []:
-        if field.get("id") != FIELD_ZOHO_TICKET_LINK:
-            continue
-        value = field.get("value") or ""
-        # URL format: .../ShowHomePage.do#Cases/dv/{ticket_id}
-        m = re.search(r"/dv/(\d+)", str(value))
-        if m:
-            return m.group(1)
-        # Plain numeric ID stored directly
-        stripped = str(value).strip()
-        if stripped.isdigit():
-            return stripped
-        return None
-    return None
+    return extract_zoho_ticket_id(task)
 
 
 # ---------------------------------------------------------------------------

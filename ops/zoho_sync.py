@@ -17,6 +17,7 @@ from agent import (
     fetch_ticket_from_zoho,
     fetch_ticket_conversations,
 )
+from zoho_links import extract_zoho_ticket_id
 
 ZOHO_FROM_ADDRESS = os.environ.get(
     "ZOHO_FROM_ADDRESS", "support@vomevolunteer.zohodesk.com"
@@ -272,18 +273,7 @@ def get_clickup_comments(task_id: str) -> list:
 
 def extract_zoho_ticket_id_from_task(task: dict) -> str | None:
     """Extract Zoho ticket ID from ClickUp task's custom field."""
-    field_id = "4776215b-c725-4d79-8f20-c16f0f0145ac"
-    for field in task.get("custom_fields") or []:
-        if field.get("id") != field_id:
-            continue
-        value = field.get("value") or ""
-        m = re.search(r"/dv/(\d+)", str(value))
-        if m:
-            return m.group(1)
-        stripped = str(value).strip()
-        if stripped.isdigit():
-            return stripped
-    return None
+    return extract_zoho_ticket_id(task)
 
 
 def extract_custom_field_value(task: dict, field_id: str):
