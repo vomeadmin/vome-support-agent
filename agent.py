@@ -210,8 +210,90 @@ def fetch_ticket_from_zoho(ticket_id: str) -> dict | None:
     return result
 
 
+# Cap on per-thread body fetches during hydration. The conversations list is
+# itself capped at 100 entries, so this is a latency backstop for pathological
+# threads rather than a limit we expect to hit in practice.
+_MAX_THREAD_HYDRATIONS = 50
+
+
+def _hydrate_conversation_threads(
+    ticket_id: str, result: dict | list | None
+) -> dict | list | None:
+    """Fill in the full body of each email thread entry in a conversations
+    result.
+
+    ``getTicketConversations`` is a LIST endpoint: for thread (email) entries it
+    returns only a short ``summary`` snippet, not the full ``content``. Rendering
+    those with the summary fallback means every draft sees a one-line preview of
+    the client's actual messages instead of the real text. Here we fetch the full
+    body per thread via ``getThread`` (which carries ``content``/``plainText``).
+
+    Comments already carry full ``content`` and are left untouched. The return
+    value is re-wrapped into the same MCP text-block shape as the input so every
+    existing consumer keeps working; on any problem the original result is
+    returned unchanged.
+    """
+    data = _unwrap_mcp_result(result)
+    entries = data.get("data") if isinstance(data, dict) else data
+    if not isinstance(entries, list) or not entries:
+        return result
+
+    fetched = 0
+    hydrated_any = False
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        # Comments already include their full body; only email threads are
+        # summary-only in the list response.
+        if entry.get("type") == "comment":
+            continue
+        if (entry.get("content") or "").strip():
+            continue
+        thread_id = str(entry.get("id") or "").strip()
+        if not thread_id:
+            continue
+        if fetched >= _MAX_THREAD_HYDRATIONS:
+            print(
+                f"[CONVERSATIONS] Thread hydration capped at "
+                f"{_MAX_THREAD_HYDRATIONS} for ticket {ticket_id}; remaining "
+                "messages left as summaries"
+            )
+            break
+
+        thread_result = _zoho_desk_call("ZohoDesk_getThread", {
+            "path_variables": {
+                "ticketId": str(ticket_id),
+                "threadId": thread_id,
+            },
+            "query_params": {
+                "orgId": str(ZOHO_ORG_ID),
+                "include": "plainText",
+            },
+        })
+        fetched += 1
+        thread = _unwrap_mcp_result(thread_result)
+        if not isinstance(thread, dict):
+            continue
+        full = (thread.get("plainText") or thread.get("content") or "").strip()
+        if full:
+            entry["content"] = full
+            hydrated_any = True
+
+    if not hydrated_any:
+        return result
+
+    # Re-wrap into the MCP text-block shape so downstream _unwrap_mcp_result
+    # re-parses the hydrated payload rather than the original summaries.
+    return {"content": [{"type": "text", "text": json.dumps(data)}]}
+
+
 def fetch_ticket_conversations(ticket_id: str) -> dict | None:
-    """Fetch all conversation threads and comments for a ticket."""
+    """Fetch all conversation threads and comments for a ticket.
+
+    Thread (email) bodies are hydrated from ``summary`` snippets to their full
+    text so downstream drafting/analysis sees the real client messages. See
+    ``_hydrate_conversation_threads``.
+    """
     result = _zoho_desk_call("ZohoDesk_getTicketConversations", {
         "path_variables": {"ticketId": str(ticket_id)},
         "query_params": {
@@ -221,6 +303,7 @@ def fetch_ticket_conversations(ticket_id: str) -> dict | None:
         },
     })
     if result:
+        result = _hydrate_conversation_threads(ticket_id, result)
         print(f"Fetched conversations for ticket {ticket_id}")
     else:
         print(f"Failed to fetch conversations for ticket {ticket_id}")
