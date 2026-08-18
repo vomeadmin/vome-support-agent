@@ -351,6 +351,79 @@ sync in §8.
 
 ---
 
+## 6B. Stale awaiting-client sweep (`stale_waiting_client_sweeper.py`)
+
+**Trigger:** APScheduler, 07:30 `America/Montreal`, daily (`main.py`).
+**Entry point:** `run_stale_waiting_client_sweep()`.
+**Manual trigger:** `POST /ops/sweeps/stale-waiting-client` with
+`{"dry_run": true}`. **Run history:** `GET /ops/sweeps/runs`.
+
+§6 parks tickets on the client, but nothing ever un-parked them when the client
+simply never answered, and `ops/tickets.py::_fetch_zoho_active_tickets`
+deliberately excludes `Awaiting Client Response` from the Command Center queue,
+so the pile was invisible. This closes tickets that have sat there for 30+ days
+with no client reply.
+
+### Flow
+1. Page Zoho for every ticket in `Awaiting Client Response` (status filter sent
+   to Zoho **and** re-applied client-side, so an ignored query param cannot
+   widen the sweep).
+2. Per ticket, read the conversation and take the newest **outbound** email as
+   the idle clock, plus the newest **inbound** one.
+3. Decide: `close`, `skip_recent`, `skip_client_replied`, `skip_no_timestamp`,
+   or `skip_clickup_busy`.
+4. For each close: courtesy email to the client (fixed template, signed Vic) →
+   Zoho `Closed` → internal note → the same note on ClickUp + `CLOSED` +
+   resolution field → `ticket_threads` row updated to `closed` /
+   `auto_closed_no_client_response`.
+5. Post one Slack summary (`SLACK_CHANNEL_STALE_SWEEP`, falling back to
+   #vome-agent-log) covering what closed, what was capped, and every skip
+   bucket.
+
+### The two rules that keep it safe
+**Rule 1: never use `modifiedTime`.** Zoho bumps it on every tag write, status
+write, and `sync_zoho_to_clickup` pass, so a parked ticket's `modifiedTime` is
+almost always today: measuring from it means nothing ever ages out. Staleness
+comes from the newest outbound thread, falling back to
+`ticket_threads.last_action_at` (when §6 parked it). If neither resolves, the
+ticket is **skipped**, never closed on a guessed date.
+
+**Rule 2: both systems must agree.** If Zoho says awaiting-client but the
+ClickUp task is `in progress` / `on dev`, that is live dev work and closing Zoho
+would kill the visible half of it. Those become a **status drift** warning in
+the Slack report instead of a close. Same principle inside a single close: if
+the Zoho status write fails, the ClickUp and DB writes are skipped, because
+half-closing manufactures the exact drift this rule detects.
+
+A client reply newer than our last email is also blocked (`skip_client_replied`)
+and reported: the ticket should already have flipped to Processing, so it means
+the reply webhook missed it.
+
+### Why closing is low risk
+A client reply on a closed ticket flips it back to Processing and resurfaces it
+in Slack (§6A / `is_zoho_reply_event` → `process_ticket_update`). The closing
+email says exactly that, so the promise is real, not marketing.
+
+### Rollout controls
+`STALE_SWEEP_DRY_RUN` **defaults to true**: the sweep reports and changes
+nothing until it is explicitly set to `false`. The first live run would
+otherwise hit the entire historical backlog in one pass, so run it in dry mode
+for about a week first. `STALE_SWEEP_MAX_CLOSES` (default 25) caps a single run,
+oldest tickets first, and the report says how many were left behind. Nothing is
+capped silently: the 500-ticket paging cap is reported too.
+
+The 07:30 job also claims the day in Postgres (`sweeper_runs`, via
+`claim_sweeper_run`) before doing any work, so a web-process restart near the
+trigger time cannot double-run it. `misfire_grace_time=1800` lets a restart
+within 30 minutes still fire.
+
+### Manual setup required
+The ClickUp resolution dropdown has no "no client response" option yet. Add it
+by hand, then set `CLICKUP_RESOLUTION_NO_RESPONSE` to its option id. Until then
+the field is deliberately left **unset** rather than mislabeled `completed`.
+
+---
+
 ## 7. Escalations — `clickup_needs_review_handler.py`
 
 **Trigger:** ClickUp task → `escalated`. **Entry point:**
@@ -411,6 +484,13 @@ This is the reverse direction of the auto-send flows: those push Zoho status
 - Slack channels: `SLACK_CHANNEL_SUPPORT_FINAL_REVIEW`,
   `SLACK_CHANNEL_VOME_TICKETS`, `SLACK_CHANNEL_FINISHED_TASKS`,
   `SLACK_CHANNEL_ESCALATIONS` (defaults to `C0BB3JCT51A`), etc.
+- Stale awaiting-client sweep (§6B), all optional:
+  `STALE_SWEEP_DRY_RUN` (default `true`, flip to `false` to go live),
+  `STALE_WAITING_DAYS` (30), `STALE_SWEEP_MAX_CLOSES` (25),
+  `STALE_SWEEP_SEND_CLOSING_EMAIL` (true),
+  `STALE_SWEEP_THROTTLE` (0.4s between tickets),
+  `STALE_SWEEP_DEPARTMENT_ID`, `SLACK_CHANNEL_STALE_SWEEP`,
+  `CLICKUP_RESOLUTION_NO_RESPONSE` (needs manual ClickUp setup first).
 
 ### Webhooks
 - **Zoho Desk** → `/webhook/zoho-ticket` (new ticket) and `/webhook/zoho-update`
@@ -503,8 +583,13 @@ names / no new unused imports; remaining lint is pre-existing style).
 | `clickup_waiting_client_handler.py` | Needs-client-info auto-send + park + pre-send review (send/skip-asked/skip-answered) + fallback. |
 | `clickup_needs_review_handler.py` | Escalation card → #escalated-tickets; trigger rewired to `escalated`. |
 | `slack_reply_handler.py` | Manual-confirm path now writes `awaiting client response` (was the dead `WAITING ON CLIENT`). |
+| `stale_waiting_client_sweeper.py` | **New (Aug 2026).** Daily 07:30 ET sweep closing 30-day-stale awaiting-client tickets (§6B). Dry-run by default. |
+| `test_stale_waiting_client_sweeper.py` | Pins both safety rules for §6B (no `modifiedTime`, both systems must agree) plus the write ordering. Runs with pytest or `py test_stale_waiting_client_sweeper.py`. |
+| `database.py` | Added the `sweeper_runs` table + `claim_sweeper_run` / `finish_sweeper_run` / `get_recent_sweeper_runs` (once-per-day lock for scheduled sweeps); `_row_to_dict` now exposes `last_action`, `last_action_at`, `updated_at`. |
+| `ops/zoho_sync.py` | `RESOLUTION_MAP` gained `no_response` (env-configured, unset until the ClickUp option exists). |
+| `ops/router.py` | `POST /sweeps/stale-waiting-client` (manual trigger, dry-run by default) and `GET /sweeps/runs`. |
 
 ---
 
-*Last updated: June 2026. If you change a workflow, update the matching section
+*Last updated: August 2026 (added §6B, the stale awaiting-client sweep). If you change a workflow, update the matching section
 here and the file map so this stays the single source of truth for the why.*

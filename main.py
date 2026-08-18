@@ -46,6 +46,7 @@ from on_prod_handler import handle_on_prod
 from slack_agent_mention_handler import handle_agent_mention
 from slack_reply_handler import handle_reply
 from slack_digest import send_daily_digest
+from stale_waiting_client_sweeper import run_stale_waiting_client_sweep
 from status_constants import (
     normalize_status,
     CU_ON_PROD,
@@ -149,6 +150,18 @@ _scheduler.add_job(
 _scheduler.add_job(
     run_kb_sync,
     CronTrigger(hour=2, minute=0, timezone="America/Montreal"),
+)
+# Stale awaiting-client sweep at 07:30 ET. Defaults to DRY RUN until
+# STALE_SWEEP_DRY_RUN=false is set: the first live run hits the whole
+# historical backlog at once, so it reports for a week before it closes
+# anything. misfire_grace_time lets a restart within 30 min still run it, and
+# the sweep itself claims the day in Postgres so it cannot double-run.
+_scheduler.add_job(
+    run_stale_waiting_client_sweep,
+    CronTrigger(hour=7, minute=30, timezone="America/Montreal"),
+    misfire_grace_time=1800,
+    coalesce=True,
+    max_instances=1,
 )
 _scheduler.start()
 

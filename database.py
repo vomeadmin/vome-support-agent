@@ -89,6 +89,19 @@ vic_resolution_log = Table(
     Column("created_at", DateTime, default=datetime.now(timezone.utc), index=True),
 )
 
+# Scheduled sweep run log -- one row per (sweep, date). Doubles as the
+# once-per-day lock: APScheduler runs inside the single web process, so a
+# restart near the trigger time can skip a run and a second process would
+# double it. claim_sweeper_run() makes the INSERT the lock.
+sweeper_runs = Table(
+    "sweeper_runs",
+    _metadata,
+    Column("run_key", String, primary_key=True),
+    Column("started_at", DateTime, default=datetime.now(timezone.utc)),
+    Column("finished_at", DateTime, nullable=True),
+    Column("summary", JSONB, default={}),
+)
+
 # Ticket analysis tracking -- records which tickets have been
 # processed by the knowledge book builder
 analyzed_tickets = Table(
@@ -972,8 +985,106 @@ def _row_to_dict(row) -> dict:
         "pending_send": row["pending_send"],
         "pending_draft": row.get("pending_draft"),
         "close_after_send": row["close_after_send"] == "true",
+        # Raw timestamps. last_action_at is the fallback "when did we last
+        # touch this" signal for the stale-waiting-client sweep when Zoho has
+        # no readable outbound thread; .get() because both columns arrived via
+        # ALTER TABLE and an old DB may predate them.
+        "last_action": row.get("last_action"),
+        "last_action_at": row.get("last_action_at"),
+        "updated_at": row.get("updated_at"),
         "date": (
             row["created_at"].strftime("%Y-%m-%d")
             if row["created_at"] else ""
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Scheduled sweep runs
+# ---------------------------------------------------------------------------
+
+def claim_sweeper_run(run_key: str) -> bool:
+    """Claim a sweep run for today. True if THIS caller won the claim.
+
+    The INSERT on a primary key is the lock: a duplicate run_key raises a
+    conflict, which DO NOTHING swallows, and rowcount tells us whether we
+    inserted. Prevents a double sweep if the web process restarts near the
+    trigger time or ever runs on two dynos.
+
+    Returns True (proceed) when DATABASE_URL is unset, so the sweep still
+    works in a local/no-DB environment.
+    """
+    if not DATABASE_URL:
+        print("[DB] claim_sweeper_run: no DATABASE_URL, proceeding unlocked")
+        return True
+    try:
+        engine = _get_engine()
+        with engine.begin() as conn:
+            result = conn.execute(
+                text(
+                    "INSERT INTO sweeper_runs (run_key, started_at) "
+                    "VALUES (:key, :now) "
+                    "ON CONFLICT (run_key) DO NOTHING"
+                ),
+                {"key": run_key, "now": datetime.now(timezone.utc)},
+            )
+            return result.rowcount > 0
+    except Exception as e:
+        # Never let a lock failure block the sweep entirely; log and proceed.
+        print(f"[DB ERROR] claim_sweeper_run({run_key}) failed: {e}")
+        return True
+
+
+def finish_sweeper_run(run_key: str, summary: dict | None = None):
+    """Stamp a claimed run as finished and store its counts."""
+    if not DATABASE_URL:
+        return
+    try:
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE sweeper_runs "
+                    "SET finished_at = :now, summary = CAST(:s AS jsonb) "
+                    "WHERE run_key = :key"
+                ),
+                {
+                    "key": run_key,
+                    "now": datetime.now(timezone.utc),
+                    "s": json.dumps(summary or {}),
+                },
+            )
+    except Exception as e:
+        print(f"[DB ERROR] finish_sweeper_run({run_key}) failed: {e}")
+
+
+def get_recent_sweeper_runs(limit: int = 20) -> list[dict]:
+    """Recent sweep runs, newest first (for debugging a missed run)."""
+    if not DATABASE_URL:
+        return []
+    try:
+        engine = _get_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT run_key, started_at, finished_at, summary "
+                    "FROM sweeper_runs ORDER BY started_at DESC LIMIT :n"
+                ),
+                {"n": limit},
+            ).mappings().all()
+        return [
+            {
+                "run_key": r["run_key"],
+                "started_at": (
+                    r["started_at"].isoformat() if r["started_at"] else None
+                ),
+                "finished_at": (
+                    r["finished_at"].isoformat() if r["finished_at"] else None
+                ),
+                "summary": r["summary"] or {},
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[DB ERROR] get_recent_sweeper_runs failed: {e}")
+        return []

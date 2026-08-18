@@ -42,11 +42,20 @@ RESOLUTION_DECLINED = "8600a963-ab55-430f-a86f-2b1d0f911156"
 RESOLUTION_SLEEPING = "560c14b1-70bb-4387-8d21-941d0543873c"
 RESOLUTION_DUPLICATE = "4ad0a7eb-5fb6-4ef1-af0c-0188c7d24a3e"
 
+# "No client response" — written by the stale-waiting-client sweep. There is
+# no hardcoded id because this dropdown option must first be added to the
+# ClickUp resolution field by hand; set CLICKUP_RESOLUTION_NO_RESPONSE to its
+# option id afterwards. Until then the value stays empty and every call site
+# guards on `if resolution_option_id:`, so the field is left UNSET rather than
+# mislabeled "completed".
+RESOLUTION_NO_RESPONSE = os.environ.get("CLICKUP_RESOLUTION_NO_RESPONSE", "")
+
 RESOLUTION_MAP = {
     "completed": RESOLUTION_COMPLETED,
     "declined": RESOLUTION_DECLINED,
     "sleeping": RESOLUTION_SLEEPING,
     "duplicate": RESOLUTION_DUPLICATE,
+    "no_response": RESOLUTION_NO_RESPONSE,
 }
 
 # Team ID lookup

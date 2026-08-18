@@ -21,7 +21,9 @@ The agent never sends anything directly to clients. All client-facing responses 
 - **ClickUp REST API** — task creation and management (direct HTTP, not MCP)
 - **Slack SDK** — team notifications, ticket briefs, field feedback, daily digest
 - **PostgreSQL** — thread map persistence, event deduplication (via SQLAlchemy)
-- **APScheduler** — daily digest cron job (18:00 America/Montreal)
+- **APScheduler** — cron jobs: daily digest (17:00), KB sync (02:00), weekly
+  KB health scan (Mon 09:00), stale awaiting-client sweep (07:30), all
+  America/Montreal
 - **Railway** — hosting (Procfile: `uvicorn main:app`)
 
 ---
@@ -289,6 +291,7 @@ FOLDER: Feature Requests
 | [slack_ticket_brief.py](slack_ticket_brief.py) | Ticket brief formatter + poster for #vome-tickets |
 | [slack_reply_handler.py](slack_reply_handler.py) | Sam's reply handling in #vome-tickets threads |
 | [slack_digest.py](slack_digest.py) | Daily end-of-day digest |
+| [stale_waiting_client_sweeper.py](stale_waiting_client_sweeper.py) | Daily 07:30 ET sweep: closes awaiting-client tickets after 30 days of client silence (dry-run by default) |
 | [field_feedback.py](field_feedback.py) | Ron's field feedback processing from #vome-field-feedback |
 | [on_prod_handler.py](on_prod_handler.py) | ON PROD flow: resolution draft + Slack notification |
 | [database.py](database.py) | PostgreSQL thread map + event deduplication |

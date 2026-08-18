@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from ops.auth import verify_ops_token
 from ops.tickets import fetch_active_tickets, get_dashboard_stats
-from database import get_vic_metrics
+from database import get_vic_metrics, get_recent_sweeper_runs
 from ops.thread import fetch_thread
 from ops.draft import generate_draft
 from ops.send import send_reply
@@ -52,6 +52,18 @@ class CloseRequest(BaseModel):
 class ParkRequest(BaseModel):
     note: str = ""
     wake_date: str | None = None
+
+
+class StaleSweepRequest(BaseModel):
+    """Manual trigger for the stale awaiting-client sweep.
+
+    dry_run defaults to True here regardless of STALE_SWEEP_DRY_RUN: a hand
+    trigger should never close tickets unless the caller says so explicitly.
+    """
+    dry_run: bool = True
+    days: int | None = None
+    limit: int | None = None
+    force: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -142,3 +154,30 @@ def post_park(zoho_ticket_id: str, body: ParkRequest):
         note=body.note,
         wake_date=body.wake_date,
     )
+
+
+# ---------------------------------------------------------------------------
+# Scheduled sweeps (manual trigger + run history)
+# ---------------------------------------------------------------------------
+
+@ops_router.post("/sweeps/stale-waiting-client")
+def post_stale_waiting_client_sweep(body: StaleSweepRequest):
+    """Run the stale awaiting-client sweep now.
+
+    Imported lazily: the sweeper pulls in agent + ops.zoho_sync, and importing
+    it at module load would add that cost to every /ops request.
+    """
+    from stale_waiting_client_sweeper import run_stale_waiting_client_sweep
+
+    return run_stale_waiting_client_sweep(
+        dry_run=body.dry_run,
+        days=body.days,
+        limit=body.limit,
+        force=body.force,
+    )
+
+
+@ops_router.get("/sweeps/runs")
+def get_sweep_runs(limit: int = Query(20, ge=1, le=100)):
+    """Recent scheduled sweep runs, newest first."""
+    return {"runs": get_recent_sweeper_runs(limit=limit)}
