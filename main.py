@@ -47,6 +47,7 @@ from slack_agent_mention_handler import handle_agent_mention
 from slack_reply_handler import handle_reply
 from slack_digest import send_daily_digest
 from stale_waiting_client_sweeper import run_stale_waiting_client_sweep
+from weekly_engineering_report import run_friday_report, run_monday_report
 from status_constants import (
     normalize_status,
     CU_ON_PROD,
@@ -159,6 +160,39 @@ _scheduler.add_job(
 _scheduler.add_job(
     run_stale_waiting_client_sweep,
     CronTrigger(hour=7, minute=30, timezone="America/Montreal"),
+    misfire_grace_time=1800,
+    coalesce=True,
+    max_instances=1,
+)
+# Engineering reports. Friday closes the week (what went out versus what came
+# in), Monday opens it (what is on the plate, what moved over the weekend).
+# Hours are env-overridable because the right time depends on where the
+# engineers actually are: 17:00 ET is the middle of the night in Asia and
+# 07:00 ET is already afternoon in West Africa, so a "start of day" report can
+# land two thirds of the way through their day.
+#
+# Friday runs at 16:45 rather than 17:00 to stay clear of send_daily_digest,
+# which already occupies 17:00 every day.
+_scheduler.add_job(
+    run_friday_report,
+    CronTrigger(
+        day_of_week="fri",
+        hour=int(os.environ.get("ENG_REPORT_FRIDAY_HOUR", "16")),
+        minute=int(os.environ.get("ENG_REPORT_FRIDAY_MINUTE", "45")),
+        timezone="America/Montreal",
+    ),
+    misfire_grace_time=1800,
+    coalesce=True,
+    max_instances=1,
+)
+_scheduler.add_job(
+    run_monday_report,
+    CronTrigger(
+        day_of_week="mon",
+        hour=int(os.environ.get("ENG_REPORT_MONDAY_HOUR", "7")),
+        minute=int(os.environ.get("ENG_REPORT_MONDAY_MINUTE", "0")),
+        timezone="America/Montreal",
+    ),
     misfire_grace_time=1800,
     coalesce=True,
     max_instances=1,

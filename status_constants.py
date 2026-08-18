@@ -172,3 +172,75 @@ CU_ESCALATED = "escalated"
 # feature/steps and what they can do, Vic turns that into a client email
 # and closes the ticket (handled in clickup_user_education_handler).
 CU_USER_EDUCATION = "user education"
+
+# CU_DECLINED completes the live board vocabulary. Verified on both Priority
+# Queue and Accepted Backlog (space 90114113004), whose 11 columns are:
+# queued, in progress, needs client info, user education, escalated, on dev,
+# awaiting client response, sleeping, declined, on prod, Closed.
+CU_DECLINED = "declined"
+
+
+# ---------------------------------------------------------------------------
+# Reporting buckets — used by weekly_engineering_report.py.
+#
+# WHY THESE ARE NOT ClickUp's OWN open/closed FLAG:
+#   "awaiting client response", "sleeping", "declined" and "on prod" all carry
+#   type "done" in ClickUp, so a query with include_closed=false STILL returns
+#   them. Only "Closed" is type "closed". Any code that treats ClickUp's flag
+#   as "is this active dev work" gets a wildly inflated active count.
+#
+# CU_SHIPPED deliberately merges "on prod" and "Closed": a task set to on prod
+# auto-advances to Closed once the client is emailed about it, so on prod is a
+# short-lived staging state, not a separate outcome. Counting both would double
+# count anything that made the whole trip inside one reporting window.
+# ---------------------------------------------------------------------------
+
+# On the devs' plate — the only bucket that represents claimable workload.
+BUCKET_ACTIVE = frozenset({CU_QUEUED, CU_IN_PROGRESS, CU_ON_DEV})
+
+# Left the plate as delivered work.
+BUCKET_SHIPPED = frozenset({CU_ON_PROD, "closed"})
+
+# Left the plate but is not delivered: the client owes us something. Pushing a
+# task here IS output from the devs' side, and a client reply pushes it back.
+BUCKET_PARKED = frozenset({CU_AWAITING_CLIENT, CU_USER_EDUCATION})
+
+# Everything else. Tracked only so report totals reconcile against the board.
+# CU_ESCALATED lives here on purpose: escalated tasks are Sam's to action, not
+# the devs', so they must not land in the plate total.
+BUCKET_OTHER = frozenset({
+    CU_NEEDS_CLIENT_INFO,
+    CU_ESCALATED,
+    CU_SLEEPING,
+    CU_DECLINED,
+    CU_WAITING_ON_CLIENT,   # legacy spelling, still on old tasks
+    CU_NEEDS_REVIEW,        # legacy name for escalated
+    CU_DONE,                # legacy, predates the on prod -> Closed automation
+})
+
+
+def report_bucket(status: str | None) -> str:
+    """Map a ClickUp status to a reporting bucket name.
+
+    Accepts any casing/separator variant; normalize_status() handles that.
+    Returns one of "active", "shipped", "parked", "other".
+
+    >>> report_bucket("In Progress")
+    'active'
+    >>> report_bucket("on prod")
+    'shipped'
+    >>> report_bucket("Awaiting Client Response")
+    'parked'
+    >>> report_bucket("escalated")
+    'other'
+    >>> report_bucket(None)
+    'other'
+    """
+    s = normalize_status(status)
+    if s in BUCKET_ACTIVE:
+        return "active"
+    if s in BUCKET_SHIPPED:
+        return "shipped"
+    if s in BUCKET_PARKED:
+        return "parked"
+    return "other"

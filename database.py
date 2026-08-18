@@ -102,6 +102,53 @@ sweeper_runs = Table(
     Column("summary", JSONB, default={}),
 )
 
+# Weekly engineering report -- per-run snapshot of every task assigned to an
+# engineer. This is the SOURCE OF TRUTH for week-over-week flow.
+#
+# WHY A SNAPSHOT AND NOT THE ClickUp API: there is no way to ask ClickUp "which
+# tasks moved out of awaiting-client this week". time_in_status returns total
+# durations per status, not transition dates, and date_done is overwritten as a
+# task advances. Diffing consecutive snapshots is the only reliable way to see
+# direction of travel, which is the whole point of an in-versus-out report.
+eng_report_snapshots = Table(
+    "eng_report_snapshots",
+    _metadata,
+    Column("run_key", String, primary_key=True),
+    Column("task_id", String, primary_key=True),
+    Column("status", String, default=""),
+    Column("bucket", String, default=""),
+    Column("assignees", JSONB, default=[]),
+    Column("list_id", String, default=""),
+    Column("task_name", Text, default=""),
+    Column("date_created", String, default=""),
+    Column("captured_at", DateTime, default=datetime.now(timezone.utc)),
+)
+
+# Weekly engineering report -- the computed figures for one run.
+#
+# Stored ALONGSIDE the raw snapshot rather than derived on the fly every time,
+# so trend queries ("tasks completed, week by week") are a single cheap SELECT.
+# The snapshot stays the source of truth: if a bucket definition changes later,
+# history can be recomputed from eng_report_snapshots, which is exactly why
+# both tables exist instead of only this one.
+eng_report_figures = Table(
+    "eng_report_figures",
+    _metadata,
+    Column("run_key", String, primary_key=True),
+    Column("report_kind", String, default="", index=True),
+    Column("window_start", DateTime, nullable=True),
+    Column("window_end", DateTime, nullable=True),
+    # First-class columns for trend lines; the full breakdown (including the
+    # per-engineer split) lives in figures.
+    Column("total_in", Integer, default=0),
+    Column("total_out", Integer, default=0),
+    Column("shipped", Integer, default=0),
+    Column("net_change", Integer, default=0),
+    Column("active_total", Integer, default=0),
+    Column("figures", JSONB, default={}),
+    Column("created_at", DateTime, default=datetime.now(timezone.utc)),
+)
+
 # Ticket analysis tracking -- records which tickets have been
 # processed by the knowledge book builder
 analyzed_tickets = Table(
@@ -1087,4 +1134,219 @@ def get_recent_sweeper_runs(limit: int = 20) -> list[dict]:
         ]
     except Exception as e:
         print(f"[DB ERROR] get_recent_sweeper_runs failed: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Weekly engineering report — snapshots and figures
+# ---------------------------------------------------------------------------
+
+def save_eng_snapshot(run_key: str, rows: list[dict]) -> int:
+    """Persist one run's task snapshot. Returns the number of rows written.
+
+    ON CONFLICT DO NOTHING makes a re-run idempotent: the first capture for a
+    run_key wins, so a manual re-trigger cannot rewrite history that a report
+    has already been built from.
+    """
+    if not DATABASE_URL or not rows:
+        return 0
+    try:
+        engine = _get_engine()
+        now = datetime.now(timezone.utc)
+        written = 0
+        with engine.begin() as conn:
+            for r in rows:
+                result = conn.execute(
+                    text(
+                        "INSERT INTO eng_report_snapshots "
+                        "(run_key, task_id, status, bucket, assignees, "
+                        " list_id, task_name, date_created, captured_at) "
+                        "VALUES (:k, :t, :s, :b, CAST(:a AS jsonb), "
+                        " :l, :n, :dc, :now) "
+                        "ON CONFLICT (run_key, task_id) DO NOTHING"
+                    ),
+                    {
+                        "k": run_key,
+                        "t": r["task_id"],
+                        "s": r.get("status", ""),
+                        "b": r.get("bucket", ""),
+                        "a": json.dumps(r.get("assignees", [])),
+                        "l": r.get("list_id", ""),
+                        "n": (r.get("task_name") or "")[:500],
+                        "dc": r.get("date_created", ""),
+                        "now": now,
+                    },
+                )
+                written += result.rowcount or 0
+        return written
+    except Exception as e:
+        print(f"[DB ERROR] save_eng_snapshot({run_key}) failed: {e}")
+        return 0
+
+
+def get_eng_snapshot(run_key: str) -> dict[str, dict]:
+    """Load one run's snapshot, keyed by task_id."""
+    if not DATABASE_URL:
+        return {}
+    try:
+        engine = _get_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT task_id, status, bucket, assignees, list_id, "
+                    "       task_name, date_created "
+                    "FROM eng_report_snapshots WHERE run_key = :k"
+                ),
+                {"k": run_key},
+            ).mappings().all()
+        return {
+            r["task_id"]: {
+                "task_id": r["task_id"],
+                "status": r["status"] or "",
+                "bucket": r["bucket"] or "",
+                "assignees": r["assignees"] or [],
+                "list_id": r["list_id"] or "",
+                "task_name": r["task_name"] or "",
+                "date_created": r["date_created"] or "",
+            }
+            for r in rows
+        }
+    except Exception as e:
+        print(f"[DB ERROR] get_eng_snapshot({run_key}) failed: {e}")
+        return {}
+
+
+def get_previous_eng_run_key(before_run_key: str) -> str | None:
+    """The most recent snapshot run_key strictly older than this one.
+
+    Ordered by captured_at rather than run_key so the Monday report diffs
+    against the Friday snapshot (the true previous capture) instead of
+    whatever happens to sort alphabetically before it.
+    """
+    if not DATABASE_URL:
+        return None
+    try:
+        engine = _get_engine()
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT run_key FROM eng_report_snapshots "
+                    "WHERE captured_at < ("
+                    "  SELECT MIN(captured_at) FROM eng_report_snapshots "
+                    "  WHERE run_key = :k"
+                    ") "
+                    "GROUP BY run_key "
+                    "ORDER BY MIN(captured_at) DESC LIMIT 1"
+                ),
+                {"k": before_run_key},
+            ).first()
+        return row[0] if row else None
+    except Exception as e:
+        print(f"[DB ERROR] get_previous_eng_run_key({before_run_key}): {e}")
+        return None
+
+
+def save_eng_report_figures(
+    run_key: str,
+    report_kind: str,
+    window_start: datetime | None,
+    window_end: datetime | None,
+    figures: dict,
+) -> bool:
+    """Store the computed figures for one report run.
+
+    Upserts, unlike save_eng_snapshot: the raw snapshot is history and must not
+    change, but a recomputed figure set for the same run legitimately replaces
+    the old one (for instance after a bucket definition is corrected).
+    """
+    if not DATABASE_URL:
+        return False
+    try:
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO eng_report_figures "
+                    "(run_key, report_kind, window_start, window_end, "
+                    " total_in, total_out, shipped, net_change, "
+                    " active_total, figures, created_at) "
+                    "VALUES (:k, :kind, :ws, :we, :ti, :tout, :sh, :net, "
+                    " :act, CAST(:f AS jsonb), :now) "
+                    "ON CONFLICT (run_key) DO UPDATE SET "
+                    " report_kind = EXCLUDED.report_kind, "
+                    " window_start = EXCLUDED.window_start, "
+                    " window_end = EXCLUDED.window_end, "
+                    " total_in = EXCLUDED.total_in, "
+                    " total_out = EXCLUDED.total_out, "
+                    " shipped = EXCLUDED.shipped, "
+                    " net_change = EXCLUDED.net_change, "
+                    " active_total = EXCLUDED.active_total, "
+                    " figures = EXCLUDED.figures"
+                ),
+                {
+                    "k": run_key,
+                    "kind": report_kind,
+                    "ws": window_start,
+                    "we": window_end,
+                    "ti": int(figures.get("total_in", 0)),
+                    "tout": int(figures.get("total_out", 0)),
+                    "sh": int(figures.get("shipped", 0)),
+                    "net": int(figures.get("net_change", 0)),
+                    "act": int(figures.get("active_total", 0)),
+                    "f": json.dumps(figures),
+                    "now": datetime.now(timezone.utc),
+                },
+            )
+        return True
+    except Exception as e:
+        print(f"[DB ERROR] save_eng_report_figures({run_key}) failed: {e}")
+        return False
+
+
+def get_eng_report_history(
+    report_kind: str = "", limit: int = 12
+) -> list[dict]:
+    """Past report figures, NEWEST FIRST. Powers the week-over-week trend."""
+    if not DATABASE_URL:
+        return []
+    try:
+        engine = _get_engine()
+        clause = "WHERE report_kind = :kind " if report_kind else ""
+        params: dict = {"n": limit}
+        if report_kind:
+            params["kind"] = report_kind
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT run_key, report_kind, window_start, window_end, "
+                    "       total_in, total_out, shipped, net_change, "
+                    "       active_total, figures "
+                    "FROM eng_report_figures "
+                    f"{clause}"
+                    "ORDER BY created_at DESC LIMIT :n"
+                ),
+                params,
+            ).mappings().all()
+        return [
+            {
+                "run_key": r["run_key"],
+                "report_kind": r["report_kind"],
+                "window_start": (
+                    r["window_start"].isoformat()
+                    if r["window_start"] else None
+                ),
+                "window_end": (
+                    r["window_end"].isoformat() if r["window_end"] else None
+                ),
+                "total_in": r["total_in"] or 0,
+                "total_out": r["total_out"] or 0,
+                "shipped": r["shipped"] or 0,
+                "net_change": r["net_change"] or 0,
+                "active_total": r["active_total"] or 0,
+                "figures": r["figures"] or {},
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[DB ERROR] get_eng_report_history failed: {e}")
         return []

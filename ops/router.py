@@ -66,6 +66,19 @@ class StaleSweepRequest(BaseModel):
     force: bool = False
 
 
+class EngReportRequest(BaseModel):
+    """Manual trigger for an engineering report.
+
+    dry_run defaults to True: a hand trigger posts to #vome-agent-log, never to
+    the team channel, so testing a formatting change cannot spam the engineers.
+    force skips the once-per-day claim so a fixed report can be re-run.
+    """
+
+    kind: str = "friday"
+    dry_run: bool = True
+    force: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -181,3 +194,31 @@ def post_stale_waiting_client_sweep(body: StaleSweepRequest):
 def get_sweep_runs(limit: int = Query(20, ge=1, le=100)):
     """Recent scheduled sweep runs, newest first."""
     return {"runs": get_recent_sweeper_runs(limit=limit)}
+
+
+@ops_router.post("/reports/engineering")
+def post_engineering_report(body: EngReportRequest):
+    """Build and post an engineering report now (read only, writes nothing).
+
+    Imported lazily to match the sweep endpoint: the module pulls in httpx and
+    the database helpers, and there is no reason for every /ops request to pay
+    that import cost.
+    """
+    from weekly_engineering_report import run_engineering_report
+
+    return run_engineering_report(
+        kind=body.kind,
+        dry_run=body.dry_run,
+        force=body.force,
+    )
+
+
+@ops_router.get("/reports/engineering/history")
+def get_engineering_report_history(
+    kind: str = Query("", regex="^(friday|monday|)$"),
+    limit: int = Query(12, ge=1, le=52),
+):
+    """Saved report figures, newest first. Powers week-over-week reporting."""
+    from database import get_eng_report_history
+
+    return {"history": get_eng_report_history(report_kind=kind, limit=limit)}
