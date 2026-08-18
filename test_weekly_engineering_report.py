@@ -146,11 +146,25 @@ def test_net_change_comes_from_standing_not_arithmetic():
     assert f["prev_active"] == 1 and f["curr_active"] == 1
 
 
-def test_vanished_parked_task_is_not_counted_twice():
+def test_parked_closure_is_not_counted_as_dev_throughput():
+    """A ticket closed out of the client pile is not a fix the devs shipped.
+
+    This is what made the API-derived "shipped 69" figure misleading: date_done
+    fires for anything reaching a done state, including tickets closed straight
+    out of the 112-strong parked pile. Plate-based flow separates the two.
+    """
     prev = _snap([_task("a", "awaiting client response", [SANJAY])])
-    curr = {}
-    f = rpt._compute_flow(prev, curr)
+    f = rpt._compute_flow(prev, {})
+    assert f["shipped"]["total"] == 0
+    assert f["closed_from_parked"]["total"] == 1
+    assert f["total_out"] == 0
+
+
+def test_plate_closure_is_counted_as_throughput():
+    prev = _snap([_task("a", "in progress", [SANJAY])])
+    f = rpt._compute_flow(prev, {})
     assert f["shipped"]["total"] == 1
+    assert f["closed_from_parked"]["total"] == 0
     assert f["total_out"] == 1
 
 
@@ -170,6 +184,61 @@ def test_standing_excludes_parked_and_other_from_plate():
     assert st["active_total"] == 2
     assert st["parked"]["total"] == 1
     assert st["other_total"] == 2
+
+
+def test_plate_is_priority_queue_only():
+    """Raw Intake and Accepted Backlog are not claimable load.
+
+    Space-wide counting gave Sanjay 34 / OnlyG 33 on 2026-08-18 while their own
+    ClickUp views showed 12 / 17. Regression guard for that gap.
+    """
+    RAW_INTAKE = "901113386484"
+    ACCEPTED_BACKLOG = "901113389889"
+    tasks = [
+        _task("pq1", "queued", [SANJAY]),
+        _task("pq2", "in progress", [SANJAY]),
+        _task("ri1", "queued", [SANJAY]),
+        _task("ri2", "queued", [SANJAY]),
+        _task("ab1", "queued", [SANJAY]),
+    ]
+    for t in tasks:
+        if t["id"].startswith("ri"):
+            t["list"]["id"] = RAW_INTAKE
+        elif t["id"].startswith("ab"):
+            t["list"]["id"] = ACCEPTED_BACKLOG
+    st = rpt._compute_standing(_snap(tasks))
+    assert st["plate"]["total"] == 2, st["plate"]
+    assert st["backlog"]["total"] == 3, st["backlog"]
+    assert st["active_total"] == 2
+    # The queued ROW must also be scoped, not just the total.
+    assert st["by_status"][rpt.CU_QUEUED]["total"] == 1
+
+
+def test_promotion_from_backlog_counts_as_inbound():
+    """Backlog -> Priority Queue is work arriving on the plate."""
+    RAW_INTAKE = "901113386484"
+    before = _task("t1", "queued", [ONLYG])
+    before["list"]["id"] = RAW_INTAKE
+    prev = _snap([before])
+    curr = _snap([_task("t1", "queued", [ONLYG])])   # now Priority Queue
+    f = rpt._compute_flow(prev, curr)
+    assert f["promoted"]["total"] == 1
+    assert f["new"]["total"] == 0
+    assert f["total_in"] == 1
+    assert f["net_change"] == 1
+
+
+def test_backlog_churn_is_not_flow():
+    """A task moving around inside intake never touches the plate."""
+    RAW_INTAKE = "901113386484"
+    ACCEPTED_BACKLOG = "901113389889"
+    a = _task("t1", "queued", [ONLYG])
+    a["list"]["id"] = RAW_INTAKE
+    b = _task("t1", "queued", [ONLYG])
+    b["list"]["id"] = ACCEPTED_BACKLOG
+    f = rpt._compute_flow(_snap([a]), _snap([b]))
+    assert f["total_in"] == 0 and f["total_out"] == 0
+    assert f["net_change"] == 0
 
 
 def test_fresh_grace_window():

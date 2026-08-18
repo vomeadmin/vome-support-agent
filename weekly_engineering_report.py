@@ -80,6 +80,36 @@ CLICKUP_TEAM_ID = os.environ.get("CLICKUP_TEAM_ID", "")
 CLICKUP_SPACE_ID = os.environ.get("CLICKUP_SPACE_PRODUCT", "90114113004")
 
 # ---------------------------------------------------------------------------
+# WHICH LIST COUNTS AS "THE PLATE"
+#
+# Priority Queue is the working queue. Raw Intake is unprocessed and Accepted
+# Backlog is, in ClickUp's own words, "worth building, waiting for the right
+# moment to move into the Master Queue". Neither is claimable work, so counting
+# them as load triples the plate and contradicts what the engineers see in
+# their own ClickUp views.
+#
+# Measured 2026-08-18: space-wide active gave Sanjay 34 / OnlyG 33, while their
+# Priority Queue views showed 12 / 17. Scoping to Priority Queue (and excluding
+# subtasks, below) reproduces the views exactly.
+#
+# The fetch itself is scoped with list_ids[], so intake and backlog tasks
+# never enter the report at all. Verified 2026-08-18 that list_ids[] really
+# does filter (133 tasks, all Priority Queue) unlike date_closed_gt, which
+# is silently ignored. standing["backlog"] therefore reads 0 and is not
+# rendered; it stays in the figures so a future run with a wider
+# ENG_REPORT_WORKING_LISTS still reconciles.
+# ---------------------------------------------------------------------------
+
+LIST_PRIORITY_QUEUE = os.environ.get(
+    "CLICKUP_LIST_PRIORITY_QUEUE", "901113386257"
+)
+WORKING_LIST_IDS = frozenset(
+    x.strip() for x in os.environ.get(
+        "ENG_REPORT_WORKING_LISTS", LIST_PRIORITY_QUEUE
+    ).split(",") if x.strip()
+)
+
+# ---------------------------------------------------------------------------
 # Engineers. Sanjay is FRONTEND, OnlyG is BACKEND -- nothing in the ClickUp API
 # or the rest of this codebase records that mapping, and it is easy to get
 # backwards, so it is stated once here and read from env ids.
@@ -144,12 +174,14 @@ def _fetch_one_assignee(clickup_id: str) -> list[dict] | None:
     page = 0
     while True:
         params: list[tuple[str, str]] = [
-            ("space_ids[]", CLICKUP_SPACE_ID),
             ("include_closed", "false"),
-            ("subtasks", "true"),
+            # Subtasks EXCLUDED to match what the engineers see in their
+            # own views: with them included OnlyG's plate read 20 against the
+            # 17 his view showed.
+            ("subtasks", "false"),
             ("assignees[]", clickup_id),
             ("page", str(page)),
-        ]
+        ] + [("list_ids[]", lid) for lid in sorted(WORKING_LIST_IDS)]
         try:
             r = httpx.get(
                 f"{CLICKUP_BASE}/team/{CLICKUP_TEAM_ID}/task",
@@ -312,14 +344,22 @@ def _ms_to_dt(ms: str) -> datetime | None:
 def _compute_standing(curr: dict[str, dict]) -> dict:
     """Where the pile sits right now, by status."""
     rows = list(curr.values())
-    plate = [r for r in rows if r["bucket"] == "active"]
+    active = [r for r in rows if r["bucket"] == "active"]
+    # The plate is active work in a WORKING list. Active work parked in Raw
+    # Intake or Accepted Backlog is real, but it is not claimable load.
+    plate = [r for r in active if r["list_id"] in WORKING_LIST_IDS]
+    backlog = [r for r in active if r["list_id"] not in WORKING_LIST_IDS]
     parked = [r for r in rows if r["bucket"] == "parked"]
     other = [r for r in rows if r["bucket"] == "other"]
 
     by_status = {}
-    for status in _PLATE_ROWS + _PARKED_ROWS:
+    for status in _PLATE_ROWS:
         by_status[status] = _split(
-            [r for r in rows if r["status"] == status]
+            [r for r in plate if r["status"] == status]
+        )
+    for status in _PARKED_ROWS:
+        by_status[status] = _split(
+            [r for r in parked if r["status"] == status]
         )
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=GRACE_HOURS)
@@ -332,6 +372,7 @@ def _compute_standing(curr: dict[str, dict]) -> dict:
     return {
         "by_status": by_status,
         "plate": _split(plate),
+        "backlog": _split(backlog),
         "parked": _split(parked),
         "other_total": len(other),
         "fresh_48h": len(fresh),
@@ -339,63 +380,88 @@ def _compute_standing(curr: dict[str, dict]) -> dict:
     }
 
 
+def _on_plate(row: dict) -> bool:
+    """Active work sitting in a working list. The plate, precisely."""
+    return row["bucket"] == "active" and row["list_id"] in WORKING_LIST_IDS
+
+
 def _compute_flow(prev: dict[str, dict], curr: dict[str, dict]) -> dict:
-    """Movement between two snapshots.
+    """Movement on and off THE PLATE between two snapshots.
 
-    IN and OUT are both defined relative to THE PLATE, which is the only thing
-    that represents claimable engineer workload:
+    Everything is defined as entering or leaving the plate, so net_change,
+    total_in and total_out all describe the same population that the standing
+    table shows. Defining flow on buckets alone would let a task in Accepted
+    Backlog count as inbound work the engineers never saw.
 
-      IN   new         -- task absent from the previous snapshot
-           back_from_client -- was parked, is now active again
-      OUT  shipped     -- was active or parked, now on prod / Closed
-           to_client   -- was active, now awaiting client response
-           to_education -- was active, now user education
+      IN   new             -- absent from the previous snapshot entirely
+           back_from_client -- was parked, now back on the plate
+           promoted        -- was in backlog/intake, pulled into the queue
+      OUT  shipped         -- left the plate for on prod / Closed
+           to_client       -- left the plate for awaiting client response
+           to_education    -- left the plate for user education
 
-    A task that vanished from the snapshot entirely counts as shipped: the
-    fetch excludes only the Closed status, so vanishing means it got Closed.
+    A task that vanished from the snapshot counts as shipped: the fetch
+    excludes only the Closed status, so vanishing means it got Closed.
     """
-    new_rows, back_rows = [], []
+    new_rows, back_rows, promoted_rows = [], [], []
     shipped_rows, to_client_rows, to_education_rows = [], [], []
+    # Closed straight out of the client pile without returning to the plate.
+    # Real resolution, but NOT engineering throughput, so it is reported on its
+    # own line and excluded from total_out.
+    closed_from_parked: list[dict] = []
 
     for tid, row in curr.items():
         before = prev.get(tid)
+        now_on = _on_plate(row)
         if before is None:
-            new_rows.append(row)
+            if now_on:
+                new_rows.append(row)
             continue
-        was, now = before["bucket"], row["bucket"]
-        if was == "parked" and now == "active":
-            back_rows.append(row)
-        elif was in ("active", "parked") and now == "shipped":
-            shipped_rows.append(row)
-        elif was == "active" and row["status"] == CU_AWAITING_CLIENT:
-            to_client_rows.append(row)
-        elif was == "active" and row["status"] == CU_USER_EDUCATION:
-            to_education_rows.append(row)
+        was_on = _on_plate(before)
+        if now_on and not was_on:
+            if before["bucket"] == "parked":
+                back_rows.append(row)
+            elif before["bucket"] == "active":
+                promoted_rows.append(row)   # backlog or intake -> queue
+        elif before["bucket"] == "parked" and row["bucket"] == "shipped":
+            closed_from_parked.append(row)
+        elif was_on and not now_on:
+            if row["bucket"] == "shipped":
+                shipped_rows.append(row)
+            elif row["status"] == CU_AWAITING_CLIENT:
+                to_client_rows.append(row)
+            elif row["status"] == CU_USER_EDUCATION:
+                to_education_rows.append(row)
 
     # Gone from the snapshot => moved to Closed, which the fetch excludes.
     for tid, before in prev.items():
-        if tid not in curr and before["bucket"] in ("active", "parked"):
+        if tid in curr:
+            continue
+        if _on_plate(before):
             shipped_rows.append(before)
+        elif before["bucket"] == "parked":
+            closed_from_parked.append(before)
 
-    total_in = len(new_rows) + len(back_rows)
+    total_in = len(new_rows) + len(back_rows) + len(promoted_rows)
     total_out = (
         len(shipped_rows) + len(to_client_rows) + len(to_education_rows)
     )
 
-    prev_active = sum(1 for r in prev.values() if r["bucket"] == "active")
-    curr_active = sum(1 for r in curr.values() if r["bucket"] == "active")
+    prev_active = sum(1 for r in prev.values() if _on_plate(r))
+    curr_active = sum(1 for r in curr.values() if _on_plate(r))
 
     return {
         "new": _split(new_rows),
         "back_from_client": _split(back_rows),
+        "promoted": _split(promoted_rows),
         "shipped": _split(shipped_rows),
         "to_client": _split(to_client_rows),
         "to_education": _split(to_education_rows),
+        "closed_from_parked": _split(closed_from_parked),
         "total_in": total_in,
         "total_out": total_out,
         # Authoritative plate change: measured from the standing counts, not
-        # from total_in - total_out, so it cannot drift from what the board
-        # actually shows.
+        # from total_in - total_out, so it cannot drift from the board.
         "net_change": curr_active - prev_active,
         "prev_active": prev_active,
         "curr_active": curr_active,
@@ -494,6 +560,10 @@ def _format_friday(flow: dict | None, standing: dict, history: list[dict],
             _header_row(),
             _row("IN   new tasks", flow["new"]),
             _row("     back from client", flow["back_from_client"]),
+        ]
+        if flow.get("promoted", {}).get("total"):
+            lines.append(_row("     moved up from backlog", flow["promoted"]))
+        lines += [
             _rule(),
             _row("OUT  shipped", flow["shipped"]),
             _row("     pushed to client", flow["to_client"]),
@@ -503,6 +573,9 @@ def _format_friday(flow: dict | None, standing: dict, history: list[dict],
             f"{'     total out':<{_W_LABEL}}{flow['total_out']:>{_W_COL}}",
             f"{'NET  plate change':<{_W_LABEL}}{net:>+{_W_COL}}"
             f"    {direction}",
+            "",
+            _row("also: closed from client pile",
+                 flow.get("closed_from_parked", {})),
             "```",
             f"Shared by both: {flow['shipped'].get('shared_both', 0)} of "
             f"{flow['shipped'].get('total', 0)} shipped. Per-engineer numbers "
@@ -572,7 +645,8 @@ def _plate_block(standing: dict) -> list[str]:
     lines.append("```")
     lines.append(
         f"Shared by both: {standing['plate'].get('shared_both', 0)} of "
-        f"{standing['plate'].get('total', 0)} on the plate."
+        f"{standing['plate'].get('total', 0)} on the plate. Plate counts the "
+        "Priority Queue only, matching your own ClickUp views."
     )
     lines.append(
         f"Arrived in the last {GRACE_HOURS}h: {standing['fresh_48h']}, "
