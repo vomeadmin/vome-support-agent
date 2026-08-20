@@ -372,21 +372,27 @@ with no client reply.
    the idle clock, plus the newest **inbound** one.
 3. Decide: `close`, `skip_recent`, `skip_client_replied`, `skip_no_timestamp`,
    or `skip_clickup_busy`.
-4. For each close: courtesy email to the client (fixed template, signed Vic) →
-   Zoho `Closed` → internal note → the same note on ClickUp + `CLOSED` +
-   resolution field → `ticket_threads` row updated to `closed` /
+4. For each close (**no client email, see below**): Zoho `Closed` → internal
+   note → the same note on ClickUp + `CLOSED` + resolution field →
+   `ticket_threads` row updated to `closed` /
    `auto_closed_no_client_response`.
 5. Post one Slack summary (`SLACK_CHANNEL_STALE_SWEEP`, falling back to
    #vome-agent-log) covering what closed, what was capped, and every skip
    bucket.
 
 ### The two rules that keep it safe
-**Rule 1: never use `modifiedTime`.** Zoho bumps it on every tag write, status
-write, and `sync_zoho_to_clickup` pass, so a parked ticket's `modifiedTime` is
-almost always today: measuring from it means nothing ever ages out. Staleness
-comes from the newest outbound thread, falling back to
+**Rule 1: never use `modifiedTime`.** It answers "when was this record last
+edited", not "when did we last write to the client", and it moves on tag writes,
+status writes, and every `sync_zoho_to_clickup` pass. Any of those resets the
+idle clock on a ticket nobody actually replied to. Staleness therefore comes
+from the newest outbound thread, falling back to
 `ticket_threads.last_action_at` (when §6 parked it). If neither resolves, the
 ticket is **skipped**, never closed on a guessed date.
+
+> Honest footnote: the magnitude of this was never measured on real data. The
+> MCP list endpoint does not return `modifiedTime` at all, so an attempt to
+> quantify it in Aug 2026 measured nothing. The rule stands on what the field
+> means, not on an observed failure.
 
 **Rule 2: both systems must agree.** If Zoho says awaiting-client but the
 ClickUp task is `in progress` / `on dev`, that is live dev work and closing Zoho
@@ -399,10 +405,28 @@ A client reply newer than our last email is also blocked (`skip_client_replied`)
 and reported: the ticket should already have flipped to Processing, so it means
 the reply webhook missed it.
 
-### Why closing is low risk
+### The client is never emailed (policy, Aug 2026)
+`STALE_SWEEP_SEND_CLOSING_EMAIL` **defaults to `false`** and the team's decision
+is that it stays off: a stale ticket is closed **quietly on both platforms**,
+with an internal note on each and nothing sent to the client.
+
+The reasoning came out of the first live dry run: 314 eligible tickets with a
+median idle time of 126 days. A closing note on a thread that went silent four
+months ago is archaeology. It invites a reply wave on work nobody is tracking,
+and it puts hundreds of messages through the support domain in one burst. The
+fixed-template email code is still there behind the flag in case a courtesy
+note is ever wanted for the fresh 30-day tier, but **turning it on is a
+deliberate decision, not a default**, and
+`test_client_email_is_off_by_default` pins that.
+
+Every Slack report states which mode the run used, so the audit trail can never
+be ambiguous about whether a batch emailed clients.
+
+### Why closing is low risk anyway
 A client reply on a closed ticket flips it back to Processing and resurfaces it
-in Slack (§6A / `is_zoho_reply_event` → `process_ticket_update`). The closing
-email says exactly that, so the promise is real, not marketing.
+in Slack (§6A / `is_zoho_reply_event` → `process_ticket_update`). So a quiet
+close is reversible by the client's own next message, without us having to
+announce it.
 
 ### Rollout controls
 `STALE_SWEEP_DRY_RUN` **defaults to true**: the sweep reports and changes
@@ -487,7 +511,7 @@ This is the reverse direction of the auto-send flows: those push Zoho status
 - Stale awaiting-client sweep (§6B), all optional:
   `STALE_SWEEP_DRY_RUN` (default `true`, flip to `false` to go live),
   `STALE_WAITING_DAYS` (30), `STALE_SWEEP_MAX_CLOSES` (25),
-  `STALE_SWEEP_SEND_CLOSING_EMAIL` (true),
+  `STALE_SWEEP_SEND_CLOSING_EMAIL` (**false**, and it stays that way),
   `STALE_SWEEP_THROTTLE` (0.4s between tickets),
   `STALE_SWEEP_DEPARTMENT_ID`, `SLACK_CHANNEL_STALE_SWEEP`,
   `CLICKUP_RESOLUTION_NO_RESPONSE` (needs manual ClickUp setup first).

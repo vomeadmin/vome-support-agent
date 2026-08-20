@@ -64,6 +64,9 @@ class StaleSweepRequest(BaseModel):
     days: int | None = None
     limit: int | None = None
     force: bool = False
+    # None = use STALE_SWEEP_SEND_CLOSING_EMAIL. Pass False to close a
+    # historical backlog silently.
+    send_email: bool | None = None
 
 
 class EngReportRequest(BaseModel):
@@ -187,6 +190,7 @@ def post_stale_waiting_client_sweep(body: StaleSweepRequest):
         days=body.days,
         limit=body.limit,
         force=body.force,
+        send_email=body.send_email,
     )
 
 

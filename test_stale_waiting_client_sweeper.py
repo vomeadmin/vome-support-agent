@@ -54,8 +54,8 @@ def _ticket(**over) -> dict:
         "ticketNumber": "7905",
         "subject": "Shift times missing on dashboard",
         "status": "Awaiting Client Response",
-        # The trap: Zoho stamps modifiedTime on every tag/status/sync write,
-        # so it is almost always "today" on a parked ticket.
+        # The trap: modifiedTime moves on any edit (tag/status/sync writes),
+        # so it must never be read as "when we last emailed the client".
         "modifiedTime": _iso(0),
         "contact": {"email": CONTACT, "firstName": "Dana"},
         "tags": ["waiting-client"],
@@ -94,8 +94,9 @@ def test_stale_ticket_closes(monkeypatch):
 def test_modified_time_today_does_not_reset_the_clock(monkeypatch):
     """REGRESSION: using modifiedTime would make this ticket 0 days idle.
 
-    A parked ticket gets its modifiedTime bumped by every tag write and every
-    sync_zoho_to_clickup pass, so it would never age out.
+    modifiedTime answers "when was this record last edited", not "when did we
+    last write to the client", and tag/status/sync writes all move it. The idle
+    clock must come from the outbound thread alone.
     """
     _patch(monkeypatch, [_out(60)])
     v = sweeper._assess(_ticket(modifiedTime=_iso(0)), NOW, days=30)
@@ -324,6 +325,76 @@ def test_cap_takes_the_most_stale_first(monkeypatch):
     assert out["capped"] is True
     assert out["eligible_total"] == 3
     assert [v["ticket_number"] for v in out["closed"]] == ["102", "103"]
+
+
+def test_send_email_override_reaches_close_and_report(monkeypatch):
+    """Backfill batches must be able to close without emailing clients."""
+    monkeypatch.setattr(
+        sweeper, "_fetch_awaiting_client_tickets", lambda: ([_ticket()], False)
+    )
+    _patch(monkeypatch, [_out(300)])
+    captured = []
+    monkeypatch.setattr(sweeper, "_post_report", captured.append)
+    monkeypatch.setattr(sweeper, "time", _NoSleep)
+    monkeypatch.setattr(sweeper, "claim_sweeper_run", lambda _k: True)
+    monkeypatch.setattr(sweeper, "finish_sweeper_run", lambda _k, _s: None)
+    seen = []
+    monkeypatch.setattr(
+        sweeper, "_close_one",
+        lambda v, send: seen.append(send) or {"errors": [], "closed": True},
+    )
+
+    out = sweeper.run_stale_waiting_client_sweep(
+        dry_run=False, days=30, send_email=False
+    )
+    assert seen == [False]
+    assert out["send_email"] is False
+    assert "no client email" in captured[0]
+
+
+def test_client_email_is_off_by_default():
+    """POLICY: the sweep never writes to the client unless told to.
+
+    Pins the env default, so flipping it back on has to be a deliberate,
+    reviewed change rather than a passing edit.
+    """
+    assert sweeper.SEND_CLOSING_EMAIL is False
+
+
+def test_default_run_closes_without_emailing(monkeypatch):
+    """With send_email unset, _close_one must receive False."""
+    monkeypatch.setattr(
+        sweeper, "_fetch_awaiting_client_tickets", lambda: ([_ticket()], False)
+    )
+    _patch(monkeypatch, [_out(200)])
+    monkeypatch.setattr(sweeper, "_post_report", lambda _t: None)
+    monkeypatch.setattr(sweeper, "time", _NoSleep)
+    monkeypatch.setattr(sweeper, "claim_sweeper_run", lambda _k: True)
+    monkeypatch.setattr(sweeper, "finish_sweeper_run", lambda _k, _s: None)
+    seen = []
+    monkeypatch.setattr(
+        sweeper, "_close_one",
+        lambda v, send: seen.append(send) or {"errors": [], "closed": True},
+    )
+
+    out = sweeper.run_stale_waiting_client_sweep(dry_run=False, days=30)
+    assert seen == [False]
+    assert out["send_email"] is False
+
+
+def test_report_states_when_clients_are_emailed(monkeypatch):
+    monkeypatch.setattr(
+        sweeper, "_fetch_awaiting_client_tickets", lambda: ([_ticket()], False)
+    )
+    _patch(monkeypatch, [_out(45)])
+    captured = []
+    monkeypatch.setattr(sweeper, "_post_report", captured.append)
+    monkeypatch.setattr(sweeper, "time", _NoSleep)
+
+    sweeper.run_stale_waiting_client_sweep(
+        dry_run=True, days=30, send_email=True
+    )
+    assert "Clients ARE emailed a closing note." in captured[0]
 
 
 def test_paging_cap_is_reported_not_hidden(monkeypatch):

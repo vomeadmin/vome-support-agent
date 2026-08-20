@@ -4,6 +4,11 @@ stale_waiting_client_sweeper.py
 Daily sweep that closes tickets parked in Zoho "Awaiting Client Response"
 when the client has not replied for N days (default 30).
 
+THE CLIENT IS NEVER EMAILED. A stale ticket is closed quietly on both
+platforms (Zoho + ClickUp) with an internal note on each. See
+SEND_CLOSING_EMAIL for why, and note the Slack report always states which
+mode a run used so the audit trail is never ambiguous.
+
 Scheduled from main.py at 07:30 America/Montreal. Also triggerable by hand:
     POST /ops/sweeps/stale-waiting-client   {"dry_run": true}
 
@@ -87,8 +92,15 @@ DRY_RUN_DEFAULT = os.environ.get(
     "STALE_SWEEP_DRY_RUN", "true"
 ).strip().lower() in ("1", "true", "yes")
 MAX_CLOSES = int(os.environ.get("STALE_SWEEP_MAX_CLOSES", "25"))
+# POLICY (set Aug 2026): the sweep NEVER emails clients. These tickets are
+# closed quietly on both platforms. A note on a thread that went silent months
+# ago reads as noise, invites a reply wave on work nobody is tracking, and puts
+# hundreds of messages through the support domain in one burst. The capability
+# stays behind this flag in case a courtesy note is ever wanted for the fresh
+# 30-day tier, but it is OFF unless someone deliberately turns it on, and the
+# Slack report always states which mode ran.
 SEND_CLOSING_EMAIL = os.environ.get(
-    "STALE_SWEEP_SEND_CLOSING_EMAIL", "true"
+    "STALE_SWEEP_SEND_CLOSING_EMAIL", "false"
 ).strip().lower() in ("1", "true", "yes")
 ZOHO_DEPARTMENT_ID = os.environ.get(
     "STALE_SWEEP_DEPARTMENT_ID", "569440000000006907"
@@ -575,9 +587,17 @@ def _build_report(summary: dict) -> str:
     mode = (
         "DRY RUN, nothing was changed" if summary["dry_run"] else "live"
     )
+    # State the email decision explicitly. There must never be any ambiguity
+    # in the audit trail about whether a batch emailed clients.
+    if summary.get("send_email"):
+        email_note = ":envelope: Clients ARE emailed a closing note."
+    else:
+        email_note = "Quiet close on both platforms, no client email."
+
     lines = [
         f"*Stale awaiting-client sweep* ({mode})",
-        f"Threshold: {summary['days']} days with no client response.",
+        f"Threshold: {summary['days']} days with no client response. "
+        f"{email_note}",
         f"Parked tickets scanned: {summary['scanned']}",
     ]
 
@@ -673,18 +693,25 @@ def run_stale_waiting_client_sweep(
     days: int | None = None,
     limit: int | None = None,
     force: bool = False,
+    send_email: bool | None = None,
 ) -> dict:
     """Close tickets parked on the client for `days` with no reply.
 
-    dry_run  assess and report, change nothing. Defaults to
-             STALE_SWEEP_DRY_RUN (which itself defaults to true).
-    days     staleness threshold, defaults to STALE_WAITING_DAYS.
-    limit    max closes this run, defaults to STALE_SWEEP_MAX_CLOSES.
-    force    bypass the once-per-day claim, for manual re-runs.
+    dry_run     assess and report, change nothing. Defaults to
+                STALE_SWEEP_DRY_RUN (which itself defaults to true).
+    days        staleness threshold, defaults to STALE_WAITING_DAYS.
+    limit       max closes this run, defaults to STALE_SWEEP_MAX_CLOSES.
+    force       bypass the once-per-day claim, for manual re-runs.
+    send_email  override STALE_SWEEP_SEND_CLOSING_EMAIL for this run only.
+                Defaults to OFF by policy (see SEND_CLOSING_EMAIL above): the
+                sweep closes quietly on both platforms and never writes to the
+                client. Only pass True if someone has explicitly decided a
+                given batch should notify.
     """
     dry_run = DRY_RUN_DEFAULT if dry_run is None else dry_run
     days = STALE_DAYS if days is None else days
     max_closes = MAX_CLOSES if limit is None else limit
+    send_email = SEND_CLOSING_EMAIL if send_email is None else send_email
     now = datetime.now(timezone.utc)
 
     # APScheduler runs on the single web process. A restart near 07:30 can
@@ -728,7 +755,7 @@ def run_stale_waiting_client_sweep(
         for v in to_close:
             label = v["ticket_number"] or v["ticket_id"]
             try:
-                result = _close_one(v, SEND_CLOSING_EMAIL)
+                result = _close_one(v, send_email)
                 for e in result["errors"]:
                     errors.append(f"#{label}: {e}")
                 if result["closed"]:
@@ -749,6 +776,7 @@ def run_stale_waiting_client_sweep(
         "dry_run": dry_run,
         "days": days,
         "max_closes": max_closes,
+        "send_email": send_email,
         "scanned": len(verdicts),
         "eligible_total": len(eligible),
         "capped": len(eligible) > max_closes,
