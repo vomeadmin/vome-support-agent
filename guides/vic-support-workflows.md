@@ -357,6 +357,7 @@ sync in §8.
 **Entry point:** `run_stale_waiting_client_sweep()`.
 **Manual trigger:** `POST /ops/sweeps/stale-waiting-client` with
 `{"dry_run": true}`. **Run history:** `GET /ops/sweeps/runs`.
+**Backlog drain:** `POST /ops/sweeps/stale-waiting-client/drain` (see below).
 
 §6 parks tickets on the client, but nothing ever un-parked them when the client
 simply never answered, and `ops/tickets.py::_fetch_zoho_active_tickets`
@@ -441,6 +442,28 @@ The 07:30 job also claims the day in Postgres (`sweeper_runs`, via
 trigger time cannot double-run it. `misfire_grace_time=1800` lets a restart
 within 30 minutes still fire.
 
+### Drain mode (clearing a backlog)
+`POST /ops/sweeps/stale-waiting-client/drain` with `{"confirm": true}` loops the
+normal batched sweep until the eligible pool is empty. Use it to clear a
+historical pile; the daily job handles steady state.
+
+It is deliberately NOT one big pass. A few hundred closes is ~4 write calls
+each, which would blow past Zoho's per-minute ceiling, and a synchronous
+request that long gets cut by the gateway. So the drain re-fetches the ticket
+list each round (state moves between batches), pauses between them
+(`STALE_SWEEP_DRAIN_PAUSE`, default 20s), and returns immediately while running
+in the background. One Slack report per batch, then a final summary.
+
+`confirm: true` is required and there is no dry-run drain: a dry run does not
+shrink the pool, so the loop would never converge. Preview with the normal
+endpoint first.
+
+Four stop conditions, all reported: pool empty, **no progress** (tickets were
+eligible but a whole batch closed nothing, so something is failing and
+retrying would spin), `max_batches` (default 20), and `DRAIN_MAX_TOTAL`
+(default 600 closes). The last batch is trimmed so the total ceiling is never
+overshot.
+
 ### Manual setup required
 The ClickUp resolution dropdown has no "no client response" option yet. Add it
 by hand, then set `CLICKUP_RESOLUTION_NO_RESPONSE` to its option id. Until then
@@ -514,6 +537,8 @@ This is the reverse direction of the auto-send flows: those push Zoho status
   `STALE_SWEEP_SEND_CLOSING_EMAIL` (**false**, and it stays that way),
   `STALE_SWEEP_THROTTLE` (0.4s between tickets),
   `STALE_SWEEP_DEPARTMENT_ID`, `SLACK_CHANNEL_STALE_SWEEP`,
+  `STALE_SWEEP_DRAIN_MAX_BATCHES` (20), `STALE_SWEEP_DRAIN_MAX_TOTAL`
+  (600), `STALE_SWEEP_DRAIN_PAUSE` (20s),
   `CLICKUP_RESOLUTION_NO_RESPONSE` (needs manual ClickUp setup first).
 
 ### Webhooks

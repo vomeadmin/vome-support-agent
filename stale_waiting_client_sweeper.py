@@ -820,3 +820,134 @@ def _serializable(summary: dict) -> dict:
             k: [clean(v) for v in vs] for k, vs in summary["skipped"].items()
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Drain mode: clear the whole eligible pool in self-throttling batches
+# ---------------------------------------------------------------------------
+
+# Hard ceilings so a bug can never turn this into an unbounded loop.
+DRAIN_MAX_BATCHES = int(os.environ.get("STALE_SWEEP_DRAIN_MAX_BATCHES", "20"))
+DRAIN_MAX_TOTAL = int(os.environ.get("STALE_SWEEP_DRAIN_MAX_TOTAL", "600"))
+DRAIN_PAUSE_SECONDS = float(os.environ.get("STALE_SWEEP_DRAIN_PAUSE", "20"))
+
+
+def run_stale_waiting_client_drain(
+    days: int | None = None,
+    limit: int | None = None,
+    send_email: bool | None = None,
+    max_batches: int | None = None,
+    pause_seconds: float | None = None,
+) -> dict:
+    """Repeat the sweep until the eligible pool is empty.
+
+    This is the "close the whole backlog" entry point. It exists because doing
+    it in ONE pass is the wrong shape twice over: ~4 write calls per ticket
+    would push a few hundred closes past Zoho's per-minute ceiling, and a
+    single synchronous request that long gets cut by the gateway long before
+    it finishes. So this loops the normal batched sweep instead, re-fetching
+    the ticket list each round (state moves between batches) and pausing in
+    between.
+
+    Each batch posts its own Slack report, so the audit trail is per batch
+    rather than one opaque summary at the end.
+
+    Stops on the first of: nothing eligible left, a batch that closed nothing
+    while tickets were still eligible (no progress, so something is failing),
+    max_batches, or DRAIN_MAX_TOTAL closes.
+
+    Runs live only. There is no dry-run drain: a dry run changes nothing, so
+    the pool never shrinks and the loop would never converge. Use the normal
+    endpoint for previews.
+    """
+    days = STALE_DAYS if days is None else days
+    limit = MAX_CLOSES if limit is None else limit
+    max_batches = DRAIN_MAX_BATCHES if max_batches is None else max_batches
+    pause = DRAIN_PAUSE_SECONDS if pause_seconds is None else pause_seconds
+
+    batches: list[dict] = []
+    total_closed = 0
+    total_failed = 0
+    stopped = "pool_empty"
+
+    for n in range(1, max_batches + 1):
+        remaining = DRAIN_MAX_TOTAL - total_closed
+        if remaining <= 0:
+            stopped = "drain_max_total"
+            break
+
+        result = run_stale_waiting_client_sweep(
+            dry_run=False,
+            days=days,
+            limit=min(limit, remaining),
+            force=True,          # a drain is explicit; skip the daily claim
+            send_email=send_email,
+        )
+
+        closed = len(result.get("closed") or [])
+        failed = len(result.get("failed") or [])
+        eligible = result.get("eligible_total", 0)
+        total_closed += closed
+        total_failed += failed
+        batches.append({
+            "batch": n,
+            "closed": closed,
+            "failed": failed,
+            "eligible_at_start": eligible,
+            "errors": result.get("errors") or [],
+        })
+        print(
+            f"[STALE SWEEP] drain batch {n}: closed={closed} "
+            f"failed={failed} eligible_was={eligible}"
+        )
+
+        if eligible == 0:
+            stopped = "pool_empty"
+            break
+        if closed == 0:
+            # Tickets were eligible but none closed. Retrying cannot help and
+            # would spin, so stop and make it loud.
+            stopped = "no_progress"
+            break
+        if n == max_batches:
+            stopped = "max_batches"
+            break
+
+        time.sleep(pause)
+
+    summary = {
+        "status": "ok",
+        "mode": "drain",
+        "days": days,
+        "batch_size": limit,
+        "batches_run": len(batches),
+        "total_closed": total_closed,
+        "total_failed": total_failed,
+        "stopped_because": stopped,
+        "batches": batches,
+    }
+
+    tail = {
+        "pool_empty": "Nothing eligible left.",
+        "no_progress": (
+            ":x: Stopped early: tickets were still eligible but a whole batch "
+            "closed nothing. Something is failing, check the batch errors."
+        ),
+        "max_batches": (
+            f":warning: Stopped at the {max_batches}-batch ceiling. Run it "
+            f"again to continue."
+        ),
+        "drain_max_total": (
+            f":warning: Stopped at the {DRAIN_MAX_TOTAL}-close ceiling. Run "
+            f"it again to continue."
+        ),
+    }[stopped]
+
+    _post_report(
+        f"*Stale awaiting-client drain finished*\n"
+        f"Threshold: {days} days. Batches run: {len(batches)}.\n"
+        f"Closed: {total_closed}. Failed: {total_failed}.\n"
+        f"{tail}"
+    )
+    print(f"[STALE SWEEP] drain done: {summary}")
+    return summary

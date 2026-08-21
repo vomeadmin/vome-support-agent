@@ -4,7 +4,13 @@ ops/router.py
 FastAPI router mounting all /ops/ endpoints for the Ticket Command Center.
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+)
 from pydantic import BaseModel
 
 from ops.auth import verify_ops_token
@@ -67,6 +73,21 @@ class StaleSweepRequest(BaseModel):
     # None = use STALE_SWEEP_SEND_CLOSING_EMAIL. Pass False to close a
     # historical backlog silently.
     send_email: bool | None = None
+
+
+class StaleDrainRequest(BaseModel):
+    """Clear the whole eligible pool in batches, in the background.
+
+    `confirm` is required and there is no dry_run: a drain only makes sense
+    live, since a dry run never shrinks the pool. Preview with the normal
+    endpoint first.
+    """
+    confirm: bool = False
+    days: int | None = None
+    limit: int | None = None          # closes per batch
+    send_email: bool | None = None
+    max_batches: int | None = None
+    pause_seconds: float | None = None
 
 
 class EngReportRequest(BaseModel):
@@ -192,6 +213,53 @@ def post_stale_waiting_client_sweep(body: StaleSweepRequest):
         force=body.force,
         send_email=body.send_email,
     )
+
+
+@ops_router.post("/sweeps/stale-waiting-client/drain")
+def post_stale_waiting_client_drain(
+    body: StaleDrainRequest, background: BackgroundTasks
+):
+    """Clear the whole eligible pool in self-throttling batches.
+
+    Returns immediately and runs in the background: a few hundred closes takes
+    ~15 minutes of API calls, which no gateway will hold a request open for.
+    Progress arrives as one Slack report per batch, plus a final summary.
+
+    Live only, and `confirm` must be true. There is no dry-run drain, because
+    a dry run does not shrink the pool so the loop would never converge. Use
+    POST /sweeps/stale-waiting-client for previews.
+    """
+    from stale_waiting_client_sweeper import (
+        run_stale_waiting_client_drain,
+    )
+
+    if not body.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Drain closes tickets for real and cannot be previewed. "
+                "Pass confirm=true to proceed, or use "
+                "POST /sweeps/stale-waiting-client with dry_run=true first."
+            ),
+        )
+
+    background.add_task(
+        run_stale_waiting_client_drain,
+        days=body.days,
+        limit=body.limit,
+        send_email=body.send_email,
+        max_batches=body.max_batches,
+        pause_seconds=body.pause_seconds,
+    )
+    return {
+        "status": "started",
+        "message": (
+            "Drain running in the background. Watch the sweep Slack channel: "
+            "one report per batch, then a final summary."
+        ),
+        "days": body.days,
+        "batch_size": body.limit,
+    }
 
 
 @ops_router.get("/sweeps/runs")

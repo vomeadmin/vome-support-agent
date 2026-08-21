@@ -532,6 +532,111 @@ def test_missing_contact_email_is_reported_but_still_closes(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Drain mode
+# ---------------------------------------------------------------------------
+
+def _fake_sweeps(monkeypatch, script):
+    """Feed run_stale_waiting_client_sweep a canned sequence of results.
+
+    Each script entry is (closed, failed, eligible_total).
+    """
+    calls = []
+
+    def fake(**kw):
+        calls.append(kw)
+        c, f, e = script[min(len(calls) - 1, len(script) - 1)]
+        # Honour the limit the drain passed, as the real sweep does. Without
+        # this the stub can "close" more than it was asked to and the
+        # DRAIN_MAX_TOTAL assertion tests nothing.
+        c = min(c, kw.get("limit") or c)
+        return {
+            "closed": [{"n": i} for i in range(c)],
+            "failed": [{"n": i} for i in range(f)],
+            "eligible_total": e,
+            "errors": [],
+        }
+
+    monkeypatch.setattr(sweeper, "run_stale_waiting_client_sweep", fake)
+    monkeypatch.setattr(sweeper, "_post_report", lambda _t: None)
+    monkeypatch.setattr(sweeper, "time", _NoSleep)
+    return calls
+
+
+def test_drain_loops_until_the_pool_is_empty(monkeypatch):
+    calls = _fake_sweeps(monkeypatch, [
+        (50, 0, 120), (50, 0, 70), (20, 0, 20), (0, 0, 0),
+    ])
+    out = sweeper.run_stale_waiting_client_drain(days=60, limit=50)
+    assert out["stopped_because"] == "pool_empty"
+    assert out["total_closed"] == 120
+    assert out["batches_run"] == 4
+    assert len(calls) == 4
+
+
+def test_drain_always_runs_live_and_forces(monkeypatch):
+    """A drain is explicit, so it bypasses the once-per-day claim."""
+    calls = _fake_sweeps(monkeypatch, [(10, 0, 10), (0, 0, 0)])
+    sweeper.run_stale_waiting_client_drain(days=60, limit=50)
+    assert all(c["dry_run"] is False for c in calls)
+    assert all(c["force"] is True for c in calls)
+
+
+def test_drain_stops_when_a_batch_makes_no_progress(monkeypatch):
+    """Eligible tickets but zero closed means something is broken.
+
+    Retrying cannot help and would spin forever, so it must stop and say so.
+    """
+    calls = _fake_sweeps(monkeypatch, [(0, 50, 200)])
+    out = sweeper.run_stale_waiting_client_drain(days=60, limit=50)
+    assert out["stopped_because"] == "no_progress"
+    assert len(calls) == 1
+
+
+def test_drain_respects_the_batch_ceiling(monkeypatch):
+    calls = _fake_sweeps(monkeypatch, [(10, 0, 500)])
+    out = sweeper.run_stale_waiting_client_drain(
+        days=60, limit=10, max_batches=3
+    )
+    assert out["stopped_because"] == "max_batches"
+    assert len(calls) == 3
+
+
+def test_drain_respects_the_total_close_ceiling(monkeypatch):
+    calls = _fake_sweeps(monkeypatch, [(50, 0, 999)])
+    monkeypatch.setattr(sweeper, "DRAIN_MAX_TOTAL", 120)
+    out = sweeper.run_stale_waiting_client_drain(
+        days=60, limit=50, max_batches=99
+    )
+    assert out["stopped_because"] == "drain_max_total"
+    assert out["total_closed"] == 120
+    # Final batch is trimmed so the ceiling is never overshot.
+    assert calls[-1]["limit"] == 20
+
+
+def test_drain_passes_send_email_through(monkeypatch):
+    calls = _fake_sweeps(monkeypatch, [(5, 0, 5), (0, 0, 0)])
+    sweeper.run_stale_waiting_client_drain(days=60, limit=50, send_email=False)
+    assert all(c["send_email"] is False for c in calls)
+
+
+def test_drain_reports_every_stop_reason(monkeypatch):
+    """The final Slack line must exist for each stop reason, not KeyError."""
+    for script, expect in (
+        ([(5, 0, 5), (0, 0, 0)], "pool_empty"),
+        ([(0, 1, 9)], "no_progress"),
+        ([(1, 0, 99)], "max_batches"),
+    ):
+        _fake_sweeps(monkeypatch, script)
+        posted = []
+        monkeypatch.setattr(sweeper, "_post_report", posted.append)
+        out = sweeper.run_stale_waiting_client_drain(
+            days=60, limit=1, max_batches=1 if expect == "max_batches" else 9
+        )
+        assert out["stopped_because"] == expect
+        assert posted and "drain finished" in posted[0]
+
+
+# ---------------------------------------------------------------------------
 # Minimal runner so this file works without pytest installed
 # ---------------------------------------------------------------------------
 
