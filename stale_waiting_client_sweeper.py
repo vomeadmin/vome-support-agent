@@ -82,14 +82,23 @@ CLICKUP_API_TOKEN = os.environ.get("CLICKUP_API_TOKEN", "")
 CLICKUP_BASE = "https://api.clickup.com/api/v2"
 
 # ---------------------------------------------------------------------------
-# Configuration (all env-overridable so the rollout can be tuned without a
-# deploy). DRY RUN DEFAULTS TO ON: the first live run would otherwise hit the
-# entire historical backlog in one pass.
+# Configuration (all env-overridable so behavior can be tuned without a
+# deploy).
+#
+# DRY RUN DEFAULTS TO OFF (changed Aug 2026). It defaulted ON during rollout,
+# because the first live run would have hit the whole historical backlog at
+# once. That backlog is cleared and the write path is proven, so the guard is
+# now just friction: the daily 07:30 job is meant to close tickets. Set
+# STALE_SWEEP_DRY_RUN=true to put it back in report-only mode.
+#
+# The manual endpoint is unaffected and still previews by default:
+# POST /ops/sweeps/stale-waiting-client has dry_run=True in its request model,
+# so a hand trigger never closes anything unless the caller says so.
 # ---------------------------------------------------------------------------
 
 STALE_DAYS = int(os.environ.get("STALE_WAITING_DAYS", "30"))
 DRY_RUN_DEFAULT = os.environ.get(
-    "STALE_SWEEP_DRY_RUN", "true"
+    "STALE_SWEEP_DRY_RUN", "false"
 ).strip().lower() in ("1", "true", "yes")
 MAX_CLOSES = int(os.environ.get("STALE_SWEEP_MAX_CLOSES", "25"))
 # POLICY (set Aug 2026): the sweep NEVER emails clients. These tickets are
@@ -698,7 +707,9 @@ def run_stale_waiting_client_sweep(
     """Close tickets parked on the client for `days` with no reply.
 
     dry_run     assess and report, change nothing. Defaults to
-                STALE_SWEEP_DRY_RUN (which itself defaults to true).
+                STALE_SWEEP_DRY_RUN, which defaults to FALSE (the daily job
+                closes for real). The manual /ops endpoint passes dry_run=True
+                by default, so hand triggers still preview.
     days        staleness threshold, defaults to STALE_WAITING_DAYS.
     limit       max closes this run, defaults to STALE_SWEEP_MAX_CLOSES.
     force       bypass the once-per-day claim, for manual re-runs.

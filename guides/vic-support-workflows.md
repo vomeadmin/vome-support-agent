@@ -430,10 +430,17 @@ close is reversible by the client's own next message, without us having to
 announce it.
 
 ### Rollout controls
-`STALE_SWEEP_DRY_RUN` **defaults to true**: the sweep reports and changes
-nothing until it is explicitly set to `false`. The first live run would
-otherwise hit the entire historical backlog in one pass, so run it in dry mode
-for about a week first. `STALE_SWEEP_MAX_CLOSES` (default 25) caps a single run,
+`STALE_SWEEP_DRY_RUN` **defaults to `false`, so the daily job closes for real.**
+It defaulted to `true` during the Aug 2026 rollout, because the first live run
+would have hit the whole historical backlog at once. That backlog was cleared
+via drain mode, so the guard became friction and the default was flipped. Set
+`STALE_SWEEP_DRY_RUN=true` to put it back in report-only mode.
+
+The **manual endpoint still previews by default**: `StaleSweepRequest.dry_run`
+is `True`, so `POST /ops/sweeps/stale-waiting-client` with no body changes
+nothing. Only the scheduled job and an explicit `dry_run: false` write.
+
+`STALE_SWEEP_MAX_CLOSES` (default 25) caps a single run,
 oldest tickets first, and the report says how many were left behind. Nothing is
 capped silently: the 500-ticket paging cap is reported too.
 
@@ -532,7 +539,7 @@ This is the reverse direction of the auto-send flows: those push Zoho status
   `SLACK_CHANNEL_VOME_TICKETS`, `SLACK_CHANNEL_FINISHED_TASKS`,
   `SLACK_CHANNEL_ESCALATIONS` (defaults to `C0BB3JCT51A`), etc.
 - Stale awaiting-client sweep (§6B), all optional:
-  `STALE_SWEEP_DRY_RUN` (default `true`, flip to `false` to go live),
+  `STALE_SWEEP_DRY_RUN` (default `false`; set `true` for report-only),
   `STALE_WAITING_DAYS` (30), `STALE_SWEEP_MAX_CLOSES` (25),
   `STALE_SWEEP_SEND_CLOSING_EMAIL` (**false**, and it stays that way),
   `STALE_SWEEP_THROTTLE` (0.4s between tickets),

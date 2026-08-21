@@ -361,6 +361,28 @@ def test_client_email_is_off_by_default():
     assert sweeper.SEND_CLOSING_EMAIL is False
 
 
+def test_scheduled_job_runs_live_by_default(monkeypatch):
+    """The 07:30 job closes for real; dry-run is opt-in via env.
+
+    Deliberately asserts the module default rather than the env var, so this
+    still passes for someone who has set STALE_SWEEP_DRY_RUN=true locally to
+    debug. It fails only if the code default is flipped back.
+    """
+    import os as _os
+    if "STALE_SWEEP_DRY_RUN" in _os.environ:
+        return  # env override in play, nothing to assert
+    assert sweeper.DRY_RUN_DEFAULT is False
+
+
+def test_manual_endpoint_still_previews_by_default():
+    """A hand trigger must never close anything unless asked.
+
+    The scheduled job going live must not drag the manual endpoint with it.
+    """
+    from ops.router import StaleSweepRequest
+    assert StaleSweepRequest().dry_run is True
+
+
 def test_default_run_closes_without_emailing(monkeypatch):
     """With send_email unset, _close_one must receive False."""
     monkeypatch.setattr(

@@ -152,11 +152,11 @@ _scheduler.add_job(
     run_kb_sync,
     CronTrigger(hour=2, minute=0, timezone="America/Montreal"),
 )
-# Stale awaiting-client sweep at 07:30 ET. Defaults to DRY RUN until
-# STALE_SWEEP_DRY_RUN=false is set: the first live run hits the whole
-# historical backlog at once, so it reports for a week before it closes
-# anything. misfire_grace_time lets a restart within 30 min still run it, and
-# the sweep itself claims the day in Postgres so it cannot double-run.
+# Stale awaiting-client sweep at 07:30 ET. Runs LIVE: it closes tickets on both
+# Zoho and ClickUp and posts one Slack report. Set STALE_SWEEP_DRY_RUN=true to
+# put it back in report-only mode. misfire_grace_time lets a restart within
+# 30 min still run it, and the sweep claims the day in Postgres so it cannot
+# double-run.
 _scheduler.add_job(
     run_stale_waiting_client_sweep,
     CronTrigger(hour=7, minute=30, timezone="America/Montreal"),
