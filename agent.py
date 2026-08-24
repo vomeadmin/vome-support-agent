@@ -1189,6 +1189,10 @@ def _handle_auth_bypass_email_ticket(
     Returns True if the ticket was handled (reply sent) and normal processing
     should be skipped. Returns False if the check failed and the ticket should
     fall through to the standard pipeline.
+
+    VOICE: these replies are signed "Vome Support" / "Equipe Vome", so the
+    copy speaks as the team ("we checked", "nous avons"), never as one
+    person ("I checked", "j'ai"). Keep any new branch plural.
     """
     auth_result = _run_auth_check(contact_email)
     if auth_result is None:
@@ -1204,7 +1208,7 @@ def _handle_auth_bypass_email_ticket(
         if is_french:
             reply = (
                 f"Bonjour {name},\n\n"
-                "Bonne nouvelle — j'ai activé votre compte. "
+                "Bonne nouvelle, nous avons activé votre compte. "
                 "Vous devriez maintenant pouvoir vous connecter.\n\n"
                 "Si vous avez encore des difficultés, vous pouvez "
                 "réinitialiser votre mot de passe ici :\n"
@@ -1214,7 +1218,7 @@ def _handle_auth_bypass_email_ticket(
         else:
             reply = (
                 f"Hi {name},\n\n"
-                "Good news — I was able to activate your account. "
+                "Good news, we were able to activate your account. "
                 "You should be able to log in now.\n\n"
                 "If you still have trouble signing in, you can "
                 "reset your password here:\n"
@@ -1229,7 +1233,7 @@ def _handle_auth_bypass_email_ticket(
         if is_french:
             reply = (
                 f"Bonjour {name},\n\n"
-                "J'ai vérifié votre compte et il est déjà actif. "
+                "Nous avons vérifié votre compte et il est déjà actif. "
                 "Il semble que votre autorisation par e-mail ait "
                 "déjà été traitée.\n\n"
                 "Si vous avez du mal à vous connecter, essayez de "
@@ -1240,7 +1244,7 @@ def _handle_auth_bypass_email_ticket(
         else:
             reply = (
                 f"Hi {name},\n\n"
-                "I checked your account and it's already active. "
+                "We checked your account and it's already active. "
                 "It looks like your email authorization may have "
                 "already gone through.\n\n"
                 "If you're having trouble signing in, try resetting "
@@ -1260,7 +1264,7 @@ def _handle_auth_bypass_email_ticket(
         if is_french:
             reply = (
                 f"Bonjour {name},\n\n"
-                "Bonne nouvelle — votre profil bénévole existe déjà dans "
+                "Bonne nouvelle, votre profil bénévole existe déjà dans "
                 "notre système. Il a été créé par votre organisation, il "
                 "vous suffit donc de l'activer en créant vos identifiants "
                 "de connexion.\n\n"
@@ -1276,7 +1280,7 @@ def _handle_auth_bypass_email_ticket(
         else:
             reply = (
                 f"Hi {name},\n\n"
-                "Good news — your volunteer profile already exists in our "
+                "Good news, your volunteer profile already exists in our "
                 "system. It was set up by your organization, so you just "
                 "need to claim it by creating your login.\n\n"
                 f"Please register using this same email address "
@@ -1307,7 +1311,7 @@ def _handle_auth_bypass_email_ticket(
     if is_french:
         reply = (
             f"Bonjour {name},\n\n"
-            "Je n'ai pas trouvé de compte associé à cette adresse "
+            "Nous n'avons pas trouvé de compte associé à cette adresse "
             "e-mail. Il est possible que vous ayez utilisé une "
             "adresse différente lors de votre inscription.\n\n"
             "Si vous n'êtes pas encore inscrit, vous pouvez le "
@@ -1321,7 +1325,7 @@ def _handle_auth_bypass_email_ticket(
     else:
         reply = (
             f"Hi {name},\n\n"
-            "I wasn't able to find an account registered with "
+            "We weren't able to find an account registered with "
             "this email address. It's possible you signed up "
             "with a different email.\n\n"
             "If you haven't registered yet, you can do so here:\n"
