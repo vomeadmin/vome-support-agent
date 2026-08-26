@@ -554,6 +554,129 @@ def test_missing_contact_email_is_reported_but_still_closes(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Report: the replied bucket must separate in-flight from service failure
+# ---------------------------------------------------------------------------
+
+def _replied_verdict(days_waiting, num="9001"):
+    return {
+        "ticket_id": num, "ticket_number": num,
+        "subject": f"waited {days_waiting}d",
+        "days_idle": days_waiting + 1,
+        "days_waiting_on_us": days_waiting,
+        "clickup_status": "", "reason": "client replied",
+        "action": "skip_client_replied",
+    }
+
+
+def _report(**over):
+    base = {
+        "dry_run": False, "days": 30, "max_closes": 25, "send_email": False,
+        "scanned": 100, "eligible_total": 0, "capped": False,
+        "paging_cap_hit": False, "closed": [], "failed": [],
+        "skipped": {}, "errors": [], "run_key": "k",
+    }
+    base.update(over)
+    return sweeper._build_report(base)
+
+
+def test_recent_client_reply_is_not_reported_as_a_failure(monkeypatch):
+    """REGRESSION: a client who replied yesterday is a normal ticket.
+
+    _assess checks "did they reply" before the age window, so this bucket
+    catches fresh tickets too. The old report called all of them webhook
+    failures, which overstated the problem.
+    """
+    monkeypatch.setattr(sweeper, "REPLY_ALERT_DAYS", 7)
+    out = _report(skipped={"skip_client_replied": [
+        _replied_verdict(0), _replied_verdict(1), _replied_verdict(3),
+    ]})
+    assert "Waiting on US" not in out
+    assert "in flight (3)" in out
+
+
+def test_long_ignored_client_reply_is_escalated_loudly(monkeypatch):
+    monkeypatch.setattr(sweeper, "REPLY_ALERT_DAYS", 7)
+    out = _report(skipped={"skip_client_replied": [
+        _replied_verdict(1), _replied_verdict(210, "8001"),
+    ]})
+    assert "Waiting on US* (1)" in out
+    assert "#8001 (210d since their reply) waited 210d" in out
+    assert "in flight (1)" in out
+
+
+def test_waiting_on_us_list_is_sorted_longest_first(monkeypatch):
+    """REGRESSION: the list was unsorted and truncated at 10, so the ten
+    shown were arbitrary and the worst cases were the ones hidden."""
+    monkeypatch.setattr(sweeper, "REPLY_ALERT_DAYS", 7)
+    waits = [30, 310, 90, 8, 200]
+    out = _report(skipped={"skip_client_replied": [
+        _replied_verdict(w, f"n{w}") for w in waits
+    ]})
+    shown = [ln for ln in out.split("\n") if "since their reply" in ln]
+    ages = [int(ln.split("(")[1].split("d")[0]) for ln in shown]
+    assert ages == sorted(ages, reverse=True), ages
+    assert ages[0] == 310
+
+
+def test_waiting_on_us_says_how_many_it_truncated(monkeypatch):
+    monkeypatch.setattr(sweeper, "REPLY_ALERT_DAYS", 7)
+    out = _report(skipped={"skip_client_replied": [
+        _replied_verdict(100 + i, f"n{i}") for i in range(14)
+    ]})
+    assert "...and 4 more" in out
+
+
+def test_unknown_outbound_date_is_not_rendered_as_zero_days():
+    """REGRESSION: every no-timestamp line printed "(0d)", which reads as
+    brand new when the date is actually unknown."""
+    v = {
+        "ticket_id": "1", "ticket_number": "7000", "subject": "no date",
+        "days_idle": None, "action": "skip_no_timestamp",
+    }
+    line = sweeper._ticket_line(v)
+    assert "(date unknown)" in line
+    assert "0d" not in line
+
+
+def test_drift_list_is_sorted_oldest_first():
+    rows = [
+        {"ticket_id": str(d), "ticket_number": str(d), "subject": "x",
+         "days_idle": d, "clickup_status": "in progress"}
+        for d in (40, 300, 120)
+    ]
+    out = _report(skipped={"skip_clickup_busy": rows})
+    order = [ln for ln in out.split("\n") if "ClickUp:" in ln]
+    assert "#300" in order[0] and "#40" in order[-1]
+
+
+def test_report_survives_a_verdict_with_no_waiting_clock(monkeypatch):
+    """Defensive: an older verdict shape must not raise."""
+    monkeypatch.setattr(sweeper, "REPLY_ALERT_DAYS", 7)
+    out = _report(skipped={"skip_client_replied": [{
+        "ticket_id": "1", "ticket_number": "1", "subject": "legacy",
+        "days_idle": 99, "reason": "r",
+    }]})
+    assert "in flight (1)" in out
+
+
+def test_serializable_strips_both_timestamps():
+    """last_inbound is a datetime too; missing it breaks the HTTP response."""
+    from datetime import datetime as _dt, timezone as _tz
+    when = _dt(2026, 5, 1, tzinfo=_tz.utc)
+    out = sweeper._serializable({
+        "closed": [], "failed": [],
+        "skipped": {"skip_client_replied": [
+            {"last_outbound": when, "last_inbound": when, "n": 1}
+        ]},
+    })
+    row = out["skipped"]["skip_client_replied"][0]
+    assert row["last_outbound"] == when.isoformat()
+    assert row["last_inbound"] == when.isoformat()
+    import json
+    json.dumps(out)  # must not raise
+
+
+# ---------------------------------------------------------------------------
 # Drain mode
 # ---------------------------------------------------------------------------
 

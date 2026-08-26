@@ -402,9 +402,25 @@ the Slack report instead of a close. Same principle inside a single close: if
 the Zoho status write fails, the ClickUp and DB writes are skipped, because
 half-closing manufactures the exact drift this rule detects.
 
-A client reply newer than our last email is also blocked (`skip_client_replied`)
-and reported: the ticket should already have flipped to Processing, so it means
-the reply webhook missed it.
+A client reply newer than our last email is also blocked
+(`skip_client_replied`) and reported. Note that `_assess` checks "did they
+reply" **before** the age window, so this bucket catches every parked ticket
+with an unanswered reply, no matter how recent.
+
+That mattered: the report originally called all of them webhook failures, which
+was wrong for anything fresh and, because the list was unsorted and truncated
+at ten, it displayed the *least* important members while hiding the genuinely
+alarming ones. The report now splits the bucket on
+`STALE_SWEEP_REPLY_ALERT_DAYS` (default 7), using days since **their** reply:
+
+- **`Waiting on US`** (7+ days unanswered) is a service failure. Sorted longest
+  wait first, top ten listed, remainder counted.
+- **"replied recently, in flight"** (under 7 days) is a normal ticket. Counted
+  only, never listed.
+
+Every truncated list in the report now says how many it dropped, and a ticket
+with no resolvable date renders as `(date unknown)` rather than `(0d)`, which
+used to make an unknown date look brand new.
 
 ### The client is never emailed (policy, Aug 2026)
 `STALE_SWEEP_SEND_CLOSING_EMAIL` **defaults to `false`** and the team's decision
@@ -544,6 +560,7 @@ This is the reverse direction of the auto-send flows: those push Zoho status
   `STALE_SWEEP_SEND_CLOSING_EMAIL` (**false**, and it stays that way),
   `STALE_SWEEP_THROTTLE` (0.4s between tickets),
   `STALE_SWEEP_DEPARTMENT_ID`, `SLACK_CHANNEL_STALE_SWEEP`,
+  `STALE_SWEEP_REPLY_ALERT_DAYS` (7),
   `STALE_SWEEP_DRAIN_MAX_BATCHES` (20), `STALE_SWEEP_DRAIN_MAX_TOTAL`
   (600), `STALE_SWEEP_DRAIN_PAUSE` (20s),
   `CLICKUP_RESOLUTION_NO_RESPONSE` (needs manual ClickUp setup first).

@@ -129,6 +129,11 @@ RESOLUTION_KEY = os.environ.get("STALE_SWEEP_RESOLUTION", "no_response")
 # Marker on the internal note so an auto-close is always identifiable.
 AUTO_CLOSE_MARKER = "[vic-auto-close-stale]"
 
+# A client reply older than this with no answer from us is a service
+# failure and gets the loud "Waiting on US" section. Anything newer is a
+# normal in-flight ticket and is only counted, not listed.
+REPLY_ALERT_DAYS = int(os.environ.get("STALE_SWEEP_REPLY_ALERT_DAYS", "7"))
+
 # ClickUp statuses that agree the ticket is parked on the client.
 _CU_PARKED = {CU_AWAITING_CLIENT, CU_WAITING_ON_CLIENT}
 # ClickUp statuses that are already finished: no ClickUp write needed, and no
@@ -437,8 +442,14 @@ def _assess(ticket: dict, now: datetime, days: int) -> dict:
         "clickup_task_id": "",
         "clickup_status": "",
         "language": None,
-        "days_idle": 0,
+        # None means "unknown", NOT "today". Rendered as "date unknown".
+        "days_idle": None,
         "last_outbound": None,
+        "last_inbound": None,
+        # Only set for skip_client_replied: days since THEIR reply, i.e.
+        # how long they have been waiting on us. A different question
+        # from days_idle, which counts from OUR last email.
+        "days_waiting_on_us": None,
         "timestamp_source": "",
         "action": "",
         "reason": "",
@@ -474,11 +485,13 @@ def _assess(ticket: dict, now: datetime, days: int) -> dict:
         return verdict
 
     verdict["last_outbound"] = last_out
+    verdict["last_inbound"] = last_in
     verdict["timestamp_source"] = source
     verdict["days_idle"] = _days_between(last_out, now)
 
     if last_in and last_in > last_out:
         verdict["action"] = "skip_client_replied"
+        verdict["days_waiting_on_us"] = _days_between(last_in, now)
         verdict["reason"] = (
             f"client replied {last_in.strftime('%Y-%m-%d')}, after our "
             f"{last_out.strftime('%Y-%m-%d')} email; the parked status is "
@@ -587,9 +600,29 @@ def _close_one(verdict: dict, send_email: bool) -> dict:
 # Slack report
 # ---------------------------------------------------------------------------
 
-def _ticket_line(v: dict) -> str:
+def _oldest_first(rows: list[dict]) -> list[dict]:
+    """Longest idle first, tolerating an unknown date."""
+    return sorted(rows, key=lambda v: v.get("days_idle") or 0,
+                  reverse=True)
+
+
+def _ticket_line(
+    v: dict, days: int | None = -1, age_label: str = ""
+) -> str:
+    """One report line. `days` overrides which clock is shown.
+
+    The default of -1 means "use days_idle". A None age prints
+    "date unknown" rather than "(0d)", which previously made a ticket with
+    no resolvable outbound date look brand new. `age_label` names the clock
+    inside the stamp, so a line reads "(310d since their reply) subject"
+    rather than trailing the label after the subject.
+    """
     num = f"#{v['ticket_number']}" if v["ticket_number"] else v["ticket_id"]
-    return f"* {num} ({v['days_idle']}d) {v['subject']}"
+    age = v.get("days_idle") if days == -1 else days
+    stamp = (
+        f"({age}d{age_label})" if age is not None else "(date unknown)"
+    )
+    return f"* {num} {stamp} {v['subject']}"
 
 
 def _build_report(summary: dict) -> str:
@@ -646,20 +679,50 @@ def _build_report(summary: dict) -> str:
             f"\n:warning: *Status drift* ({len(drift)}): Zoho says "
             f"awaiting-client, ClickUp says active work. Not closed."
         )
-        for v in drift[:10]:
+        for v in _oldest_first(drift)[:10]:
             lines.append(
                 f"{_ticket_line(v)}, ClickUp: {v['clickup_status']}"
             )
+        if len(drift) > 10:
+            lines.append(f"  ...and {len(drift) - 10} more")
 
-    replied = summary["skipped"].get("skip_client_replied", [])
-    if replied:
-        lines.append(
-            f"\n:warning: *Client already replied* ({len(replied)}): still "
-            f"parked in Zoho, so the reply webhook likely missed them. Not "
-            f"closed."
+    # This bucket mixes two unrelated situations, because _assess checks
+    # "did they reply" BEFORE the age window. A client who answered
+    # yesterday is a normal in-flight ticket; one who answered seven
+    # months ago is a service failure. Reporting them as a single number
+    # overstates the problem and buries the cases that matter.
+    stale_reply, fresh_reply = [], []
+    for v in summary["skipped"].get("skip_client_replied", []):
+        waiting = v.get("days_waiting_on_us") or 0
+        if waiting >= REPLY_ALERT_DAYS:
+            stale_reply.append(v)
+        else:
+            fresh_reply.append(v)
+
+    if stale_reply:
+        stale_reply.sort(
+            key=lambda v: v.get("days_waiting_on_us") or 0, reverse=True
         )
-        for v in replied[:10]:
-            lines.append(f"{_ticket_line(v)}, {v['reason']}")
+        lines.append(
+            f"\n:rotating_light: *Waiting on US* ({len(stale_reply)}): the "
+            f"client replied and nobody has answered in "
+            f"{REPLY_ALERT_DAYS}+ days. Longest wait first. Not closed."
+        )
+        for v in stale_reply[:10]:
+            lines.append(_ticket_line(
+                v,
+                days=v.get("days_waiting_on_us"),
+                age_label=" since their reply",
+            ))
+        if len(stale_reply) > 10:
+            lines.append(f"  ...and {len(stale_reply) - 10} more")
+
+    if fresh_reply:
+        lines.append(
+            f"\nClient replied recently, in flight ({len(fresh_reply)}): "
+            f"answered within {REPLY_ALERT_DAYS} days, so these are "
+            f"normal. Not closed."
+        )
 
     no_ts = summary["skipped"].get("skip_no_timestamp", [])
     if no_ts:
@@ -669,6 +732,8 @@ def _build_report(summary: dict) -> str:
         )
         for v in no_ts[:10]:
             lines.append(_ticket_line(v))
+        if len(no_ts) > 10:
+            lines.append(f"  ...and {len(no_ts) - 10} more")
 
     recent = summary["skipped"].get("skip_recent", [])
     if recent:
@@ -817,10 +882,13 @@ def run_stale_waiting_client_sweep(
 
 def _serializable(summary: dict) -> dict:
     """Verdict dicts carry datetimes; make the HTTP response JSON-safe."""
+    stamps = ("last_outbound", "last_inbound")
+
     def clean(v: dict) -> dict:
-        out = {k: val for k, val in v.items() if k != "last_outbound"}
-        last = v.get("last_outbound")
-        out["last_outbound"] = last.isoformat() if last else None
+        out = {k: val for k, val in v.items() if k not in stamps}
+        for key in stamps:
+            when = v.get(key)
+            out[key] = when.isoformat() if when else None
         return out
 
     return {
