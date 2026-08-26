@@ -1,6 +1,7 @@
 {
   "permissions": {
     "allow": [
+      "Bash(py scripts/reactivate_clickup_webhook.py:*)",
       "mcp__zoho__ZohoDesk_getTickets",
       "mcp__zoho__ZohoDesk_searchTickets",
       "mcp__zoho__ZohoDesk_getThreads",
