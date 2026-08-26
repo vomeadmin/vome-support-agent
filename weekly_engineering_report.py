@@ -756,8 +756,32 @@ def run_engineering_report(
 
 
 def _post(message: str, dry_run: bool) -> bool:
-    """Post the report. Dry runs go to the agent log, never the team."""
-    if dry_run or not REPORT_CHANNEL:
+    """Post the report. Dry runs go to the agent log, never the team.
+
+    The two reasons for landing in the agent log are reported differently on
+    purpose. A dry run is intended. A missing SLACK_CHANNEL_ENG_REPORT while
+    dry_run is false is a MISCONFIGURATION, and from Slack the two looked
+    identical: the report appeared in the agent log tagged "DRY RUN", which
+    reads as the schedule never having fired at all.
+    """
+    if not dry_run and not REPORT_CHANNEL:
+        print(
+            "[eng-report] MISCONFIGURED: ENG_REPORT_DRY_RUN is false but "
+            "SLACK_CHANNEL_ENG_REPORT is unset, so there is nowhere to post. "
+            "Falling back to the agent log."
+        )
+        try:
+            post_to_log(
+                ":warning: *eng-report misconfigured*: "
+                "`ENG_REPORT_DRY_RUN=false` but `SLACK_CHANNEL_ENG_REPORT` "
+                "is unset, so this could not reach the team channel.\n\n"
+                f"{message}"
+            )
+        except Exception as e:
+            print(f"[eng-report] agent-log post failed: {e}")
+        return False
+
+    if dry_run:
         try:
             post_to_log(f"[eng-report DRY RUN]\n{message}")
             return True
