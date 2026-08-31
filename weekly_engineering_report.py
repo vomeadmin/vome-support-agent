@@ -627,6 +627,18 @@ def _format_monday(flow: dict | None, standing: dict, weekend: dict,
 
 
 def _plate_block(standing: dict) -> list[str]:
+    """The plate table only.
+
+    The "waiting on the client" rows are deliberately NOT rendered. They are
+    not the engineers' load, user education was permanently 0, and a large
+    number sitting under their names invited exactly the misreading the block
+    was meant to prevent.
+
+    They are still computed and still stored in eng_report_figures, so the
+    history stays queryable and the flow lines that depend on the parked
+    population ("pushed to client", "closed from client pile", "back from
+    client") are unaffected. Nothing is lost but the display.
+    """
     lines = [
         "*What is on the plate right now*",
         "```",
@@ -636,12 +648,6 @@ def _plate_block(standing: dict) -> list[str]:
         lines.append(_row(_ROW_LABEL[status], standing["by_status"][status]))
     lines.append(_rule())
     lines.append(_row("total on plate", standing["plate"]))
-    lines.append("")
-    lines.append("Waiting on the client (not yours)")
-    for status in _PARKED_ROWS:
-        lines.append(_row(
-            "  " + _ROW_LABEL[status], standing["by_status"][status]
-        ))
     lines.append("```")
     lines.append(
         f"Shared by both: {standing['plate'].get('shared_both', 0)} of "

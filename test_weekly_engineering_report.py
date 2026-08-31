@@ -393,6 +393,31 @@ def test_reports_render():
     assert monday.count("```") % 2 == 0
 
 
+def test_parked_rows_are_computed_but_never_rendered():
+    """The client-waiting block is off the report by request.
+
+    It must still be COMPUTED, because eng_report_figures keeps the history and
+    the flow lines that depend on the parked population would break without it.
+    So this asserts the display is gone while the data survives.
+    """
+    prev, curr = _demo_snapshots()
+    st = rpt._compute_standing(curr)
+    fl = rpt._compute_flow(prev, curr)
+    now = datetime.now(timezone.utc)
+
+    # Data still there.
+    assert st["parked"]["total"] > 0
+    assert rpt.CU_AWAITING_CLIENT in st["by_status"]
+
+    for body in (
+        rpt._format_friday(fl, st, [], now - timedelta(days=7), now),
+        rpt._format_monday(fl, st, {"per_engineer": {}}, now, None),
+    ):
+        assert "Waiting on the client" not in body
+        assert "awaiting client response" not in body
+        assert "user education" not in body.split("*Volume in versus out*")[0]
+
+
 def test_first_run_says_so_instead_of_faking_flow():
     _, curr = _demo_snapshots()
     st = rpt._compute_standing(curr)
