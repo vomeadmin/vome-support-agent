@@ -840,12 +840,22 @@ async def knowledge_book_setup_guide():
 
 
 @app.post("/knowledge-book/refresh")
-async def knowledge_book_refresh():
+async def knowledge_book_refresh(request: Request):
     """Run the weekly self-learning pass now: analyse newly closed
-    tickets and ClickUp tasks, regenerate the book, refresh the cache."""
+    tickets and ClickUp tasks, regenerate the book, refresh the cache.
+
+    Pass ?force=true to skip the once-a-day claim. Needed after a deploy
+    kills an in-flight run, which otherwise leaves the day claimed with
+    nothing to show for it. Both passes are incremental, so a forced
+    re-run resumes rather than repeats.
+    """
     global _analysis_running, _analysis_status
     if _analysis_running:
         return {"status": "already_running", "info": _analysis_status}
+
+    force = request.query_params.get("force", "").lower() in (
+        "1", "true", "yes"
+    )
 
     import threading
 
@@ -859,7 +869,9 @@ async def knowledge_book_refresh():
         }
         try:
             from ticket_analyzer import run_weekly_knowledge_refresh
-            _analysis_status["result"] = run_weekly_knowledge_refresh()
+            _analysis_status["result"] = run_weekly_knowledge_refresh(
+                force=force
+            )
             _analysis_status["status"] = "completed"
         except Exception as e:
             _analysis_status["status"] = f"failed: {e}"

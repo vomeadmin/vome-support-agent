@@ -361,3 +361,60 @@ def test_unparseable_analysis_returns_none_instead_of_raising(monkeypatch):
     )
 
     assert clickup_knowledge.analyze_task({"name": "n"}, []) is None
+
+
+# =====================================================================
+# Forced refresh
+#
+# The refresh claims its date so a restart near the cron trigger cannot
+# double-run it. A deploy kills the in-flight thread and leaves the day
+# claimed, so without an override the operator who just lost the run
+# cannot start another until tomorrow.
+# =====================================================================
+
+def test_a_normal_refresh_claims_the_plain_date(monkeypatch):
+    import database
+    import ticket_analyzer
+
+    claimed = []
+    monkeypatch.setattr(
+        database, "claim_sweeper_run",
+        lambda key: claimed.append(key) or False,
+    )
+
+    out = ticket_analyzer.run_weekly_knowledge_refresh()
+
+    assert out == {"status": "already_ran"}
+    assert len(claimed) == 1
+    assert claimed[0].startswith("knowledge-refresh-")
+    assert "forced" not in claimed[0]
+
+
+def test_a_forced_refresh_uses_a_fresh_key_so_it_is_not_blocked(monkeypatch):
+    import database
+    import ticket_analyzer
+
+    claimed = []
+
+    def _claim(key):
+        claimed.append(key)
+        # The plain date is already taken by the killed run.
+        return "forced" in key
+
+    monkeypatch.setattr(database, "claim_sweeper_run", _claim)
+    monkeypatch.setattr(database, "finish_sweeper_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        ticket_analyzer, "run_full_analysis",
+        lambda **k: {"processed": 0, "remaining": 0},
+    )
+    monkeypatch.setattr(
+        ticket_analyzer, "generate_knowledge_book", lambda: None
+    )
+    monkeypatch.setattr(
+        ticket_analyzer, "_post_refresh_summary", lambda summary: None
+    )
+
+    out = ticket_analyzer.run_weekly_knowledge_refresh(force=True)
+
+    assert out.get("status") != "already_ran", "force must not be blocked"
+    assert "forced" in claimed[0]

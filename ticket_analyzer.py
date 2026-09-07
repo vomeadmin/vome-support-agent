@@ -1330,7 +1330,7 @@ WEEKLY_TICKET_LIMIT = int(os.environ.get("KNOWLEDGE_TICKET_LIMIT", "200"))
 WEEKLY_TASK_LIMIT = int(os.environ.get("KNOWLEDGE_TASK_LIMIT", "150"))
 
 
-def run_weekly_knowledge_refresh() -> dict:
+def run_weekly_knowledge_refresh(force: bool = False) -> dict:
     """Learn from the week's closed work, then rebuild the book.
 
     This is what makes the agent self-learning rather than a one-off
@@ -1340,10 +1340,25 @@ def run_weekly_knowledge_refresh() -> dict:
 
     Claims the run in Postgres so a restart near the trigger time, or a
     second dyno, cannot double-run it.
+
+    `force` skips that claim. It exists for the manual path: a deploy
+    restarts the dyno and kills an in-flight refresh, and without an
+    override the day stays claimed, so the operator who just lost the run
+    cannot start another one until tomorrow. The scheduled job never
+    passes it.
+
+    Restarting is cheap because both passes are incremental. Tickets and
+    tasks already analysed are skipped, so a forced re-run picks up where
+    the killed one stopped rather than redoing its work.
     """
     from database import claim_sweeper_run, finish_sweeper_run
 
     run_key = f"knowledge-refresh-{datetime.now().strftime('%Y-%m-%d')}"
+    if force:
+        run_key = (
+            f"{run_key}-forced-{datetime.now().strftime('%H%M%S')}"
+        )
+        print(f"[KNOWLEDGE] forced run, claiming {run_key}")
     if not claim_sweeper_run(run_key):
         print(f"[KNOWLEDGE] {run_key} already claimed -- skipping")
         return {"status": "already_ran"}
