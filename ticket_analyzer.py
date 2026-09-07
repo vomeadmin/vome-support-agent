@@ -56,6 +56,7 @@ from agent import (
 )
 from database import _get_engine, DATABASE_URL, init_db
 from model_config import SUPPORT_MODEL
+import knowledge_synthesis as ks
 
 # Fix Windows encoding
 if sys.stdout.encoding != "utf-8":
@@ -557,6 +558,77 @@ Rules:
 Write in markdown. Keep it under 2500 words."""
 
 
+ENGINEERING_MAP_PROMPT = """You are extracting raw observations from one batch of finished Vome engineering tasks, for the "How these issues get resolved" section of the support knowledge book. This is batch {index} of {total}; a later pass merges every batch.
+
+TASKS IN THIS BATCH:
+
+{task_summaries}
+
+Extract, in compact markdown, only what these tasks actually show:
+
+- **Issues**: what the client experienced, one line each, grouped when two tasks are the same underlying problem
+- **Causes**: what each turned out to be. Write "not stated" where the task never says.
+- **Diagnostic questions**: the questions that narrowed it down, phrased so support could ask them again
+- **Safe explanations**: how the cause was described to the client, with no internal detail
+- **User education**: the cases that were not bugs, and what the client was actually shown
+- **Careful**: where the obvious answer was wrong
+- **Article gaps**: topics flagged as needing a help center article
+
+Rules:
+- Only what is in these tasks. Where a cause is not stated, say so rather than inferring one.
+- Mark repetition, for example "(4 tasks)". The merge pass uses that to tell a pattern from a one-off.
+- No code, no file names, no engineer names.
+- Be terse. Notes, not prose.
+
+Return only the notes."""
+
+
+ENGINEERING_REDUCE_PROMPT = """You are writing the "How these issues get resolved" section of the Vome Support Knowledge Book.
+
+Below are observations extracted from {batch_count} batches spanning {task_count} finished engineering tasks.
+
+{notes}
+
+Merge them into one training section that a support agent reads before drafting a reply:
+
+1. **Recurring issues** -- the problems that come up again and again, what they look like from the client's side, and what they usually turn out to be
+2. **Diagnostic questions that work** -- grouped by symptom
+3. **Safe client-facing explanations** -- each recurring cause in plain warm language, zero internal detail
+4. **User education patterns** -- the cases that were not bugs, and how the client was walked through it
+5. **Where to be careful** -- where the obvious answer is wrong, or support should confirm before promising
+6. **Article gaps** -- topics that keep generating tickets with no help center article
+
+Rules:
+- Merge duplicates and lead with what appears most often. Where the notes carry counts, weight by them.
+- Keep a one-off only if it is genuinely instructive, and mark it as rare.
+- Never include detail unsafe to repeat to a client: no code, no file names, no engineer names.
+- Do not promise fixes or dates. A past fix does not mean a current one is coming.
+- Be specific. "Shifts appear an hour off when the org timezone and the shift timezone disagree" beats "timezone issues occur".
+
+Write in markdown. Keep it under 2500 words."""
+
+
+def _task_summary(t: dict) -> str:
+    """One closed task rendered for synthesis."""
+    a = t["analysis"]
+    questions = a.get("diagnostic_questions") or []
+    return (
+        f"Task: {t['name']}\n"
+        f"  Category: {a.get('category', '?')} / "
+        f"module: {a.get('module', '?')}\n"
+        f"  Client saw: {a.get('problem_statement', 'N/A')}\n"
+        f"  Root cause: {a.get('root_cause', 'not stated')}\n"
+        f"  Resolution: {a.get('resolution_type', '?')} -- "
+        f"{a.get('resolution_summary', 'N/A')}\n"
+        f"  Told the client: {a.get('client_facing_explanation', '')}\n"
+        f"  Diagnostic questions: {', '.join(questions)}\n"
+        f"  Recurrence risk: {a.get('recurrence_risk', '?')}\n"
+        f"  Article candidate: {a.get('kb_article_candidate', False)} "
+        f"({a.get('kb_article_topic') or 'none'})\n"
+        f"  Training notes: {a.get('training_notes', '')}"
+    )
+
+
 def _generate_engineering_section() -> int:
     """Synthesise closed ClickUp tasks into the engineering_resolutions
     section. Returns the number of tasks it was built from.
@@ -580,64 +652,134 @@ def _generate_engineering_section() -> int:
         f"{len(task_analyses)} closed tasks..."
     )
 
-    summaries = []
-    for t in task_analyses:
-        a = t["analysis"]
-        questions = a.get("diagnostic_questions") or []
-        summaries.append(
-            f"Task: {t['name']}\n"
-            f"  Category: {a.get('category', '?')} / "
-            f"module: {a.get('module', '?')}\n"
-            f"  Client saw: {a.get('problem_statement', 'N/A')}\n"
-            f"  Root cause: {a.get('root_cause', 'not stated')}\n"
-            f"  Resolution: {a.get('resolution_type', '?')} -- "
-            f"{a.get('resolution_summary', 'N/A')}\n"
-            f"  Told the client: {a.get('client_facing_explanation', '')}\n"
-            f"  Diagnostic questions: {', '.join(questions)}\n"
-            f"  Recurrence risk: {a.get('recurrence_risk', '?')}\n"
-            f"  Article candidate: {a.get('kb_article_candidate', False)} "
-            f"({a.get('kb_article_topic') or 'none'})\n"
-            f"  Training notes: {a.get('training_notes', '')}"
-        )
+    selected = ks.rank_and_select(
+        task_analyses,
+        value_of=lambda t: t["analysis"].get("training_value"),
+        recency_of=lambda t: t.get("closed_at"),
+        module_of=lambda t: t["analysis"].get("module"),
+    )
+    summaries = [_task_summary(t) for t in selected]
 
-    summaries_text = "\n\n---\n\n".join(summaries)
-    if len(summaries_text) > 20000:
-        summaries_text = summaries_text[:20000] + (
-            "\n\n[... additional tasks truncated]"
-        )
-
-    prompt = ENGINEERING_SYNTHESIS_PROMPT.format(
-        task_count=len(task_analyses),
-        task_summaries=summaries_text,
+    content = ks.map_reduce_section(
+        summaries,
+        section_title="How These Issues Get Resolved",
+        direct_prompt=lambda joined: ENGINEERING_SYNTHESIS_PROMPT.format(
+            task_count=len(selected),
+            task_summaries=joined,
+        ),
+        map_prompt=lambda joined, i, n: ENGINEERING_MAP_PROMPT.format(
+            index=i, total=n, task_summaries=joined,
+        ),
+        reduce_prompt=lambda notes, batches: ENGINEERING_REDUCE_PROMPT.format(
+            batch_count=batches,
+            task_count=len(selected),
+            notes=notes,
+        ),
+        client=_client,
+        model=SUPPORT_MODEL,
+        delay=CLAUDE_DELAY,
     )
 
-    try:
-        response = _client.messages.create(
-            model=SUPPORT_MODEL,
-            max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        content = response.content[0].text
+    if not content:
+        print("[BOOK] Failed to generate engineering section")
+        return 0
 
+    header = ks.coverage_note(len(selected), len(task_analyses))
+    try:
         (KNOWLEDGE_BOOK_DIR / "engineering_resolutions.md").write_text(
             "# How These Issues Get Resolved\n\n"
-            f"*Generated from {len(task_analyses)} closed ClickUp tasks "
-            f"| Last updated: "
+            f"{header}\n"
+            f"*Last updated: "
             f"{datetime.now().strftime('%Y-%m-%d %H:%M')}*\n\n"
             f"{content}",
             encoding="utf-8",
         )
-        _save_knowledge_section(
-            "engineering_resolutions",
-            "How These Issues Get Resolved",
-            content,
-            len(task_analyses),
-        )
-        print("[BOOK] Written: engineering_resolutions")
-        return len(task_analyses)
     except Exception as e:
-        print(f"[BOOK] Failed to generate engineering section: {e}")
-        return 0
+        print(f"[BOOK] Could not write engineering_resolutions.md: {e}")
+
+    _save_knowledge_section(
+        "engineering_resolutions",
+        "How These Issues Get Resolved",
+        f"{header}\n\n{content}",
+        len(task_analyses),
+    )
+    print(
+        f"[BOOK] Written: engineering_resolutions "
+        f"({len(selected)}/{len(task_analyses)})"
+    )
+    return len(task_analyses)
+
+
+BOOK_MAP_PROMPT = """You are extracting raw observations from one batch of real Vome support tickets, for the "{section_title}" section of the support knowledge book. This is batch {index} of {total}; a later pass merges every batch into the final section.
+
+TICKETS IN THIS BATCH:
+
+{ticket_summaries}
+
+Extract, in compact markdown, only what these tickets actually show:
+
+- **Scenarios**: the distinct situations that appear, one line each
+- **Sam's moves**: what he does step by step in each, quoting his wording where it is distinctive
+- **Phrases**: exact phrases worth reusing
+- **Follow-up questions**: what he asks to narrow things down
+- **Decision points**: what made him answer directly vs create a ticket vs escalate
+- **Red flags**: anything that needed special handling
+- **FAQ candidates**: questions that recur
+
+Rules:
+- Only what is in these tickets. Do not generalise past them and do not invent examples.
+- Mark repetition, for example "(3 tickets)". The merge pass uses that to tell a pattern from a one-off.
+- Be terse. Notes, not prose.
+
+Return only the notes."""
+
+
+BOOK_REDUCE_PROMPT = """You are writing the "{section_title}" section of the Vome Support Knowledge Book, a living training guide for support agents (human and AI), covering the category "{category}".
+
+Below are observations extracted from {batch_count} batches spanning {ticket_count} real tickets handled by Sam, the CEO.
+
+{notes}
+
+Merge them into one training section:
+
+1. **Overview** -- what this category covers, how common it is
+2. **Sam's Approach** -- tone, style, the specific phrases he uses
+3. **Common Scenarios** -- the situations that come up, with his response patterns
+4. **Example Responses** -- 3-5 templates in his real language, not generic
+5. **Key Decision Points** -- when to answer directly vs create a ticket vs escalate
+6. **Red Flags** -- what needs special handling
+7. **FAQ Entries** -- common questions answered in his style
+
+Rules:
+- Merge duplicates across batches and lead with what appears most often. Where the notes carry counts, weight by them.
+- Keep a one-off only if it is genuinely instructive, and mark it as rare.
+- Use Sam's actual language. "Sam says 'Let me take a look'" beats "respond warmly".
+- Include French patterns if the notes show them.
+- Flag anything referencing features or behaviour that may since have changed.
+
+Write in markdown, for both humans and AI agents."""
+
+
+def _ticket_summary(t: dict) -> str:
+    """One ticket rendered for synthesis."""
+    a = t["analysis"]
+    return (
+        f"Ticket #{t['ticket_number']}: {t['subject']}\n"
+        f"  Category: {a.get('category', '?')}\n"
+        f"  Module: {a.get('module', '?')}\n"
+        f"  Resolution: {a.get('resolution_type', '?')}\n"
+        f"  Sam's approach: {a.get('sam_response_pattern', 'N/A')}\n"
+        f"  Key phrases: {', '.join(a.get('key_phrases', []))}\n"
+        f"  Follow-ups asked: "
+        f"{', '.join(a.get('follow_up_questions_asked', []))}\n"
+        f"  Resolution: {a.get('resolution_summary', 'N/A')}\n"
+        f"  Training value: {a.get('training_value', '?')}\n"
+        f"  Training notes: {a.get('training_notes', '')}\n"
+        f"  Tone notes: {a.get('sam_tone_notes', '')}\n"
+        f"  FAQ topic: {a.get('suggested_faq_topic', 'none')}\n"
+        f"  Was deflectable: {a.get('was_deflectable', False)}\n"
+        f"  Language: {t['language']}"
+    )
 
 
 def generate_knowledge_book():
@@ -683,79 +825,76 @@ def generate_knowledge_book():
             f"({len(tickets)} tickets)..."
         )
 
-        # Build summaries for Claude
-        summaries = []
-        for t in tickets:
-            a = t["analysis"]
-            summary = (
-                f"Ticket #{t['ticket_number']}: {t['subject']}\n"
-                f"  Category: {a.get('category', '?')}\n"
-                f"  Module: {a.get('module', '?')}\n"
-                f"  Resolution: {a.get('resolution_type', '?')}\n"
-                f"  Sam's approach: {a.get('sam_response_pattern', 'N/A')}\n"
-                f"  Key phrases: {', '.join(a.get('key_phrases', []))}\n"
-                f"  Follow-ups asked: {', '.join(a.get('follow_up_questions_asked', []))}\n"
-                f"  Resolution: {a.get('resolution_summary', 'N/A')}\n"
-                f"  Training value: {a.get('training_value', '?')}\n"
-                f"  Training notes: {a.get('training_notes', '')}\n"
-                f"  Tone notes: {a.get('sam_tone_notes', '')}\n"
-                f"  FAQ topic: {a.get('suggested_faq_topic', 'none')}\n"
-                f"  Was deflectable: {a.get('was_deflectable', False)}\n"
-                f"  Language: {t['language']}"
-            )
-            summaries.append(summary)
+        # Rank by training value then recency, and round-robin across
+        # modules, so a section reflects the spread of the category
+        # rather than whichever entries happened to be analysed first.
+        selected = ks.rank_and_select(
+            tickets,
+            value_of=lambda t: t["analysis"].get("training_value"),
+            # Zoho ticket numbers increase over time, so they double as
+            # the recency key. analyzed_tickets carries no ticket date.
+            recency_of=lambda t: t.get("ticket_number"),
+            module_of=lambda t: t["analysis"].get("module"),
+        )
+        summaries = [_ticket_summary(t) for t in selected]
 
-        # Truncate if too many tickets
-        summaries_text = "\n\n---\n\n".join(summaries)
-        if len(summaries_text) > 15000:
-            summaries_text = summaries_text[:15000] + (
-                "\n\n[... additional tickets truncated]"
-            )
-
-        prompt = BOOK_SYNTHESIS_PROMPT.format(
-            ticket_count=len(tickets),
+        section_content = ks.map_reduce_section(
+            summaries,
             section_title=title,
-            category=category,
-            ticket_summaries=summaries_text,
+            direct_prompt=lambda joined: BOOK_SYNTHESIS_PROMPT.format(
+                ticket_count=len(selected),
+                section_title=title,
+                category=category,
+                ticket_summaries=joined,
+            ),
+            map_prompt=lambda joined, i, n: BOOK_MAP_PROMPT.format(
+                section_title=title,
+                index=i,
+                total=n,
+                ticket_summaries=joined,
+            ),
+            reduce_prompt=lambda notes, batches: BOOK_REDUCE_PROMPT.format(
+                section_title=title,
+                category=category,
+                batch_count=batches,
+                ticket_count=len(selected),
+                notes=notes,
+            ),
+            client=_client,
+            model=SUPPORT_MODEL,
+            delay=CLAUDE_DELAY,
         )
 
-        try:
-            response = _client.messages.create(
-                model=SUPPORT_MODEL,
-                max_tokens=4000,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-            )
-            section_content = response.content[0].text
-            sections[category] = {
-                "title": title,
-                "content": section_content,
-                "ticket_count": len(tickets),
-            }
+        if not section_content:
+            print(f"[BOOK] Failed to generate {title}")
+            continue
 
-            # Write to file
-            filename = f"{category}.md"
-            filepath = KNOWLEDGE_BOOK_DIR / filename
-            filepath.write_text(
+        header = ks.coverage_note(len(selected), len(tickets))
+        sections[category] = {
+            "title": title,
+            "content": section_content,
+            "ticket_count": len(tickets),
+        }
+
+        try:
+            (KNOWLEDGE_BOOK_DIR / f"{category}.md").write_text(
                 f"# {title}\n\n"
-                f"*Generated from {len(tickets)} tickets "
-                f"| Last updated: "
+                f"{header}\n"
+                f"*Last updated: "
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M')}*\n\n"
                 f"{section_content}",
                 encoding="utf-8",
             )
-            print(f"[BOOK] Written: {filename}")
-
-            # Save to database
-            _save_knowledge_section(
-                category, title, section_content, len(tickets)
-            )
-
-            time.sleep(CLAUDE_DELAY)
-
         except Exception as e:
-            print(f"[BOOK] Failed to generate {title}: {e}")
+            print(f"[BOOK] Could not write {category}.md: {e}")
+
+        # ticket_count stays the full category size so the status
+        # endpoint reports the real corpus, not the sampled slice.
+        _save_knowledge_section(
+            category, title, f"{header}\n\n{section_content}", len(tickets)
+        )
+        print(f"[BOOK] Written: {title} ({len(selected)}/{len(tickets)})")
+        time.sleep(CLAUDE_DELAY)
 
     # Generate Sam's Voice guide (cross-cutting)
     _generate_voice_guide(analyses)

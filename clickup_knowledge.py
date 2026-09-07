@@ -424,7 +424,7 @@ def get_all_task_analyses() -> list[dict]:
             rows = conn.execute(
                 sql_text(
                     "SELECT task_id, name, list_name, category, module, "
-                    "       zoho_ticket_id, analysis "
+                    "       zoho_ticket_id, closed_at, analysis "
                     "FROM analyzed_clickup_tasks ORDER BY analyzed_at"
                 )
             ).mappings().all()
@@ -441,6 +441,8 @@ def get_all_task_analyses() -> list[dict]:
                 "category": r["category"],
                 "module": r["module"],
                 "zoho_ticket_id": r["zoho_ticket_id"],
+                # Recency key for knowledge_synthesis.rank_and_select.
+                "closed_at": r["closed_at"],
                 "analysis": analysis or {},
             })
         return out

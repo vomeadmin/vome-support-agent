@@ -211,6 +211,65 @@ def test_fetch_is_marked_incomplete_when_an_article_detail_fails(monkeypatch):
     )
 
 
+# ---------------------------------------------------------------------
+# 4. Transient detail failures are retried
+#
+# The first production run hit two getArticle failures out of ~507. Both
+# ids fetched fine on retry, so they were proxy blips. Without a retry a
+# single blip marks every run incomplete, which blocks the delete step
+# forever and means an article deleted in Zoho is never pruned.
+# ---------------------------------------------------------------------
+
+def test_a_transient_detail_failure_is_retried(monkeypatch):
+    calls = []
+
+    def _call(tool_name, arguments):
+        if tool_name != "ZohoDesk_getArticle":
+            return None
+        calls.append(arguments["path_variables"]["id"])
+        if len(calls) == 1:
+            return {"isError": True, "content": []}
+        return {"id": "a1", "title": "Recovered", "answer": "body " * 20}
+
+    monkeypatch.setattr(kb_sync, "_zoho_desk_call", _call)
+    monkeypatch.setattr(kb_sync, "_unwrap_mcp_result", lambda r: r)
+    monkeypatch.setattr(kb_sync.time, "sleep", lambda *_: None)
+
+    got = kb_sync._fetch_article_detail("a1")
+
+    assert got is not None and got["title"] == "Recovered"
+    assert len(calls) == 2, "must retry after a transient failure"
+
+
+def test_retries_are_bounded(monkeypatch):
+    calls = []
+
+    def _call(tool_name, arguments):
+        calls.append(1)
+        return {"isError": True, "content": []}
+
+    monkeypatch.setattr(kb_sync, "_zoho_desk_call", _call)
+    monkeypatch.setattr(kb_sync, "_unwrap_mcp_result", lambda r: r)
+    monkeypatch.setattr(kb_sync.time, "sleep", lambda *_: None)
+
+    assert kb_sync._fetch_article_detail("a1") is None
+    assert len(calls) == kb_sync.DETAIL_ATTEMPTS
+
+
+def test_a_persistently_failing_article_still_blocks_the_delete(monkeypatch):
+    """Retries must not paper over a real failure."""
+    _fake_zoho(monkeypatch, {
+        "data": [
+            {"id": "ok1", "status": "Published"},
+            {"id": "boom", "status": "Published"},
+        ],
+    })
+
+    kb_sync.fetch_all_kb_articles()
+
+    assert kb_sync.LAST_FETCH_COMPLETE is False
+
+
 def test_clean_fetch_is_marked_complete_and_drops_unpublished(monkeypatch):
     _fake_zoho(monkeypatch, {
         "data": [

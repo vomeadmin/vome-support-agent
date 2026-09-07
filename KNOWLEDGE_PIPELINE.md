@@ -93,6 +93,50 @@ diagnosis that a Zoho thread never shows.
 4. `knowledge.clear_cache()` drops the read cache so live prompts pick
    the new book up immediately.
 
+### How a section is synthesised (`knowledge_synthesis.py`)
+
+This is the part that decides whether mining more actually helps.
+
+The original synthesiser joined a category's summaries, cut the string
+at 15,000 characters and sent that to Claude. A summary measures about
+900 characters, so roughly **16 entries reached the model**, and since
+`get_all_analyses` orders by `analyzed_at` ascending they were the 16
+oldest-analysed. The "bug" section reported 266 source tickets and was
+written from about sixteen of them. Mining more raised a counter and
+changed nothing else.
+
+Two changes fix that:
+
+1. **`rank_and_select`** orders by `training_value` (high first), then
+   recency, then round-robins across `module` so one noisy module cannot
+   fill a section on its own. `MAX_ENTRIES_PER_SECTION` (400) caps how
+   much any one section considers, which nothing hits today.
+2. **`map_reduce_section`** batches the selected entries under the same
+   15,000 character budget, extracts observations from each batch, then
+   merges the notes into the final section. Coverage is no longer capped
+   by one prompt window.
+
+Categories that already fitted in a single call still take the direct
+path, so small sections behave exactly as before.
+
+Cost, measured against the real corpus shape:
+
+| State | Calls | Runtime |
+| --- | --- | --- |
+| Today (665 tickets) | 44 map + 8 reduce | ~6 min |
+| Fully backfilled (2,271) | 113 map + 8 reduce | ~14 min |
+| Engineering (1,197 tasks) | 25 map + 1 reduce | ~3 min |
+
+Every section carries a coverage line at the top saying what it was
+built from, and `ticket_count` in `knowledge_sections` stays the full
+category size so the status endpoint reports the real corpus rather than
+the sampled slice.
+
+**`sams_voice` is the exception and does not go through this.** It
+aggregates deduplicated key phrases (capped at 100), follow-up questions
+(50) and tone notes (80) across every analysed ticket, so it was never
+prefix-truncated. It is effectively saturated at 665 tickets.
+
 Each run is capped (`KNOWLEDGE_TICKET_LIMIT`, default 200;
 `KNOWLEDGE_TASK_LIMIT`, default 150) so the historical backlog is worked
 down over several weeks instead of one multi-hour run. Both passes are

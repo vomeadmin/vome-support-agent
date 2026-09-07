@@ -65,6 +65,13 @@ ZOHO_DELAY = 1.5  # seconds between API calls
 # client cannot open.
 PUBLISHED_STATUSES = {"published"}
 
+# Attempts per getArticle detail call. The Zoho MCP proxy drops roughly
+# one call in 500, and the same id succeeds immediately on retry. Without
+# this a single blip marks the whole fetch incomplete, which blocks the
+# delete step for that run and, if it happened most nights, would mean
+# articles deleted in Zoho were never pruned from the index.
+DETAIL_ATTEMPTS = 3
+
 
 # =====================================================================
 # Fetch articles from Zoho
@@ -333,26 +340,44 @@ def _is_published(status: str | None) -> bool:
     return (status or "").strip().lower() in PUBLISHED_STATUSES
 
 
-def _fetch_article_detail(article_id: str) -> dict | None:
-    """Fetch full article content from Zoho Desk.
+def _fetch_article_detail(
+    article_id: str, attempts: int = DETAIL_ATTEMPTS
+) -> dict | None:
+    """Fetch full article content from Zoho Desk, retrying transient errors.
 
     The MCP server expects the path variable key to be `id`, NOT
     `articleId`. Using `articleId` returns the error "Mandatory path
     variable 'id' is not present in tool body" and the article body
     silently comes back empty.
+
+    Retries matter more here than they look. A single failed detail call
+    marks the whole fetch incomplete, which correctly blocks the delete
+    step, but a run that never completes also never prunes an article
+    deleted in Zoho. Observed failure rate is well under one percent and
+    the same ids succeed immediately on retry, so a couple of attempts
+    turns "clean run" back into the normal outcome.
     """
-    result = _zoho_desk_call(
-        "ZohoDesk_getArticle",
-        {
-            "path_variables": {"id": str(article_id)},
-            "query_params": {"orgId": str(ZOHO_ORG_ID)},
-        },
-    )
-    if isinstance(result, dict) and result.get("isError"):
-        return None
-    raw = _unwrap_mcp_result(result)
-    if isinstance(raw, dict) and "isError" not in raw:
-        return raw
+    for attempt in range(1, max(1, attempts) + 1):
+        result = _zoho_desk_call(
+            "ZohoDesk_getArticle",
+            {
+                "path_variables": {"id": str(article_id)},
+                "query_params": {"orgId": str(ZOHO_ORG_ID)},
+            },
+        )
+        if not (isinstance(result, dict) and result.get("isError")):
+            raw = _unwrap_mcp_result(result)
+            if isinstance(raw, dict) and "isError" not in raw:
+                return raw
+
+        if attempt < attempts:
+            # Linear backoff. These failures look like proxy rate
+            # limiting, so backing off beats hammering the same id.
+            time.sleep(ZOHO_DELAY * attempt)
+            print(
+                f"[KB SYNC]   retrying getArticle {article_id} "
+                f"(attempt {attempt + 1}/{attempts})"
+            )
     return None
 
 
