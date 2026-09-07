@@ -400,3 +400,30 @@ def test_every_long_endpoint_runs_in_a_thread():
         if "threading.Thread" not in inspect.getsource(getattr(main, name))
     ]
     assert not blocking, f"these block the worker: {blocking}"
+
+
+def test_regenerate_is_available_and_threads():
+    """The book-only path. Three deploys in a row killed a refresh mid
+    mining, and each time the regeneration was lost because it only runs
+    as the last step of a ninety minute job."""
+    import inspect
+    import os as _os
+
+    _os.environ.setdefault("DATABASE_URL", "")
+    import main
+
+    src = inspect.getsource(main.knowledge_book_regenerate)
+    assert "threading.Thread" in src
+    assert "generate_knowledge_book" in src
+    # It must not mine. That is the whole point of the split.
+    assert "run_full_analysis" not in src
+    assert "run_clickup_knowledge_scan" not in src
+
+
+def test_regenerate_refuses_to_race_a_running_refresh():
+    import inspect
+    import main
+
+    src = inspect.getsource(main.knowledge_book_regenerate)
+    assert "_analysis_running" in src
+    assert "refresh_in_progress" in src

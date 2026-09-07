@@ -750,6 +750,8 @@ async def knowledge_book_status():
         "running": _analysis_running,
         "setup_guide_pipeline": _setup_guide_status,
         "setup_guide_running": _setup_guide_running,
+        "regenerate_pipeline": _regenerate_status,
+        "regenerate_running": _regenerate_running,
         "analyzed_tickets": stats,
         "total_analyzed": sum(stats.values()),
         "analyzed_clickup_tasks": task_stats,
@@ -874,6 +876,63 @@ async def knowledge_book_setup_guide():
 
     threading.Thread(target=_run, daemon=True).start()
     return {"status": "started", "info": _setup_guide_status}
+
+
+_regenerate_running = False
+_regenerate_status = {"status": "idle", "started": None, "last_update": None}
+
+
+@app.post("/knowledge-book/regenerate")
+async def knowledge_book_regenerate():
+    """Rebuild every knowledge section from what has already been mined.
+
+    No Zoho calls, no ClickUp calls, no new analysis: just the synthesis,
+    which is the part that actually reaches Vic's prompts. Roughly
+    fifteen minutes against the current corpus.
+
+    This exists because the full refresh mines for over an hour and only
+    regenerates at the very end, so any deploy in that window loses the
+    regeneration while keeping the mining. Use this to get the book
+    current after an interruption, or any time the synthesis code changes
+    and the corpus has not.
+    """
+    global _regenerate_running, _regenerate_status
+    if _regenerate_running:
+        return {"status": "already_running", "info": _regenerate_status}
+    if _analysis_running:
+        return {
+            "status": "refresh_in_progress",
+            "detail": (
+                "A full refresh is running and will regenerate the book "
+                "when it finishes. Starting a second synthesis now would "
+                "race it."
+            ),
+        }
+
+    import threading
+
+    def _run():
+        global _regenerate_running, _regenerate_status
+        _regenerate_running = True
+        _regenerate_status = {
+            "status": "running",
+            "started": datetime.now(timezone.utc).isoformat(),
+            "last_update": None,
+        }
+        try:
+            from ticket_analyzer import generate_knowledge_book
+            generate_knowledge_book()
+            _regenerate_status["status"] = "completed"
+        except Exception as e:
+            _regenerate_status["status"] = f"failed: {e}"
+        finally:
+            _regenerate_status["last_update"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
+            _regenerate_running = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "started", "info": _regenerate_status}
 
 
 @app.post("/knowledge-book/refresh")

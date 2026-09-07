@@ -171,9 +171,31 @@ python clickup_knowledge.py --limit 50   # mine a bounded batch
 
 Or on the deployed app:
 
-- `GET /knowledge-book/status`
-- `POST /knowledge-book/refresh` (the full weekly pass)
-- `POST /knowledge-book/clickup-scan?limit=150`
+| Endpoint | Does | Takes |
+| --- | --- | --- |
+| `GET /knowledge-book/status` | current state of every pipeline | instant |
+| `POST /knowledge-book/regenerate` | rebuild every section from what is already mined | ~15 min |
+| `POST /knowledge-book/setup-guide` | rebuild just the Setup Guide section | ~5 min |
+| `POST /knowledge-book/clickup-scan?limit=150` | mine closed ClickUp tasks | ~35 min |
+| `POST /knowledge-book/refresh` | the full weekly pass, mine then regenerate | ~95 min |
+
+`refresh` takes `?force=true` to skip the once-a-day claim.
+
+### Deploys kill in-flight runs
+
+Everything long runs in a background thread inside the web process, so a
+deploy restarts the dyno and kills it. Mining survives that (every ticket
+and task is written as it is analysed) but the regeneration does not,
+because the full refresh only synthesises at the very end.
+
+That bit us three times in a row: the corpus grew from 665 to 785
+analysed tickets across three killed runs while every section stayed on
+its April version.
+
+So: **after any interruption, call `/knowledge-book/regenerate`.** It
+reads what is already mined and skips the mining entirely, which is why
+it fits between deploys. Do not reach for `refresh` unless you actually
+want another mining pass.
 
 In the status payload, `live_knowledge.sections` is the one that matters.
 It is what is actually being injected into prompts. Empty means nothing
