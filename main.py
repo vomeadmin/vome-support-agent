@@ -748,6 +748,8 @@ async def knowledge_book_status():
     return {
         "pipeline": _analysis_status,
         "running": _analysis_running,
+        "setup_guide_pipeline": _setup_guide_status,
+        "setup_guide_running": _setup_guide_running,
         "analyzed_tickets": stats,
         "total_analyzed": sum(stats.values()),
         "analyzed_clickup_tasks": task_stats,
@@ -814,29 +816,64 @@ async def knowledge_book_clickup_scan(request: Request):
     return {"status": "started", "info": _clickup_scan_status}
 
 
+_setup_guide_running = False
+_setup_guide_status = {"status": "idle", "started": None, "last_update": None}
+
+
 @app.post("/knowledge-book/setup-guide")
 async def knowledge_book_setup_guide():
-    """Rebuild just the Setup Guide section from the synced help center.
+    """Rebuild just the Setup Guide section from the in-app guide digest.
 
-    Cheap (a handful of Claude calls) and independent of ticket mining,
-    so the guide can be refreshed the moment its articles change rather
-    than waiting for the weekly pass.
+    Independent of ticket mining, so the guide can be refreshed the
+    moment its content changes rather than waiting for the weekly pass.
+
+    Runs in a background thread. It looked cheap enough to run inline,
+    but the synthesis is a map-reduce over seven stage batches and took
+    297 seconds in production, holding the only worker the whole time and
+    stalling every webhook behind it. Poll /knowledge-book/status, where
+    the section shows up once it lands.
     """
-    try:
-        from setup_guide import generate_setup_guide_section
-        count = generate_setup_guide_section()
-    except Exception as e:
-        return {"status": f"failed: {e}"}
-    if not count:
-        return {
-            "status": "no_articles",
-            "detail": (
-                "No Setup Guide articles matched. Check the index has "
-                "synced and that the permalinks still match "
-                "SETUP_GUIDE_PREFIXES."
-            ),
+    global _setup_guide_running, _setup_guide_status
+    if _setup_guide_running:
+        return {"status": "already_running", "info": _setup_guide_status}
+
+    import threading
+
+    def _run():
+        global _setup_guide_running, _setup_guide_status
+        _setup_guide_running = True
+        _setup_guide_status = {
+            "status": "running",
+            "started": datetime.now(timezone.utc).isoformat(),
+            "last_update": None,
+            "result": None,
         }
-    return {"status": "completed", "articles": count}
+        try:
+            from setup_guide import generate_setup_guide_section
+            count = generate_setup_guide_section()
+            if count:
+                _setup_guide_status["status"] = "completed"
+                _setup_guide_status["result"] = {"sections": count}
+            else:
+                _setup_guide_status["status"] = "no_content"
+                _setup_guide_status["result"] = {
+                    "detail": (
+                        "Nothing built. Either "
+                        "knowledge_book/setup_guide_source.json is missing "
+                        "(run scripts/sync_setup_guide.py) or every "
+                        "synthesis call failed."
+                    ),
+                }
+        except Exception as e:
+            _setup_guide_status["status"] = f"failed: {e}"
+        finally:
+            _setup_guide_status["last_update"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
+            _setup_guide_running = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "started", "info": _setup_guide_status}
 
 
 @app.post("/knowledge-book/refresh")

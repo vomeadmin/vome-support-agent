@@ -370,3 +370,33 @@ def test_setup_guide_is_requested_on_every_prompt():
     import knowledge
     assert knowledge.SETUP_SECTION_KEY == "setup_guide"
     assert setup_guide.SECTION_KEY == knowledge.SETUP_SECTION_KEY
+
+
+# =====================================================================
+# The endpoint must not block the web process
+#
+# It first shipped running the synthesis inline. In production that held
+# the only uvicorn worker for 297 seconds, and a status request from
+# another client timed out during the window. On a support agent that is
+# queued Zoho ticket webhooks and Slack events.
+# =====================================================================
+
+def test_every_long_endpoint_runs_in_a_thread():
+    import inspect
+    import os as _os
+
+    _os.environ.setdefault("DATABASE_URL", "")
+    import main
+
+    long_endpoints = [
+        "kb_sync_run",
+        "knowledge_book_refresh",
+        "knowledge_book_clickup_scan",
+        "knowledge_book_setup_guide",
+        "run_knowledge_book",
+    ]
+    blocking = [
+        name for name in long_endpoints
+        if "threading.Thread" not in inspect.getsource(getattr(main, name))
+    ]
+    assert not blocking, f"these block the worker: {blocking}"
