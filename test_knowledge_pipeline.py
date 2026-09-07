@@ -65,7 +65,8 @@ def test_voice_guide_is_appended_when_it_exists(monkeypatch):
     out = knowledge.augment_system_prompt("BASE PROMPT")
 
     assert out.startswith("BASE PROMPT")
-    assert "LEARNED FROM CLOSED WORK" in out
+    assert "WHAT THE TEAM KNOWS" in out
+    assert "*(learned)*" in out
     assert "Hey there" in out
 
 

@@ -36,11 +36,17 @@ VOICE_SECTION_KEY = "sams_voice"
 # What the resolution patterns from closed ClickUp tasks are filed under.
 ENGINEERING_SECTION_KEY = "engineering_resolutions"
 
+# The help center Setup Guide, condensed. Carried on every prompt because
+# the moment it matters most is a vague "we are just getting started"
+# question, which is exactly when a keyword search fails to surface it.
+SETUP_SECTION_KEY = "setup_guide"
+
 # Character budgets. These are prompt real estate on every draft, so they
 # are deliberately tight. The voice guide is the priority; a category
 # section is a bonus when the caller knows the category.
 VOICE_MAX_CHARS = 9000
 CATEGORY_MAX_CHARS = 7000
+SETUP_MAX_CHARS = 9000
 
 # How long a loaded section stays cached in-process. Long enough that a
 # busy hour is a handful of queries, short enough that a regeneration
@@ -100,7 +106,7 @@ def build_knowledge_block(category: str | None = None) -> str:
     classification is on the ticket row) and the webhook path does not
     (classification is an output of the very call being built).
     """
-    wanted = [VOICE_SECTION_KEY, ENGINEERING_SECTION_KEY]
+    wanted = [VOICE_SECTION_KEY, ENGINEERING_SECTION_KEY, SETUP_SECTION_KEY]
     if category:
         wanted.append(category.strip().lower())
 
@@ -114,8 +120,8 @@ def build_knowledge_block(category: str | None = None) -> str:
     voice = by_key.get(VOICE_SECTION_KEY)
     if voice:
         parts.append(
-            "## SAM'S VOICE (learned from "
-            f"{voice['ticket_count']} real closed tickets)\n\n"
+            "## SAM'S VOICE *(learned)* -- from "
+            f"{voice['ticket_count']} real closed tickets\n\n"
             "This is how Sam actually writes to clients. Mirror the tone, "
             "the sentence length and the specific phrasing. It is a style "
             "guide, not a script: never paste a phrase that does not fit "
@@ -126,8 +132,8 @@ def build_knowledge_block(category: str | None = None) -> str:
     eng = by_key.get(ENGINEERING_SECTION_KEY)
     if eng:
         parts.append(
-            "## HOW THESE ISSUES GET RESOLVED (learned from "
-            f"{eng['ticket_count']} closed engineering tasks)\n\n"
+            "## HOW THESE ISSUES GET RESOLVED *(learned)* -- from "
+            f"{eng['ticket_count']} closed engineering tasks\n\n"
             "Patterns from work the team has already shipped: what the "
             "underlying cause usually turns out to be, and what the client "
             "was told. Use it to recognise a familiar issue and to set "
@@ -137,28 +143,56 @@ def build_knowledge_block(category: str | None = None) -> str:
             + _truncate(eng["content"], CATEGORY_MAX_CHARS)
         )
 
+    setup = by_key.get(SETUP_SECTION_KEY)
+    if setup:
+        parts.append(
+            "## SETTING UP VOME *(published)* -- condensed from the "
+            f"{setup['ticket_count']} published Setup Guide articles\n\n"
+            "The stages an admin works through and the decisions each one "
+            "settles. Use it to place where someone is, to warn about "
+            "ordering that causes rework, and to link the article for the "
+            "stage they are on. It is authoritative product guidance, so "
+            "do not contradict it and do not add setup advice of your own "
+            "that is not here.\n\n"
+            + _truncate(setup["content"], SETUP_MAX_CHARS)
+        )
+
     if category:
         cat = by_key.get(category.strip().lower())
         if cat and cat["section_key"] not in (
-            VOICE_SECTION_KEY, ENGINEERING_SECTION_KEY
+            VOICE_SECTION_KEY, ENGINEERING_SECTION_KEY, SETUP_SECTION_KEY
         ):
             parts.append(
-                f"## {cat['title'].upper()} (learned from "
-                f"{cat['ticket_count']} closed tickets in this category)\n\n"
+                f"## {cat['title'].upper()} *(learned)* -- from "
+                f"{cat['ticket_count']} closed tickets in this category\n\n"
                 + _truncate(cat["content"], CATEGORY_MAX_CHARS)
             )
 
     if not parts:
         return ""
 
+    # The two kinds of section here carry different authority and the
+    # header has to say so. Sam's voice and the resolution patterns are
+    # observations from closed work: useful, not binding, and no source
+    # of product facts. The Setup Guide is published editorial guidance,
+    # so it is authoritative about how setup should be sequenced. An
+    # earlier version of this header described everything as "learned
+    # from closed work", which told the model to discount the one
+    # section it should trust most.
     header = (
         "\n\n---\n\n"
-        "# LEARNED FROM CLOSED WORK\n\n"
-        "The sections below were generated from real closed Vome tickets "
-        "and engineering tasks. They describe what has actually worked. "
-        "They do not override the rules above, and they are not a source "
-        "of product facts: for how a feature works, use the help center "
-        "articles and the feature catalog.\n\n"
+        "# WHAT THE TEAM KNOWS\n\n"
+        "Two kinds of section follow, and they carry different weight.\n\n"
+        "Sections marked *learned* were generated from real closed Vome "
+        "tickets and engineering tasks. They describe what has actually "
+        "worked. Treat them as experience, not as rules, and never as a "
+        "source of product facts: for how a feature works, use the help "
+        "center articles and the feature catalog.\n\n"
+        "Sections marked *published* are condensed from live help center "
+        "documentation. They are authoritative. Do not contradict them, "
+        "and prefer linking the article they name over paraphrasing at "
+        "length.\n\n"
+        "Neither kind overrides the rules above.\n\n"
     )
     return header + "\n\n---\n\n".join(parts)
 

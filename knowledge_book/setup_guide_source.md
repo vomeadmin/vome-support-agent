@@ -1,0 +1,758 @@
+# Vome Setup Guide (in-app content)
+
+*Generated 2026-09-07 from vome-react\src\views\org\setupGuide\setupGuideContent.js. Do not edit by hand: run scripts/sync_setup_guide.py.*
+
+The stages an admin works through in the in-app Setup Guide, the decisions each section asks them to settle, the tips attached to each, and the help center articles it links for detail.
+
+## Stage: Orientation
+
+### How Vome is structured
+
+Five words carry the whole platform. Once these make sense, every screen after this one does too, so it is worth a few minutes here before you build anything.
+
+Key points:
+- One note on the chain above. Sites are the only level in it you can leave out. Categories, opportunities and shifts all have to exist before anybody can book anything, but a site is a choice, and an organization that skips it is not missing a step. Start without sites unless you already know each location needs its own page, its own coordinators, or its own list of people. Adding sites later is straightforward. Unpicking them once everything is linked to one is not.
+- Categories are folders. They give your account its shape, and nobody is ever assigned to one. Use them for departments, locations, programs, events, or a broad grouping such as All special events.
+- Opportunities are what people are actually approved for, and every opportunity lives inside a category. An opportunity is a container rather than a schedule: it is the gateway a schedule sits behind.
+- Shifts are the scheduled tasks inside an opportunity. A shift needs a date, a start and end time, and a maximum number of spots. A title, description, location, coordinators, waitlist policy, tags and notification policy are all optional on top of that.
+- People only ever see shifts inside opportunities they have been approved for. Every visibility question you will have later comes back to this sentence.
+
+Tips and warnings:
+- Create your support account first
+- Your Vome support account is separate from the credentials you use to sign in here. Different site, its own email and password. Make it now rather than at the moment you are stuck. Signed in, every question you raise is kept together as a ticket history you can go back to, so you can reread an answer from last week and carry on that thread instead of explaining it again from scratch.
+
+Articles: how-vome-is-structured, mastering-the-vome-fundamentals, how-does-vome-support-work
+
+### What your plan covers
+
+Worth two minutes before you build anything, because the shape of your setup depends on which parts of the platform you can actually reach.
+
+Key points:
+- Recruit is built to do one job properly: get people from interested to approved. Application forms, screening, onboarding sequences, opportunities and approvals all work in full. What it does not do is anything that happens after that, on a calendar.
+- Everything Pro and above adds is still shown, marked with the plan it needs, rather than hidden. You will see what the fuller setup looks like as you go, and nothing will silently fail to work.
+- Those three are one thing rather than three. Scheduling produces the attendance record, the attendance record produces the hours, and the hours produce the report. On Recruit you have the first half of the story, which is how people arrive, and none of the second, which is what they did.
+- The 30-day trial needs no credit card and can be cancelled at any time, so the honest way to decide is to build your real setup on it and see whether the calendar earns its place.
+- Pro covers the whole operating cycle: people arrive, are approved, book shifts, are tracked on the day, and turn up in your reports. That is the complete loop for a single-site organization, and most never need more than this.
+- Worth it when you run more than one location, when your records need fields Vome does not have out of the box, or when training and recognition should live in the same place as everything else.
+- Enterprise covers multi-site structure, custom fields, courses, advanced groups and custom recognition on top of everything in Pro. What remains above it is about identity and connection rather than volunteer management itself.
+- SAML single sign-on, so access follows your identity provider, plus API keys and custom webhooks for connections you build yourself.
+- You are on Ultimate, so nothing in this guide is out of reach. Every plan badge you see marks a feature you already have rather than one to buy.
+
+Tips and warnings:
+- You can still track contribution
+- Hour claims work on Recruit. People log the time they worked against an opportunity they are approved for, and you approve it. So you can hold a real record of who did what without a calendar underneath it. What you cannot do is schedule the work in advance or track attendance on the day.
+- Trial it before you build, not after
+- A setup built around Recruit's limits is a setup you will partly redo the day you upgrade: opportunities configured with no schedule behind them, hour claims standing in for attendance, a database filled by form instead of import. Thirty days is long enough to build it once, properly, and decide with your own data in front of you.
+- Nothing is hidden from you
+- Anything above your plan still appears in this guide, marked with the tier it needs. You will always see what the fuller setup looks like, so a decision to upgrade is one you make having seen the thing rather than a description of it.
+
+### Your other administrators
+
+Worth deciding now rather than later, but only if it applies to you. Plenty of organizations set the whole thing up with one admin and never need a second.
+
+Key points:
+- You do not need anybody else to build a working setup. One admin can create the form, the sequence, the opportunity and the shifts, and every one of those will name you as the coordinator by default. If that is your situation, answer accordingly and move on.
+- It matters when somebody other than you will actually run the work. Coordinators and watchers are how responsibility gets attached to a specific person rather than to the account in general, and they are what decides who a notification reaches. Set with the wrong person on them, every alert lands on you and the person who needed to know finds out later.
+- Each administrator takes an admin seat on your subscription. If you have run out, adding more is a subscription change rather than something you can do from the users screen, so it is worth checking your seat count before you plan who to invite.
+- Not a requirement. One admin can build and run the whole thing.
+
+Tips and warnings:
+- Invite before you build, if you can
+- You can only assign somebody who already has an account, so inviting first means you name the right coordinator as you create each thing rather than going back through everything afterwards. Going back is not hard, it is just a job nobody schedules, and until it is done the notifications are pointed at you.
+
+### How your organization is shaped
+
+Three answers here decide how the rest of this guide talks to you. There are no wrong answers, and you can change them later.
+
+Key points:
+- Before you choose, know that the word shift means something different in each shape. That is what decides whether you can break a single event into separate jobs later, so it is worth two minutes now rather than a restructure in three months.
+- This decides whether a category should be a program or an event, and whether a shift title should carry a role.
+- For example a registration desk, a bar, and a setup crew, all at the same event.
+- This is the answer the rest of the guide leans on most. It decides whether you are shown shifts, reservations, check-in tools and hour claims at all.
+- Some roles have no shifts, people log the hours
+- Think about the reporting you are asked for at the end of the year.
+- Multiple branches, chapters, campuses, regions, or departments. Answering yes only shows you what sites would do for you. Sites stay optional on every plan, and categories can carry locations on their own.
+- This is about whether sites are worth the setup, not about a limit.
+
+Tips and warnings:
+- Restricting a shift to the people qualified for it
+- Where a shift stands for a task that needs a licence, a certification or training, use advanced reservation restriction on that shift and match people by profile tag. Tag the qualified profiles, restrict the shift to that tag, and it stays out of reach of everyone else. The restriction is per shift, so the general jobs stay open and only the ones that need it are locked.
+- Create the profile tags before the restriction
+- Advanced reservation restriction works by matching a shift against a profile tag, which means the tags have to exist before the restriction can do anything. Create them first, and name them after the thing they represent: either the role, so a shift titled Driver restricts to a Driver tag, or the qualification behind it, so a First Aid Certified tag unlocks every shift that needs first aid. Naming by qualification is the better choice when one credential unlocks several different roles, because you tag the person once instead of once per role. Either way, keeping the tag names aligned with your shift titles is what stops this becoming a puzzle for whoever picks it up next year.
+- Where the qualification tags come from
+- If which shifts somebody can see depends on a qualification, the tag that decides it should be applied by the application form rather than by you afterwards. Auto-assign profile tags puts a tag on everyone who submits, and a question-level automation puts one on based on a specific answer, so the person who says they can drive is tagged as a driver at the moment they apply. That tag is then what the shift restriction matches on, and the chain runs end to end without an admin in the middle: they answer, they are tagged, they are approved, and they see only the roles they are eligible for.
+
+Articles: choosing-your-structure-programs-or-events, how-vome-is-structured, the-three-shapes-an-opportunity-can-take
+
+### Sites
+
+You told us you operate across more than one location. Sites are the layer that makes that work properly, instead of forcing it into categories.
+
+Key points:
+- A site is a structural container for a location, a region, or an administrative division. It sits between your organization and your categories, and gives each part of your operation its own page listing only what belongs to it.
+- You told us you operate across more than one location, which is why this section is here. That is not the same as deciding to use sites. Many multi location organizations run on categories alone, name the location in the category, and never open the Sites module. Reach for sites when a location needs its own page, its own coordinators whose access stops at their own people, or its own branding. If none of that is true for you, skip this section and carry your locations in your categories.
+- Each site can have its own intake form, and you can still keep one general form outside every site. Both can run at the same time.
+- You can also add the built in question asking which site someone wants to join, then auto notify that site's coordinators when an application arrives. The application stays visible only to the admins whose role covers that site.
+- On your current plan you can still segment by category, but sites, site scoped pages and site scoped admin access all need Enterprise.
+- Before you create your sites, open Customize settings in the Sites module and go through the site settings once. They are organization wide, not per site, so whatever is set there applies to every site you have and every site you open later.
+- These are not per site settings, so changing one later moves every site at once and can change what your site admins are able to see. Deciding first means your first site already behaves the way you want, and every site after it inherits the same rules.
+
+Tips and warnings:
+- Link people to a site from the application form
+- You do not route applicants to sites by hand. On your general application form, add a Site question built from the auto-populated Vome field list, and turn on auto-assign for it. Whoever applies picks their site and is assigned to it on submission. Site admins then have their applicants immediately and are notified as each one arrives, instead of waiting for somebody centrally to notice and pass them on. Because the list is auto-populated, a site you open next year appears on the form without anybody editing it.
+- When a site needs its own application form
+- Some sites need to ask things the general form does not. Do not build a separate front door for them. Keep the one general application form, and make the site's own form the first step of that site's onboarding sequence, using a Fillable form step. The person applies once, lands in the sequence for the site they chose, and fills in the site-level form as step one. You get a single entry point and site-specific questions, rather than a form per site that all have to be maintained and advertised separately.
+
+Articles: setting-up-a-multi-location-organization-with-sites
+
+### Keeping it organized as it grows
+
+Two accounts with the same twenty opportunities can be a pleasure or a mess to work in, and the difference is decided now, in about five minutes.
+
+Key points:
+- Every module has folders. Forms, sequences, opportunities, email templates, resources and reports all group into them. Folders are free, they can be renamed later, and an account without them is fine at ten items and unusable at eighty.
+- You told us you operate across more than one location, and sites are an Enterprise feature. That is workable: a category becomes a location, and its opportunities are what happens there. Just make it deliberate and consistent from the start, because half your categories being locations and half being programmes is the shape that becomes impossible to report on.
+- Categories carrying your locations works, but it spends your category layer on geography. Sites add a layer above categories, so each location gets its own page, its own coordinators and its own people, and your categories go back to describing the work.
+- For a multi-location organization, the rule that keeps every module readable is simple: one folder per location, in every module, named the same way each time.
+- Operating from one location frees your folders up for something more useful than geography. Use them to describe purpose, which is the distinction you will actually be scanning for later.
+- The same scheme should apply across forms, sequences, opportunities and the rest.
+
+Tips and warnings:
+- Pick one scheme and repeat it
+- The scheme matters less than using the same one everywhere. Folders named by location in one module and by purpose in another means nobody can guess where anything is, and everybody asks you instead.
+
+### Send from your own email domain
+
+Do this early. It changes what your messages can carry and whether you can see what happened to them.
+
+Key points:
+- Connecting your domain means Vome sends as you rather than on your behalf. Messages arrive from your own address, they land better, and every send is traceable back to you.
+- A dynamic placeholder is a token you drop into a message that fills itself in per recipient, such as their first name, the opportunity they were approved for, or the date of their next shift. One message, written once, arrives personalised to everyone.
+
+Articles: sending-email-from-your-own-domain
+
+### How people will reach you
+
+There are two doors, and they are independent. Plenty of organizations open both.
+
+Key points:
+- As opposed to only managing the people you already have.
+- Both, we recruit and we already have people
+- No, we are managing the people we already have
+- The one form you would put on your website to collect anyone interested, before they pick anything specific.
+- No, people should apply to something specific
+- A second form is a second thing to keep current, so this is worth deciding deliberately rather than per opportunity as you build.
+- A browsable list of what you need, where someone picks the thing they want and applies or registers for it.
+- Every opportunity can carry its own recruitment workflow. That is the set of rules deciding what someone has to do before they count as approved for that opportunity, and it is what lets one opportunity ask for a background check while another asks for nothing.
+
+Tips and warnings:
+- The finish line is approval for at least one opportunity
+- Whatever route you build, judge it against one outcome. A person who has finished your application and your onboarding should be approved for at least one opportunity, because approval is what unlocks a schedule, hours and the conversation with a coordinator. Somebody who completes everything and is approved for nothing has an account and no way to help you, and they will not come back to ask why.
+- Start with one form
+- Most organizations that end up with a form per opportunity wish they had started with one shared form. Split it later, once you know which opportunity genuinely needs different questions.
+
+Articles: how-to-organize-volunteer-recruitment-on-vome
+
+### Screening and where people land
+
+This is the answer that gets set wrong most often, and the most annoying one to unpick later. It decides which profiles live in your database.
+
+Key points:
+- Screening is whatever stands between someone applying and someone being active. It can be nothing at all, a couple of questions, or a full onboarding sequence with documents, training and a background check.
+- Automations are what remove you from the middle of it. Based on how someone answers a specific question, they can be assigned to an onboarding sequence or straight to an opportunity, with no admin touching the application.
+- If you want people to tell you which sites, categories or opportunities they are interested in, do not type those options out by hand. Point the question at a Vome field instead, using "Auto-populated lists from Vome fields", and the answer options become your real sites, categories or opportunities.
+- Documents, references, interviews, training, a background check, or anything else that has to happen first.
+- One sequence is simpler to maintain. More than one is worth it when the steps genuinely differ, not just the wording.
+- Your database should read as your list of active people, not everyone who ever filled in a form.
+
+Tips and warnings:
+- Keep your database a list of active people
+- If you have no screening at all, auto add to the database on the first form someone ever submits. If you do screen, do not auto add on the form. Add at the end of the onboarding sequence instead, so applicants in progress never mix with active profiles. Adding manually is a single click, and most people who choose it simply forget to do it.
+- Sites and opportunities can assign themselves
+- On an Opportunities or Sites question, turn on "Auto-assign all user selections upon submission" and whatever someone picks is what they are assigned to, with no admin step in between. Categories can be asked about the same way but are not auto-assignable, because a category is a grouping rather than something a person is assigned to.
+
+Articles: screening-and-where-profiles-land-in-your-database
+
+### Apply and schedule, in one place
+
+Your answers point at the simplest setup Vome has. No screening, one form, and shifts to book. If that is the whole of your process, you can build it once and never touch it again.
+
+Key points:
+- The idea is that one form does everything. It asks your questions, it shows the available shifts on a calendar inside itself, and the person picks the one they want and submits. They arrive, answer, book, and they are done, in a single sitting on a single page.
+- None of this locks you in. Add a screening question later, turn auto-approve off for one opportunity, or build a proper marketplace when you outgrow the single form. The structure underneath is the same one every larger setup uses.
+- Answer honestly. If you need to look at applications before people are in, say so, and we will keep the approval step.
+- Close, but we want to see applications first
+
+Tips and warnings:
+- Then you share one link
+- The form link is the whole of your public presence. Put it on your website, in an email, on a poster with a QR code. There is no landing page to maintain, no marketplace to curate, and no approval queue to watch, because all three settings above took you out of the loop on purpose.
+
+### Your get ready kit
+
+Building goes quickly when the words and pictures already exist, and slowly when you stop mid form to go and find them. Here is what to have to hand.
+
+Key points:
+- Nothing on this list blocks you. Every one of them has a default or a suggestion behind it, and every one can be changed later. Gathering them first just means you build in one sitting rather than five.
+- Your organization logo and brand colours are set once in your organization settings and carry across your pages, your emails and your end user experience, so that one is worth doing before anything else.
+- This only changes whether we put a preparation step on your route. It does not gate anything.
+
+Tips and warnings:
+- Some of this writes itself
+- Several builders offer a suggested description based on what you have already configured. Take it with one click, edit it, or ignore it. Anything you type is yours and is never overwritten.
+
+Articles: what-to-prepare-before-you-build
+
+### Your route from here
+
+Based on what you just told us, this is the order we would build it in. Each step opens in a new tab so you keep your place here.
+
+Articles: build-a-journey-from-application-to-first-shift
+
+## Stage: Recruit
+
+### General application form
+
+One form everybody fills in before they can be approved for anything. It is the front door most organizations want, and the piece that decides how much work each new person costs you.
+
+Key points:
+- A general application form collects what you need from everyone once: contact details, availability, emergency contact, consent. Every opportunity can then rely on it having been answered, instead of asking again.
+- What happens after someone applies is set per opportunity, in its recruitment workflow. A workflow is a list of rules, and each rule ends in one of four actions.
+- The point of rules is that one opportunity can treat two kinds of applicant differently. A public opportunity almost always should, because a stranger and a person you have already screened are not the same risk.
+- Rules are evaluated in order and the first one that matches wins. A rule with no conditions applies to everyone, so if your catch-all sits above your specific rule, the catch-all matches first and the specific one never runs. Put the narrow rules first and the catch-all last, always. This is the single most common way a workflow is built wrong, and it fails quietly: everything looks configured and everybody still gets the long form.
+
+Tips and warnings:
+- Conditions stack, they do not widen
+- Every condition you enable on a rule has to match, not just one of them. Ticking both "approved for the same category" and "finished a sequence" describes people who have done both, which is a smaller group than either alone. If a rule is matching fewer people than you expected, that is usually why.
+- One form, reused everywhere
+- The same general form can be pointed at from every opportunity that needs one, so you build and maintain it once. Give an opportunity its own form only where the questions genuinely differ, because a second form is a second thing to keep current.
+
+Articles: how-people-reach-you-forms-opportunities-or-both, one-workflow-two-kinds-of-applicant
+
+### Where new applicants actually arrive
+
+Before you worry about what happens after somebody applies, it is worth knowing the handful of places they can arrive from. There are only three, and you control all of them.
+
+Key points:
+- Your organization page is the front door. Anyone can reach it without an account. It carries your information, a Get involved button that opens your public application form, and your public opportunities listed underneath.
+- The opportunity link is worth reaching for only when your opportunities carry different recruitment workflows for different types of applicant. If every opportunity screens people the same way, sending somebody your general form link is simpler and gets you the same result with one link to maintain instead of twenty.
+- For a general intake process, the general application form link is the one to share, and it usually belongs embedded on your own website. Vome does not put it there for you. Copy the link from the form's actions dropdown inside Vome, then send it to whoever maintains your site. This is the step that most often gets forgotten, and a form nobody can reach collects nothing.
+- Pick as many as apply. Most organizations use their page and a form link together.
+
+Tips and warnings:
+- Which link to share
+- If you have a general intake process, share the form link and let it be the only one. If people should be choosing between opportunities, send them to your organization page so they can see what is on offer. Send an individual opportunity link only when you are pointing a specific person or group at a specific thing.
+
+Articles: how-people-reach-you-forms-opportunities-or-both, auto-approve-opportunity-or-auto-assign-on-a-form
+
+### Your marketplace, and who sees what
+
+Your opportunities together form a marketplace. It is dynamic rather than one list on one page: every opportunity carries its own visibility and its own recruitment workflow, so a single account can serve strangers, your existing people and a hand-picked few at the same time.
+
+Key points:
+- Two settings decide everything about how somebody reaches an opportunity. Visibility decides who can see it at all. The recruitment workflow decides what they have to do once they have. They are set per opportunity, which is what lets one marketplace behave three different ways.
+- This is the mistake that costs the most applicants, and it is silent. If you make an opportunity public but its recruitment workflow carries an advanced condition such as "must be active in the database" or "must carry this profile tag", then every stranger who finds it is blocked by a rule they had no way of satisfying. A public opportunity is a door, so check its workflow asks only for things somebody arriving from your website can actually provide.
+- Recruitment workflows do not have to match each other. Different opportunities can ask different questions and apply different conditions, so a public general-interest role and a semi-private specialist one can sit in the same marketplace and screen completely differently. That is what makes the marketplace dynamic rather than one-size.
+- The marketplace is not only for strangers. It keeps working after somebody is in, and that second job is the one most organizations leave on the table.
+- Semi-private visibility is what makes it work. An opportunity set to semi-private shows to your active people, or to the subset meeting the profile conditions you set, which means an approved person can see the things they are not approved for yet but would be eligible to apply to. They find them, they apply, and the same recruitment workflow screens them as it would anybody else.
+- Without this, widening somebody's involvement means you noticing, you writing to them, and you doing it again next month. With it, the people you already trust can see what else they qualify for and put their own hand up. You get better coverage across your opportunities, they get to diversify what they do, and neither depends on an admin remembering to send an email.
+- Pick as many as apply. Most organizations end up with at least two.
+- Semi-private ones, for our existing people
+
+Tips and warnings:
+- You always have a way in
+- Whatever an opportunity's visibility and whatever its workflow demands, an admin can assign anybody to it directly from the back end. That bypasses the workflow entirely. It is how you handle the person you already know, anybody you imported, and your own testing before you open anything to the public.
+
+Articles: how-to-organize-volunteer-recruitment-on-vome
+
+### Automations: taking yourself out of the middle
+
+This is the part that decides whether Vome saves you time or just moves your admin work onto a screen. It is worth twenty minutes now.
+
+Key points:
+- An automation is a rule that fires on its own when somebody does something, and assigns them to a sequence or approves them for an opportunity without an admin opening anything. No approval queue, no email to send, no list to work through on Monday.
+- There are four places one can sit, two on a form and two on a sequence, and they fire at different moments in a person's journey.
+- What an automation can do is the same in all four places: assign an onboarding sequence, approve somebody for an opportunity, or add them to your database. The difference is purely when it happens.
+- Without automations, every applicant waits for an admin to notice them, decide what they need, and assign it. That is fine at five applicants a month and impossible at fifty, and the waiting is what loses people: somebody who applies on Saturday and hears nothing until Wednesday has usually found something else. With automations, they submit, they are routed, and they are working through their onboarding before you have read their name.
+- An automation cannot tell whether somebody is suitable. It can only act on what they told you. So automate the routing, which is mechanical, and keep the judgement where a person makes it: a screening step in the sequence, or an approval you do yourself. An organization that auto-approves everybody for everything has not saved work, it has removed a decision it was supposed to be making.
+- A worked example. A general form carries a question asking which kind of work interests somebody. A question-level automation sends the kitchen answers to your kitchen onboarding sequence and the driving answers to your driver one. Each sequence carries a background check step, and a step-level automation approves them for the matching opportunity the moment it clears. A sequence-level automation adds them to your database when they finish. From submission to approved and on the calendar, nobody opened anything.
+- Pick as many as apply. Each one maps to a rule you would set up on a form or a sequence.
+- Assign the same thing to everybody who applies
+- Approve people part way through onboarding
+- Do things when somebody finishes onboarding
+
+Articles: where-can-a-form-automation-sit
+
+## Stage: Onboard
+
+### Onboarding sequences
+
+A sequence is the ordered set of steps between someone applying and someone being ready to start. Every step is designed by you, and no two have to work the same way.
+
+Key points:
+- Steps run in the order you put them in. A person sees the step they are on, does what it asks, and moves to the next one. You decide what each step asks, and you decide who is allowed to move it forward.
+- Every step does one of two jobs, or both. It supplies information to the person, through its title, its description and any attachments you add. It collects information from them, and what it collects is decided by the step type you choose.
+- Two switches on every step decide who drives it. One is whether the person can mark themselves as complete. The other is whether they can move themselves to the next step. They are independent, and the combination is what makes a step self-serve or hands-on.
+- There is a middle setting worth knowing, and it is the one most organizations actually want. Leave "mark themselves as complete" on and "move to the next step" off, and the person finishes the task on their own, but waits for you to review it before they advance. Use it wherever you genuinely need to look at what they sent, and not one step more, because every step set this way is a step that stops until an admin gets to it.
+- Every action notifies the other side. When someone completes a step, it lands on your My Tasks. When you move them forward, they are notified. A sequence waiting on them carries a marker in their navigation and on their dashboard until they act. That is the point of running onboarding here rather than over email: neither side has to write to ask where things stand.
+- One sequence-wide setting sits above all of this: step completion order. Either people must be on a step to complete it, so onboarding runs strictly in order, or they can complete any step at any time. Strict order suits a process with real dependencies. Any order suits a checklist of things that simply all have to happen.
+- This is the trade, and it is worth knowing before you collapse five steps into one. A checklist item is a title and a description that somebody ticks. It cannot be a fillable PDF, a form, a file upload, a video or a course, because those are step types in their own right. If any of your items has to be signed, submitted, watched or uploaded, it stays its own step, and the checklist is for whatever is left.
+- This is a sequence-wide setting, so decide it once rather than per step.
+- No, and most of it is just things to tick off
+- Set as a default now. You can still override it on any individual step.
+- People complete, you review and advance them
+
+Tips and warnings:
+- A sequence can belong to any level of your structure
+- Nothing limits you to one onboarding process. Technically every site, every category and every individual opportunity can have its own sequence, and people are routed into the right one automatically: from an answer on the application form, or by auto-assigning the sequence when somebody is approved for the opportunity it belongs to. That is genuinely useful where a site runs its own induction, or where one opportunity needs a certification nothing else does. It is also the fastest way to end up with fifteen sequences that are ninety percent identical, each needing the same edit when a policy changes. The honest default is one shared sequence plus a branch where the difference is real, and a dedicated sequence only where the whole process differs rather than one step of it.
+
+Articles: designing-a-sequence-step, which-sequence-steps-need-my-review, how-do-i-organize-volunteer-onboarding-on-vome
+
+### Consent, waivers and signatures
+
+Your application form can take a signature. That is not the same thing as a waiver, and knowing which one you need saves an awkward conversation later.
+
+Key points:
+- A Digital consent field on a form shows the person a document and takes an e-signature before they can submit. It is quick, it happens inside the form they are already filling in, and it is the right tool for something short: a code of conduct, a photo release, a privacy acknowledgement.
+- A Fillable PDF step in an onboarding sequence is a different instrument. You upload your real document, mark up the fields on it, and the person opens it, completes every required field, signs, and their signed copy comes back to you. The step carries its own status, moving from Pending to Signed to Complete, so a signed waiver can be verified before it counts.
+- The hand-off is automatic. A form automation assigns the onboarding sequence on submission, so the person signs the short consent inside the form, and the waiver steps arrive on their own without an admin sending anything.
+- This decides whether your signatures live on the form, in the sequence, or in both.
+- A short consent up front, real waivers during onboarding
+
+Tips and warnings:
+- Use both, in that order
+- Put a short consent on the application form, so nobody applies without agreeing to the basics. Put your real waivers in as Fillable PDF steps in the onboarding sequence that gets assigned once that form is submitted. You are then not asking a stranger to sign a legal document before you have decided you want them, and every waiver you hold belongs to somebody you actually onboarded.
+
+Articles: consent-waivers-and-signatures, how-do-i-collect-documents
+
+### Different paths for different people
+
+### Orientation and training sessions
+
+Almost every onboarding process has a session in it. There are three ways to run one, and they differ mostly in how much administrative work they cost you.
+
+Key points:
+- The dedicated Training and Orientation step types are description only. They carry a title, a description and attachments, so they can tell someone that a session exists and what to expect. They cannot show when it runs, and nobody can take a spot from inside them. Keep them for a session that is not shift based: one you schedule by hand, an external session, or one you confirm and mark complete yourself.
+- When you want people to actually sign up, the session has to be a real thing on your schedule, and that means an opportunity. Create one called Orientation, or Training, and publish each session inside it as a shift. Each shift carries the date, the start and end time, and the number of seats in the room. The sessions now have capacity, they fill up, and attendance is tracked exactly like any other shift.
+- Auto-approve on an opportunity approves someone for the opportunity behind the shift they actually reserved. Auto-assign opportunities on a form approves them for every opportunity you selected, on submission, whatever they reserved. Sessions want the first one. The second is for approving someone for the roles they applied for, and reaching for it here would approve people for a session they never booked.
+- Either way, the session ends up as a shift with attendance against it, so the record that someone actually turned up is the same record you get for every other shift. That matters later, when you need to prove who is trained.
+- Pick the one that fits most of your sessions. Individual steps can still be built the other way.
+- Sessions on our schedule, booked inside the sequence
+- Sessions on our schedule, booked on their own page
+- We schedule sessions by hand, or they are external
+- Each one is its own opportunity with its own shifts, so people book the session they need.
+
+Tips and warnings:
+- Which route to take
+- Prefer the in-step calendar. It is fewer clicks, and nobody gets lost between two pages. Reach for the landing page route when the same session is also open to people outside this sequence, because an opportunity page is a public door and a sequence step is not.
+
+Articles: running-orientation-and-training-sessions
+
+## Stage: Operate
+
+### Categories and opportunities
+
+The opportunity is the single most flexible thing in Vome, and the one people most often try to make too clever. It is worth a minute on what it is actually for.
+
+Key points:
+- An opportunity is the primary way of grouping people so they get access to engagement features. That is the whole definition. What it represents is completely up to you.
+- Organizations use them for jobs, placements, positions, roles, activities, tasks, assignments, events, committees, stakeholder groups, interviews, training and orientation. None of those is more correct than another. Pick whatever matches how you already talk about your work, because that is the word your coordinators will use anyway.
+- Whatever an opportunity represents, approval for it unlocks the same three things. These are the pillars worth deciding on before you create anything, because they are what an opportunity actually gives somebody.
+- Every opportunity carries a default location, and it is not optional. That default is what the whole location story hangs off, so it is worth a moment rather than a placeholder you mean to fix later.
+- Shifts inherit it. Create a shift inside an opportunity and it takes that opportunity's location unless you say otherwise, which is right most of the time and saves retyping an address onto every shift you generate.
+- Override it per shift when they differ. If the shifts inside one opportunity happen in different places, give the shift its own custom location. The opportunity's default stays as the fallback for everything else, so you only spell out the exceptions.
+- When a specific street address makes no sense for the opportunity as a whole, set something broad. A city or a region is a perfectly good default, and the individual shifts then carry the real addresses. The default exists to be inherited, not to be accurate for every case.
+
+Tips and warnings:
+- Turn off what does not apply
+- Each pillar can be enabled or disabled per opportunity, so the opportunity fits the work rather than the other way round. A role with no schedule turns self-scheduling off and keeps hour claims. A one-off event that needs no ongoing conversation turns the chatrooms off. Deciding this per opportunity is what stops your account filling with features nobody uses.
+- An event that happens again is usually still one opportunity
+- A monthly food drive or an annual gala does not need a new opportunity each time. Keep the one opportunity and add new shifts for each occurrence. Everyone already approved stays approved, so returning people can book the next date without applying again, and your reporting keeps every occurrence together under one name instead of scattering it across a dozen near-identical opportunities. There is one reason to do the opposite: when you want a fresh approved list each time, because the people who did last year's gala should not automatically be able to book this year's. In that case duplicate the event, which copies every setting and starts the roster empty. Remember that duplicating does not copy shifts, so you build the new dates either way.
+
+Articles: how-do-opportunities-work-on-vome, public-semi-private-or-private
+
+### Shifts and the schedule
+
+Three ways to put shifts on the calendar. Two are obvious, and the third is the one worth understanding properly, because it changes what people are committing to rather than just how many shifts you created.
+
+Key points:
+- A single date is one shift on one day. Multiple dates let you pick several specific days at once. Both are for one-off instances, both are exactly what they look like, and neither needs explaining further.
+- That last point is why a series can be the backbone of your scheduling rather than a convenience. If you need the same person on the front desk every Tuesday, a date range gives you fifty-two separate bookings that any one of them can quietly not make. A series gives you one commitment, made once, with a length you decide. It is the difference between a rota and a rota that holds.
+- If you generate a batch covering Tuesday mornings and Thursday evenings, that is two series, not one. Each day-of-week and time-slot pairing becomes its own series, which is usually what you want, because somebody committing to Tuesdays has not committed to Thursdays. It is worth knowing before you look at the result and wonder why there are two.
+- One more reservation rule, and it is the one that quietly causes double-bookings. By default somebody can hold two reservations that overlap in time, because plenty of organizations genuinely want that. If you do not, you have to say so.
+- It works in two layers. There is an organization-wide overlap rule that applies everywhere by default, and then each opportunity carries its own Reservation overlaps setting that either inherits that rule or overrides it. Set the org-wide rule to whatever is true most of the time, then override only the opportunities that genuinely differ.
+- Sets your organization-wide rule. Individual opportunities can still override it.
+- Pick as many as apply. Most organizations running ongoing work need at least a series.
+
+Tips and warnings:
+- Which to reach for
+- Use single or multiple dates for one-off events. Use a date range when you need a run of shifts that people dip into as their availability allows, with no expectation that the same person returns. Use a series when the point is the same person coming back, which for most ongoing programmes is the whole point.
+- Decide the org-wide rule first
+- If a person being booked twice at once is always wrong for you, block it organization-wide and be done. Setting it per opportunity instead means every new opportunity somebody creates starts out permissive, and the gap only shows up when two coordinators are expecting the same person. Override individual opportunities afterwards, for the ones where an overlap is genuinely fine.
+
+Articles: how-does-scheduling-work-on-vome, date-range-or-series-for-recurring-shifts
+
+### Who can see which shift
+
+### Instant Book, or request to book
+
+Approval for an opportunity is what lets someone see and reserve its shifts. Instant Book decides what happens in the moment they reserve one.
+
+Key points:
+- Nothing here changes who can see a shift. That is settled by the opportunity: people see the shifts inside opportunities they are approved for, and nothing else. Instant Book is the next question along, and it has one job. When somebody takes a spot, is it theirs, or is it a request?
+- Auto-approve on an opportunity and Instant Book on its shifts are two different checkpoints. With both on, somebody can go from stranger to confirmed on a shift without an admin touching anything, which is exactly right for open sessions. If you want one human checkpoint, put it in one of the two places, not both, or you will be approving the same person twice.
+- Instant Book is set per opportunity, so different opportunities can behave differently. An open drop-in shift can confirm instantly while a specialist role still routes every reservation to its coordinator.
+- You can set this differently on each opportunity. This answer is your default.
+
+Tips and warnings:
+- Which to choose
+- Turn Instant Book on wherever approval for the opportunity already means you trust that person on any of its shifts, which is most of the time. Turn it off when the shift itself needs a second judgement: scarce spots you want to allocate deliberately, a task needing a particular skill mix, or an event roster you are balancing by hand. Leaving it off everywhere out of caution turns every reservation into a task on somebody's desk.
+
+Articles: how-does-scheduling-work-on-vome, instant-book-or-request-to-book
+
+### Group reservations
+
+Sometimes one person books for several. A team lead bringing eight colleagues, a teacher bringing a class, a family coming together. Vome calls that a group reservation, and deciding now who is allowed to make one saves you doing them all by hand later.
+
+Key points:
+- A group reservation is one reservation holding several spots. One person is the group reservation lead, and the rest are guests on their reservation. It counts against the shift's capacity as the full party, so a group of eight takes eight spots, and you can see the whole party in one place instead of eight unconnected reservations you have to recognise as related.
+- What people are allowed to do is set by the group reservation policy, in your schedule settings. It is worth setting deliberately rather than leaving at the default, because it decides whether group bookings are self-serve or land on your desk.
+- On Enterprise and above you have the Groups module, where a corporate partner, a school or a recurring team exists as a group in its own right. Linking group reservations to one of those is what turns a series of separate bookings into a record you can total up: hours by group, attendance by group, who came back. Without the link each group reservation is only ever itself, and answering "how much did this company actually do for us this year" means adding it up by hand.
+- This decides whether you set up a group reservation policy at all, and who it opens up to.
+- Yes, and group leads should book it themselves
+- The narrower you set this, the fewer surprise group bookings you get, and the more often somebody has to ask you first.
+- Only people assigned to the opportunity and in a group
+- Linking is what makes group-level totals possible: hours, attendance and repeat participation for a company, school or team.
+- Require it, and let leads create the group
+
+Tips and warnings:
+- Building one yourself
+- You do not create a separate kind of reservation. Add one person to the shift as you normally would, then open that reservation and add guests to it. That converts it into a group reservation with the person you added as the lead. Everything after that, party size, guest details, check-in, works the same as one the lead built.
+- Let the lead do the linking
+- You do not have to attach reservations to groups yourself. The policy can let leads link their reservation to an existing group as they reserve, and can let them create the group if it does not exist yet. That keeps your group-level tracking accurate without an admin touching every booking, which is the difference between this being useful and this being another queue.
+
+### Shift policies
+
+A shift works out of the box. These are the settings for when it needs to do something more particular: hold a queue when it fills, make people sign something before they turn up, or keep the attendee list to yourself.
+
+Key points:
+- Each of these is a policy you build once and attach to as many shifts as you like. That matters more than it sounds: the alternative is configuring the same rule on every shift you create, and then remembering to configure it on every shift you create next month.
+- A form submission policy can reach people two ways, and the difference decides who ends up filling it in.
+- Group reservations themselves work on Pro. Two things inside a group reservation policy do not. Linking a reservation to a named group, so a company or a school shows up on your schedule, on the kiosk and in your reports, needs the Groups module. So does attaching form submission rules inside the group reservation policy, which is what gives groups their own workflow instead of the standard shift one. Attaching a form straight to the shift stays available on Pro.
+- Pick as many as apply, or none. Every one you skip is a setting you never have to maintain, so only take what you have a reason for.
+- This is the whole waitlist decision. The rest is just whether people can see their position in the queue.
+- By default the attendee list is not shown at any point. Showing it helps people who want to sign up alongside somebody they know, and is wrong wherever attendance is sensitive.
+- Pick as many as apply. A form submission policy says which form, and at which moment in the reservation it is required.
+
+Tips and warnings:
+- Build the policy once, attach it everywhere
+- Policies are reusable objects, not per-shift checkboxes. Create a waiver policy, name it something like Pre-shift waiver, and attach it to every shift that needs it, including shifts generated in bulk later. Changing the policy changes it everywhere it is attached, which is the whole point of it being a policy.
+
+Articles: what-are-shift-policies
+
+### Hour claims
+
+### Attendance tracking
+
+Hours have to come from somewhere. There are three tools for capturing them on site, and most organizations end up running two.
+
+Key points:
+- The kiosk and the QR code are the standard pair, and they solve different halves of the same problem. Running both is the normal answer, not a belt-and-braces one.
+- You have chosen tap to check in and left proximity off, which means somebody can check in to a shift from anywhere, including from home. That is a real choice and it is fine for a group you trust, or where the hours are not reported anywhere that matters. If they are, turn proximity on: it requires people to be within a radius of the shift location, and it is what makes a tap mean they turned up. Scanning does not have this problem in the same way, because the code is at the place.
+- Geolocation is the third option, and it replaces the scan rather than adding to it. With proximity validation on, the app checks that the person is within a set distance of the shift location and validates the check-in on that, overriding the QR scan entirely. Nobody has to find a printout.
+- Reach for it on opportunities where there is no single place to go. If people work across a park, a route, a whole campus or somebody's home, sending them to a fixed kiosk or a poster is a chore invented by the software. Proximity says they arrived on site, which is what you actually wanted to know.
+- Not every opportunity needs a check-in at all. When people work remotely, on their own schedule, or somewhere you will never install a kiosk, live tracking is a chore invented by the software.
+- The kiosk and the QR code only work on the day of a shift, for somebody actually scheduled on it. That is correct behaviour, not a bug, and it means your setup test will get as far as generating them and no further. Set them up now anyway, then plan a real check on the morning of your first shift, with an actual person and an actual phone.
+- This decides whether the QR code is your main tool or your fast lane.
+- Pick as many as apply. Most organizations use the kiosk and the QR code together.
+- These are two different tools, and picking the wrong one is the difference between a few taps and an afternoon of retyping.
+- During the shift, as people arrive and leave
+- By default every hour claim waits for an admin. Auto-approving is faster and trusts the number, which is a decision about your reporting, not just your workload.
+- Live on the day, or written down afterwards. It changes which settings you need on each opportunity.
+- Set per opportunity. This answer is your default.
+
+Tips and warnings:
+- Run both
+- The QR code handles your regulars, who have the app and want to be in and out in five seconds. The kiosk handles everybody else: the first-timer, the corporate group, the person whose phone is dead. Print the QR once, set the kiosk up once, and neither needs touching again.
+- Scanning and tapping are alternatives, proximity is not
+- From the app there is one check-in method at a time: they scan the Attendance QR code, or they tap without scanning. The tap setting is literally the one that removes the scan requirement, so turning it on replaces the QR code rather than adding to it. Proximity-based validation is a different kind of thing. It is not a third method, it is a condition layered on whichever method you chose: with scanning it also confirms they are on site, and with tapping it is the only thing confirming that at all. The kiosk sits outside all of this, because it runs on your device rather than theirs and works for people with no app and no account.
+- The configuration most organizations land on
+- People check themselves in, and auto check-out catches the ones who forget. Checking in is the part people remember, because they are arriving and paying attention. Checking out is the part they forget, because they are leaving. Auto check-out fixes the common failure without giving up the arrival record you wanted in the first place.
+- Recording it live: use the kiosk
+- You do not need people to have the app or an account for this. Run the kiosk on a tablet or laptop at the door and an admin checks people in and out on it, which is what it was built for. It gives you real arrival and departure times rather than an estimate, and the hours are calculated for you instead of being worked out later from a sheet of paper.
+- Recording it afterwards: Log hours & absences
+- Do not open reservations one at a time. The schedule has a Log hours & absences workflow built for exactly this: pick the shift, and mark who attended, who did not, and how long they stayed, in one pass. It handles absences too, which matters because a no-show you never record looks identical to somebody who was never expected. Worth learning before your first shift ends rather than during the clean-up after it.
+- Hour claims, and what they are for
+- An hour claim is the person telling you what they worked, rather than a system watching them do it. It is the right tool wherever there is nobody at a door: remote work, a shift at a partner site, anything unsupervised. You can require a note explaining the time, and you can require a form with the claim, which is how a claim carries proof rather than just a number.
+- Before you auto-approve
+- Auto-approve hour claims turns the setting off that makes claims wait for you, so hours land in your totals the moment somebody enters them. That is genuinely right for a trusted, established group, and genuinely wrong if those hours are reported to a funder or a school, because a mistyped number is in your figures before anybody has looked at it. If you are unsure, start with approval on: you can switch it off later, and you cannot un-report a number you already sent.
+- Generate them before you need them
+- Create at least one kiosk and download at least one QR code now, while you are thinking about it. The QR code is a one-time download you print as many copies of as you like, and the kiosk is set up once on a device you leave at the site. Neither needs touching again, and neither is something you want to be discovering at eight in the morning on the day of an event.
+
+Articles: how-should-people-check-in, hour-claims-letting-people-log-their-own-hours, how-does-the-check-in-out-portal-work-on-vome
+
+### Changing a setting across many opportunities
+
+Once you have built more than a handful of opportunities, changing one setting on all of them one at a time is the fastest way to lose an afternoon. Read this before you start clicking.
+
+Key points:
+- Select the opportunities you want and update them together. It is the same settings you would edit individually, applied across the selection in one save, which is what turns a forty-opportunity chore into a two-minute job.
+- Every opportunity in the selection ends up with the value you set, including the ones you had deliberately made different. If three of your forty opportunities have Instant Book off on purpose, a bulk update across all forty turns it on for those three too, quietly. Select only the opportunities that should genuinely match, or exclude the exceptions before you save.
+- The recruitment workflow is the setting most worth doing in bulk, and the one most worth checking first. If every opportunity handles registration identically, set it once across all of them and never think about it again. If some ask different questions or apply different conditions, leave them out of the selection, because that difference is the whole reason they exist.
+- Bulk update when the setting is genuinely an organization-wide policy: how attendance is tracked, whether hours can be claimed, whether reservations confirm instantly. Update individually when the setting is a judgement about that specific opportunity. If you cannot say which of the two a setting is, that is a sign it should be a policy, and you should decide it once.
+- This decides whether we point you at bulk updates or at setting each one as you build it.
+
+## Stage: Engage
+
+### Courses for people already with you
+
+Courses appear twice in this guide, and the two are not the same job. Under Onboard, a course is a gate somebody passes before they start. Here it is an offer: something for people who are already active, to go deeper or stay current.
+
+Key points:
+- The builder is identical, so nothing new to learn. What changes is who you point it at and why. Onboard covers how to build a course, chapter by chapter. This section is about deciding what to offer once someone is already contributing.
+- You rarely want every course visible to everybody. Restrict a course and only people who meet your conditions will find it.
+- Someone has to meet every condition you set, not just one of them. Two conditions make a narrower audience, not a wider one. If nobody can see what you published, that is usually why.
+- This is separate from any training you require before somebody starts. Answer for the optional side.
+
+Tips and warnings:
+- Expiry and renewal
+- A course can expire, which is what you want for compliance training that has to be redone. You can point people at a shorter renewal course instead of the full original, and warn them before the expiry date rather than after it.
+
+Articles: courses-for-people-already-with-you
+
+### Groups
+
+A group is a name you attach to people and to the reservations they make. It is how you answer "how much did that company actually do for us this year" without counting by hand.
+
+Key points:
+- Without groups, twelve people from the same company are just twelve people. With a group, they are one partnership you can point at, report on and come back to next year.
+- Once a reservation carries a group name, that name follows it everywhere the reservation appears.
+- A group reservation is one person booking several spots, which you set up under Operate and which works without the Groups module. A group is the named organization you can attach that reservation to. You can do either on its own, and they are most useful together.
+- Letting people self-select is faster, and it means the occasional wrong answer to tidy up.
+
+Articles: what-are-groups-and-do-i-need-them
+
+### Resources
+
+Resources are the files and links you want people to have: a handbook, a parking map, a policy, a training video. They sit on the homepage of everyone who is allowed to see them.
+
+Key points:
+- A resource holds files, links, or both. The point is that the right people find it without asking you, and that nobody has to dig through an old email to find the current version.
+- By default a resource is visible to everyone. Restrict it and only people who meet your conditions will see it, which is how a site handbook reaches one site and not the rest.
+- Someone has to meet every condition you set, not just one of them. Two conditions make a narrower audience, not a wider one. If nobody can see what you published, that is usually why.
+- Multi-site organizations and anyone with role-specific paperwork usually need conditions.
+
+Tips and warnings:
+- Admin only overrides everything
+- Marking a resource admin only hides it from users no matter what conditions you set. It is the right switch for internal documents, and the wrong one if you are simply not ready to publish. For that, leave the resource inactive instead.
+
+Articles: what-are-resources-and-who-can-see-them
+
+### Recognition and awards
+
+Recognition is where you say thank you in a way that lasts longer than an email. Awards are things people can see, work toward and keep on their profile.
+
+Key points:
+- An award is defined once and then earned by anybody who qualifies, so recognition does not depend on somebody remembering to send it.
+- Awards use the same conditions as courses and resources, with one difference worth understanding.
+- The conditions on an award decide who can see it and who can earn it, together. That means a visible award doubles as a goal: people can tell what is available to them and what it takes. Hide an award and it becomes a surprise instead, which is a different and perfectly valid choice.
+- You can change this at any point, and awards can be added long after launch.
+
+Tips and warnings:
+- Start with one
+- A single award that genuinely means something beats a wall of badges nobody reads. First shift, first year, and a milestone that matters to your cause is usually plenty to begin with.
+
+Articles: achievements-recognition-on-vome
+
+### Chats
+
+Vome creates chatrooms for you as you build. You do not set these up, and knowing they exist stops you from building a second place for the same conversation.
+
+Key points:
+- Rooms are generated around the things people already share, so the conversation sits next to the work rather than in a separate tool.
+- You never add or remove anybody from these rooms. Each one stays synchronized with who currently belongs: approve somebody for an opportunity and they appear in its room, remove them from a shift and they leave that shift's room. New categories, groups and sites can be set to generate their rooms automatically, so the pattern holds as you grow.
+- On top of those, you can create rooms of your own.
+- Chat is quicker for both sides. Email leaves a cleaner record. Plenty of organizations use both.
+- Tick as many as you need. You can set any of them to announcements only afterwards, so people read without a thread starting.
+
+Tips and warnings:
+- One-way rooms are for announcements
+- Use a one-way room when you need everyone to see something and you do not want a thread. It is the difference between telling two hundred people a shift moved and then answering two hundred replies about it.
+- You control all of this in one place
+- Chat settings let you turn each level on or off, switch any level to announcements only, apply a change across every site, group or category at once, and decide whether people can edit or delete what they posted. Same settings you already use in the Chats module.
+
+Articles: which-chatrooms-does-vome-create-automatically
+
+## Stage: Manage
+
+### The database
+
+Where every profile lives. Two settings here decide what your records mean, and both are easy to leave on a default that quietly misrepresents your organization.
+
+Key points:
+- The database itself needs little explanation: it holds your people, their details, their hours and what they are approved for. What is worth your attention is how it decides when somebody started with you, because almost every number you will ever report is measured from that date.
+- The start date policy decides which moment counts as somebody's beginning. It applies across your whole database, and there are six ways to calculate it.
+- The policy is applied across your database, so changing it later moves everybody's start date at once. That is fine while you are small and disruptive once people have milestones and awards attached to those dates. If you are importing an existing list, settle this first.
+- The other setting worth a minute is birthday notifications. They are a small thing that people notice, and they run on their own once configured.
+- Your reporting, milestones and time-based awards all measure from this. We will point you at the setting with your answer in mind.
+- Only works for people whose date of birth you hold, so it is worth deciding before you finalise your intake form.
+
+Tips and warnings:
+- Why this matters more than it looks
+- Anniversaries, length-of-service milestones, retention figures and any award based on time served all measure from this date. Set to profile creation, an import makes your entire history look like it began the day you migrated, and a five-year volunteer shows as new. Pick the one that matches what your organization means when it says somebody started.
+
+### Profile tags and custom fields
+
+Two ways to record something about a person, and they are not interchangeable. Picking the wrong one is cheap to fix on day one and expensive to fix once you have two thousand profiles.
+
+Key points:
+- The question that decides it is not what kind of data you are storing. It is whether anything needs to act on it.
+- T-shirt size. It feels like a tag, so people create six of them: Small, Medium, Large and the rest. Now every profile carries a size tag mixed in with their qualifications, your tag list is cluttered, and you still cannot sort by size. It is one custom field, formatted as a dropdown, with six options. The test is simple: if the values are mutually exclusive and nothing needs to gate on them, it is a field.
+- Pick everything that applies. Your answer decides how much of this section matters and what your route recommends.
+
+Tips and warnings:
+- Tags are yours, not theirs
+- Profile tags are visible to administrators only, as are notes and attached files. Somebody tagged Needs supervision or Do not reschedule never sees it. That is what makes tags safe for judgements you have to record but would not say to their face.
+- Check the standard fields first
+- Every profile already has more than twenty fields: name, status, tags, completed shifts, hours logged, opportunities, categories, age, gender, email, phone, address, date of birth, skills, languages, emergency contact, occupation, organization and most recent shift. Build a custom field only after you have checked the thing you want is not already there under another name.
+
+Articles: profile-tags-or-custom-fields, profile-opportunity-shift-and-group-tags
+
+### Mass import
+
+The way a whole list arrives at once. Worth understanding before you start, because the order of the steps is what stops a bad file becoming a bad database.
+
+Key points:
+- Import is a wizard rather than a single upload, and each step exists to catch something. You upload a spreadsheet, it is checked, you say which column means what, you decide what happens to the people in it, and only then does anything get written.
+- Use the template unless you have a reason not to. Its headers match Vome's field names exactly, which means the mapping step maps itself and you skip the most tedious part of the job.
+- An import does not only carry people. It can place them at the same time, which is the difference between arriving with a list of names and arriving with a working account. The template has columns for opportunities, groups and group role, and the two behave differently in a way worth knowing before you build the file.
+- That distinction is usually what decides the plan when an organization is transitioning from another database. Your old system almost certainly holds fields Vome has no default for: an internal reference, a badge number, a certification date, a chapter code. On Recruit or Pro those columns have nowhere to go. On Enterprise you create the field first and map straight onto it, and the migration arrives whole rather than in pieces you then chase by hand.
+- You can import the default fields on your current plan. If the list you are bringing over carries anything your old system tracked and Vome does not have out of the box, that data needs a custom field to land in, and custom fields need Enterprise.
+- This decides whether we put an import on your route, and whether custom fields matter for you.
+- Nowhere. We will ask people to complete their own account
+
+Tips and warnings:
+- Build your opportunities before you import
+- Because opportunities are matched rather than created, the order matters. Create and publish them first, then import, and your people arrive already approved and ready to book. Import first and you have a database of names with nothing attached, and a second pass to do by hand. Groups are more forgiving, since a missing one can simply be created as the file is processed.
+- Segment the file before you import it
+- The customize step applies to everybody in the file, so a single spreadsheet holding three different kinds of people gives them all the same opportunities, groups and tags. Split it into one file per group and run the import more than once. It takes a few extra minutes and saves you unpicking assignments afterwards, which is much slower.
+
+Articles: how-do-i-upload-my-spreadsheet-into-my-database
+
+### Reports and insights
+
+Reports answer the questions somebody else asks you: a funder, a board, a school coordinator, an insurer. Most of what you need is already built.
+
+Key points:
+- Start with the ready-made reports before building anything. They cover the questions organizations actually get asked.
+- Every list in Vome shows a set of columns, and you decide which ones.
+- If you change the columns and do not save the result as a custom view, that layout becomes the default for both your Active and your Archived lists. It is easy to do by accident and hard to work out afterwards. Most administrators keep those two lists complete, showing every field, and build custom views for the tailored layouts. So when you have finished arranging, save it as a view.
+- Pick everything that applies. This shapes which reports and views your route tells you to set up first.
+
+Tips and warnings:
+- Exports carry your layout
+- Export to Excel, CSV or PDF. The columns you chose are the columns you get, which is the real reason to set up a custom view before a reporting deadline rather than during one.
+
+Articles: reports-custom-views-and-manage-fields
+
+### Analytics, KPIs and goals
+
+Reports tell you what happened. Analytics turns that into a number you watch over time, with a target against it.
+
+Key points:
+- Four things, and they stack in this order. Learning the order saves you looking for a button that does not exist, because a goal is not something you create on its own.
+- Because they stack, editing a tracker flows into every KPI and every goal built on it. That is the point: you fix a definition in one place rather than in nine dashboards.
+- An impact tracker can add up the number questions in your screening question bank, so meals served or students tutored becomes a figure you can put in front of a funder. Only number questions are offered, because adding up a text answer is how an impact figure quietly becomes fiction.
+- An impact value is stored as the person saw it when they submitted. Change the form next season and last season's numbers stay exactly as they were reported.
+- Analytics is genuinely optional. Plenty of organizations run well on reports alone.
+
+Articles: trackers-kpis-and-goals
+
+### Admin roles and security
+
+Who else gets in, what they can reach once they are in, and how you keep the account itself safe.
+
+Key points:
+- Administrators are not all the same. Beyond the built-in roles you can create custom ones, and the important part is not what a role is called but which profiles it can reach.
+- Two-factor authentication adds a code at login on top of the password. You decide whether it is offered or required, and whether that applies to administrators, to end users, or to both.
+- It does not need Enterprise or Ultimate. Single sign-on does, and it has its own section, but 2FA is available to you now. If you only do one thing for security, require it for administrators: they are the accounts that can export your whole database.
+- This is about reach, not seniority. A coordinator who only runs one program rarely needs the whole database.
+- You can require it, offer it, or leave it off, separately for administrators and end users.
+
+Tips and warnings:
+- Both means AND, not OR
+- Choosing both conditions means a profile has to satisfy the two of them to be visible, not either one. It is the tightest setting and it is easy to pick by accident, then wonder why a coordinator sees almost nobody. The same scoping applies separately to what they can reach in form submissions, in sequences and in chat, so check each one rather than assuming they follow the profile setting.
+
+Articles: admin-roles-and-account-security
+
+### Integrations
+
+This sits near the end on purpose. Until you know how people get in and what you are tracking, there is no basis for deciding what Vome needs to talk to.
+
+Key points:
+- Most organizations need none of this on day one, and adding an integration you have not yet got a use for is a way to make setup take a month. Read the list, note what you recognise, and come back to it once the rest is running.
+- Pick as many as apply, or none. This only shapes what we put on your route.
+
+Tips and warnings:
+- Do not see what you need?
+- The list grows, and some connections are possible through the API or Zapier even when there is no named integration for them. Ask support what is available for the system you have in mind, before you assume it cannot be done or start building it yourself.
+
+### Single sign-on and account security
+
+How people prove who they are when they sign in. Worth settling once, because changing it later means talking to every admin you have.
+
+Key points:
+- Single sign-on lets people sign in with the identity provider your organization already runs, using SAML. Nobody keeps a separate Vome password, access follows whatever your provider says, and removing somebody there removes them here.
+- Two-factor authentication is separate, and it does not need Ultimate. It can be offered to admins and to end users, and it can be left optional or required. If SSO is out of reach, this is the security control worth turning on instead.
+- Two-factor authentication is available on your current plan and covers a lot of the same ground. SAML, enforced sign-in and provider-managed access need Ultimate.
+- This covers admins and end users. You can treat the two differently once it is set up.
+
+Articles: admin-single-sign-on-sso-setup-integrating-microsoft-entra-id-with-vome, admin-single-sign-on-sso-setup-integrating-microsoft-adfs-with-vome, admin-single-sign-on-sso-setup-integrating-jumpcloud-with-vome
+
+## Stage: Test
+
+### Your organization page
+
+The last thing to look at, and the one most likely to be neglected, because an admin never sees it the way anybody else does.
+
+Key points:
+- This page has two audiences, and most organizations only think about the first. Whether you decide to publish the link or not, the second audience arrives regardless.
+- Deciding not to publish the link is a decision about strangers, not about the page. The moment one opportunity is public or semi-private, your approved people are browsing it, and an unfinished page is what they see. If you genuinely want nobody looking at it, every opportunity has to be private and assigned by an admin.
+- This is about whether you publish the link. Your approved people may reach it either way.
+
+Tips and warnings:
+- Look at it the way they will
+- Open your page in a private window before you share it anywhere. Signed in as an admin you see a version nobody else does, and the gaps that are invisible to you are the first thing a stranger notices. It is the same ten-minute check as walking your journey, on the page that comes before it.
+
+### Walk your own journey
+
+Everything is built. The last thing to do before you tell anyone about it is to stop being an administrator for ten minutes and become one of your own applicants.
+
+Key points:
+- You are signed in as an admin, and Vome will treat you that way. A private window (also called incognito) gives you a clean session with no sign-in, which is what a real applicant has. Switching to a different browser works too, and a private window is simpler.
+- Do not test by assigning yourself from the admin side. That skips the form, the automation that reads the answers, and the routing that follows, which is precisely where journeys break. A test that starts after all three only proves the sequence renders, and that was never in doubt.
+- Come in the way a real person would. There are four doors, they behave differently, and you should test each one you actually intend to publish.
+- Follow the whole path and stop at every handover, because each one is a place it can silently fail.
+- Left active, a mock profile turns up in your counts, your reports and possibly your mass emails. Archive it rather than deleting it if you expect to test again, and note that a second submission from the same address can behave differently from the first.
+- Pick every one you will actually use. Each is a separate path, so passing one proves nothing about the others.
+
+Tips and warnings:
+- Where the links actually live
+- Each link is copied from that item's own row. Open the Forms list or the Opportunities list, find the row, and use its share action to open the popup that holds the link. That is the same move you will use every time you promote something, so it is worth learning here rather than hunting for it later. Your organization page link comes from the organization page itself.
+
+Articles: how-do-i-test-the-journey-myself
+
+### Bringing your current volunteers onto Vome
+
+You have built the path. The people you already work with are not on it yet, and how you bring them over decides whether your database starts clean or starts as a copy of a spreadsheet nobody has tidied since 2023.
+
+Key points:
+- There are two ways to do it, and which one is right depends on a single question: do you actually need the data you are holding, or do you mostly need a current contact list?
+- You can remove that last step too, if you are willing to take people at their word.
+- A current user onboarding form is the right default, not a rule. Import when you hold history that cannot be recreated, when your people will not reliably respond to a form, or when the list is large enough that anything short of a full response rate would lose you people you need. If you are moving off another database, that is an import, not a form.
+- You can do both. Plenty of organizations import the history and send the form for the current details.
+- A current user onboarding form, with auto-add to the database
+- A current user onboarding form where they pick their own opportunities
+
+Tips and warnings:
+- If you mainly want a refreshed contact list, ask them
+- This is the strong recommendation. An import copies whatever your spreadsheet says, including the phone number somebody changed two years ago and the person who left last spring. A current user onboarding form gets you current details from people who are still interested, and the ones who do not respond are information too: they have told you something an import would have hidden.

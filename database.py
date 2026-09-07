@@ -879,6 +879,61 @@ def kb_index_status() -> dict:
     }
 
 
+def get_kb_articles_by_permalink_prefix(
+    prefixes: list[str],
+    language: str = "en",
+    limit: int = 100,
+) -> list[dict]:
+    """Return indexed articles whose permalink starts with any prefix.
+
+    Used to pull a named set of articles (the setup guide) out of the
+    index so it can be turned into always-on knowledge, rather than
+    depending on a keyword search happening to match.
+
+    Only Published rows come back, matching the retrieval path.
+    """
+    if not DATABASE_URL or not prefixes:
+        return []
+    try:
+        engine = _get_engine()
+        clauses = []
+        params: dict = {"limit": limit, "lang": language}
+        for i, prefix in enumerate(prefixes):
+            key = f"p{i}"
+            clauses.append(f"permalink LIKE :{key}")
+            params[key] = f"{prefix}%"
+
+        sql = (
+            "SELECT zoho_article_id, title, body, url, permalink, "
+            "       category, language, modified_time "
+            "FROM kb_articles "
+            f"WHERE ({' OR '.join(clauses)}) "
+            "  AND language = :lang "
+            "  AND lower(coalesce(status, '')) "
+            "      NOT IN ('draft', 'unpublished', 'review', 'in review') "
+            "ORDER BY permalink "
+            "LIMIT :limit"
+        )
+        with engine.connect() as conn:
+            rows = conn.execute(text(sql), params).mappings().all()
+
+        return [
+            {
+                "id": r["zoho_article_id"],
+                "title": r["title"],
+                "body": r["body"] or "",
+                "url": r["url"] or "",
+                "permalink": r["permalink"] or "",
+                "category": r["category"] or "",
+                "language": r["language"] or "en",
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[DB] get_kb_articles_by_permalink_prefix failed: {e}")
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Knowledge sections (read side)
 # ---------------------------------------------------------------------------

@@ -196,6 +196,62 @@ that moment.
 
 ---
 
+## 3. The Setup Guide (published guidance)
+
+**Schedule:** rebuilt with the weekly pass, or on demand.
+
+Unlike the two pipelines above, this is not learned from closed work. It
+is live editorial documentation, so `knowledge.py` labels it *published*
+and tells the model it is authoritative.
+
+The guide lives in two places and neither is complete alone:
+
+| Where | What it holds |
+| --- | --- |
+| `vome-react` | The substance: 7 stages in order, 45 sections, the decisions each settles, 112 tips and warnings. Hardcoded in `setupGuideContent.js` and `translations/postlogin.js` under `sg_*` keys. |
+| Zoho help center | The 45 articles the guide links to for detail. Already indexed by `kb_sync`. |
+
+None of the first row was in Zoho, so none of it ever reached the agent,
+and the second row only surfaced when a keyword search happened to
+match. An admin asking "we are just getting started, where do we begin"
+matched nothing and got nothing.
+
+### The flow
+
+1. `scripts/sync_setup_guide.py` reads the React source and emits
+   `knowledge_book/setup_guide_source.{md,json}`. This mirrors
+   `scripts/sync_landing_strings.py`, which does the same for landing
+   page copy. Run it whenever the in-app guide changes.
+2. `setup_guide.py` condenses that digest into the `setup_guide`
+   section, resolving each article slug to its real help center URL from
+   the index (falling back to the canonical URL shape for anything not
+   yet synced).
+3. `knowledge.py` carries the section on every prompt.
+
+Deliberately a **map, not a copy**. The digest is ~80,000 characters,
+which cannot ride on every draft, and the articles are already
+retrievable on demand. The section's job is to let Vic place where an
+admin is, warn about ordering that causes rework, and link the right
+article.
+
+```bash
+python scripts/sync_setup_guide.py   # refresh the digest from vome-react
+python setup_guide.py                # rebuild the section
+python setup_guide.py --preview      # see what would be sent
+```
+
+Or `POST /knowledge-book/setup-guide` on the deployed app, which is cheap
+and independent of ticket mining.
+
+### Two separate article sets, easily confused
+
+The 45 slugs referenced by `setupGuideContent.js` and the 13
+`setup-decisions-*` articles in Zoho have **zero overlap**. The linked 45
+are what the product actually points at. A permalink-prefix filter on
+`setup-decisions` looks right and captures none of them.
+
+---
+
 ## Gotcha: ClickUp comment blocks have no `type`
 
 ClickUp returns a comment two ways: `comment_text` (a plain string) and

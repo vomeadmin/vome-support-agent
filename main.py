@@ -814,6 +814,31 @@ async def knowledge_book_clickup_scan(request: Request):
     return {"status": "started", "info": _clickup_scan_status}
 
 
+@app.post("/knowledge-book/setup-guide")
+async def knowledge_book_setup_guide():
+    """Rebuild just the Setup Guide section from the synced help center.
+
+    Cheap (a handful of Claude calls) and independent of ticket mining,
+    so the guide can be refreshed the moment its articles change rather
+    than waiting for the weekly pass.
+    """
+    try:
+        from setup_guide import generate_setup_guide_section
+        count = generate_setup_guide_section()
+    except Exception as e:
+        return {"status": f"failed: {e}"}
+    if not count:
+        return {
+            "status": "no_articles",
+            "detail": (
+                "No Setup Guide articles matched. Check the index has "
+                "synced and that the permalinks still match "
+                "SETUP_GUIDE_PREFIXES."
+            ),
+        }
+    return {"status": "completed", "articles": count}
+
+
 @app.post("/knowledge-book/refresh")
 async def knowledge_book_refresh():
     """Run the weekly self-learning pass now: analyse newly closed

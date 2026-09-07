@@ -903,12 +903,27 @@ def generate_knowledge_book():
     # tasks. This is the source that carries the actual diagnosis.
     _generate_engineering_section()
 
+    # Condense the help center Setup Guide. Not learned from closed work
+    # like the rest of the book, but it belongs in the same store and on
+    # the same weekly cadence.
+    _generate_setup_guide_section()
+
     # Generate summary
     _generate_summary(sections, analyses)
 
     _refresh_read_cache()
 
     print("[BOOK] Knowledge Book generation complete!")
+
+
+def _generate_setup_guide_section() -> int:
+    """Rebuild the Setup Guide section, tolerating its absence."""
+    try:
+        from setup_guide import generate_setup_guide_section
+        return generate_setup_guide_section()
+    except Exception as e:
+        print(f"[BOOK] Setup Guide section failed: {e}")
+        return 0
 
 
 def _refresh_read_cache():
@@ -1338,7 +1353,9 @@ def run_weekly_knowledge_refresh() -> dict:
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    summary: dict = {"tickets": {}, "clickup": {}, "book": "skipped"}
+    summary: dict = {
+        "tickets": {}, "clickup": {}, "book": "skipped", "setup_guide": 0,
+    }
 
     try:
         summary["tickets"] = run_full_analysis(
