@@ -76,7 +76,12 @@ LAST_FETCH_DEBUG: list[dict] = []
 # detail without a single failure. sync_articles_to_db refuses to run the
 # delete step unless this is True, so a partial fetch can never be
 # mistaken for "these articles no longer exist in Zoho".
-LAST_FETCH_COMPLETE: bool = False
+# None means no fetch has run in this process yet, which is the normal
+# state of a freshly restarted dyno between nightly syncs. False means a
+# fetch ran and something failed. Keeping those distinct matters: a bare
+# False on /kb-sync/status reads as "the sync is broken" when it usually
+# just means "nothing has run since the last deploy".
+LAST_FETCH_COMPLETE: bool | None = None
 
 # Human-readable failures from the last fetch, surfaced in Slack and in
 # /kb-sync/status.
@@ -379,7 +384,10 @@ def sync_articles_to_db(
     skipped_unpublished, delete_skipped}.
     """
     if allow_delete is None:
-        allow_delete = LAST_FETCH_COMPLETE
+        # LAST_FETCH_COMPLETE is None when no fetch has run in this
+        # process. Treat that like a failed fetch: never delete on the
+        # word of a set of articles this process did not fetch itself.
+        allow_delete = LAST_FETCH_COMPLETE is True
 
     stats = {
         "added": 0,

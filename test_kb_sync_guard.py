@@ -88,6 +88,18 @@ def test_delete_is_skipped_after_a_partial_fetch(monkeypatch):
     assert rec.upserted == ["1"]
 
 
+def test_delete_is_skipped_when_no_fetch_has_run_in_this_process(monkeypatch):
+    """A restarted dyno starts at None, not False. Never delete on the
+    word of a set of articles this process did not fetch itself."""
+    rec = _patch_db(monkeypatch)
+    monkeypatch.setattr(kb_sync, "LAST_FETCH_COMPLETE", None)
+
+    stats = kb_sync.sync_articles_to_db([_article("1")])
+
+    assert rec.delete_calls == []
+    assert stats["delete_skipped"] is True
+
+
 def test_explicit_allow_delete_overrides_the_inherited_flag(monkeypatch):
     rec = _patch_db(monkeypatch)
     monkeypatch.setattr(kb_sync, "LAST_FETCH_COMPLETE", False)

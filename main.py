@@ -1178,9 +1178,16 @@ async def kb_sync_status():
         "pipeline": _kb_sync_status,
         "running": _kb_sync_running,
         "index": index,
-        # False means the last fetch hit a failure and the delete step was
-        # skipped, so the index may be missing recent articles.
+        # null  = no sync has run in this process yet (normal between
+        #         nightly runs on a dyno that has restarted since)
+        # false = a sync ran and something failed, so the delete step was
+        #         skipped and the index may be missing recent articles
+        # true  = the last sync fetched every category cleanly
         "last_fetch_complete": LAST_FETCH_COMPLETE,
+        "last_fetch_state": (
+            "not_run_in_this_process" if LAST_FETCH_COMPLETE is None
+            else ("complete" if LAST_FETCH_COMPLETE else "incomplete")
+        ),
         "last_fetch_failures": LAST_FETCH_FAILURES,
         "last_fetch_debug": LAST_FETCH_DEBUG,
     }
