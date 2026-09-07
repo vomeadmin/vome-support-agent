@@ -90,9 +90,21 @@ LAST_FETCH_DEBUG: list[dict] = []
 # just means "nothing has run since the last deploy".
 LAST_FETCH_COMPLETE: bool | None = None
 
-# Human-readable failures from the last fetch, surfaced in Slack and in
-# /kb-sync/status.
-LAST_FETCH_FAILURES: list[str] = []
+# Failures from the last fetch, surfaced in Slack and in
+# /kb-sync/status. Each is {"kind": ..., "message": ...}. The kind is
+# what lets the alert state the real consequence: losing a whole
+# category is a different problem from one article's detail call
+# timing out, and the old alert described neither correctly.
+LAST_FETCH_FAILURES: list[dict] = []
+
+# Could not enumerate categories at all, so the run indexed nothing.
+FAILURE_CATEGORY_LIST = "category_list"
+# One category's article listing failed, so every article in it is
+# absent from this run.
+FAILURE_CATEGORY = "category"
+# One article's detail call failed. Its existing row is untouched, so it
+# is stale rather than missing.
+FAILURE_ARTICLE = "article"
 
 # Tokens that signal a category is French. Detected on lowercased
 # category name. `detail.locale` from Zoho always returns "en" (it
@@ -113,6 +125,17 @@ def _detect_language_from_category(category_name: str) -> str:
         if tok in name:
             return "fr"
     return "en"
+
+
+def _record_failure(kind: str, message: str) -> None:
+    """Record one fetch failure, tagged with what it costs."""
+    LAST_FETCH_FAILURES.append({"kind": kind, "message": message})
+    print(f"[KB SYNC]   failure ({kind}): {message}")
+
+
+def failure_messages() -> list[str]:
+    """Just the human-readable text, for logs and older callers."""
+    return [f.get("message", "") for f in LAST_FETCH_FAILURES]
 
 
 def _extract_mcp_error(raw) -> str | None:
@@ -156,7 +179,9 @@ def fetch_all_kb_articles() -> list[dict]:
     if cat_err:
         print(f"[KB SYNC] Category fetch errored: {cat_err}")
         LAST_FETCH_DEBUG.append({"stage": "categories", "error": cat_err})
-        LAST_FETCH_FAILURES.append(f"category list failed: {cat_err}")
+        _record_failure(
+            FAILURE_CATEGORY_LIST, f"category list failed: {cat_err}"
+        )
         return []
 
     raw_cats = _unwrap_mcp_result(cat_result)
@@ -165,7 +190,10 @@ def fetch_all_kb_articles() -> list[dict]:
         LAST_FETCH_DEBUG.append({
             "stage": "categories", "error": "empty response",
         })
-        LAST_FETCH_FAILURES.append("category list returned an empty response")
+        _record_failure(
+            FAILURE_CATEGORY_LIST,
+            "category list returned an empty response",
+        )
         return []
 
     categories = []
@@ -222,9 +250,10 @@ def fetch_all_kb_articles() -> list[dict]:
                     "from": page_from,
                     "error": page_err,
                 })
-                LAST_FETCH_FAILURES.append(
+                _record_failure(
+                    FAILURE_CATEGORY,
                     f"{cat_name}: getArticles failed at from={page_from}: "
-                    f"{page_err}"
+                    f"{page_err}",
                 )
                 errored = True
                 break
@@ -270,9 +299,10 @@ def fetch_all_kb_articles() -> list[dict]:
             time.sleep(ZOHO_DELAY)
             detail = _fetch_article_detail(article_id)
             if not detail:
-                LAST_FETCH_FAILURES.append(
+                _record_failure(
+                    FAILURE_ARTICLE,
                     f"{cat_name}: getArticle detail failed for "
-                    f"{article_id}"
+                    f"{article_id}",
                 )
                 continue
 
@@ -539,37 +569,104 @@ def run_kb_sync():
     print(f"Completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    _alert_fetch_failures(articles_indexed=len(articles))
+    _alert_fetch_failures(articles_indexed=len(articles), stats=stats)
 
 
-def _alert_fetch_failures(articles_indexed: int) -> None:
-    """Post to Slack if the last fetch hit failures.
+def build_failure_alert(
+    articles_indexed: int, stats: dict | None = None
+) -> str:
+    """Compose the Slack alert for a fetch that hit failures.
 
-    Without this the nightly sync fails into a log line nobody reads, and
-    the first symptom is the agent quietly not knowing about a whole
-    category of articles.
+    Split out from the posting so the wording is testable. Every claim
+    here has to follow from what actually failed: the first real alert
+    told us new and edited articles were missing on a run that added 47
+    and updated 44, and said nothing about the consequence that mattered.
     """
-    if not LAST_FETCH_FAILURES:
-        return
+    stats = stats or {}
+    by_kind: dict[str, list[str]] = {}
+    for failure in LAST_FETCH_FAILURES:
+        by_kind.setdefault(
+            failure.get("kind", FAILURE_ARTICLE), []
+        ).append(failure.get("message", ""))
 
-    lines = LAST_FETCH_FAILURES[:15]
+    category_list = by_kind.get(FAILURE_CATEGORY_LIST, [])
+    categories = by_kind.get(FAILURE_CATEGORY, [])
+    articles = by_kind.get(FAILURE_ARTICLE, [])
+
+    headline = (
+        f":warning: *KB sync ran incomplete* "
+        f"({len(LAST_FETCH_FAILURES)} failure(s), "
+        f"{articles_indexed} articles fetched)"
+    )
+
+    if stats:
+        written = (
+            f"Indexed this run: {stats.get('added', 0)} added, "
+            f"{stats.get('updated', 0)} updated, "
+            f"{stats.get('unchanged', 0)} unchanged."
+        )
+    else:
+        written = ""
+
+    consequences = []
+    if category_list:
+        consequences.append(
+            "Categories could not be listed at all, so this run indexed "
+            "nothing. The index still holds whatever the last good run "
+            "wrote."
+        )
+    if categories:
+        consequences.append(
+            f"{len(categories)} categor"
+            f"{'y' if len(categories) == 1 else 'ies'} could not be "
+            f"listed, so every article in "
+            f"{'it' if len(categories) == 1 else 'them'} is absent from "
+            f"this run. New and edited articles there are missing until "
+            f"the next clean run."
+        )
+    if articles:
+        consequences.append(
+            f"{len(articles)} article(s) could not be fetched. Their "
+            f"existing rows were left untouched, so they are stale "
+            f"rather than missing, and everything else indexed normally."
+        )
+
+    # The one that is true on every incomplete run, and the one the
+    # original alert left out.
+    consequences.append(
+        "The delete step was skipped. Rows for articles deleted or "
+        "unpublished in Zoho were not pruned, so the agent can still "
+        "cite them until a clean run removes them."
+    )
+
+    lines = [f.get("message", "") for f in LAST_FETCH_FAILURES][:15]
     more = len(LAST_FETCH_FAILURES) - len(lines)
     body = "\n".join(f"  - {line}" for line in lines)
     if more > 0:
         body += f"\n  - ...and {more} more"
 
-    message = (
-        f":warning: *KB sync ran incomplete* "
-        f"({len(LAST_FETCH_FAILURES)} failure(s), "
-        f"{articles_indexed} articles indexed)\n"
-        f"The delete step was skipped, so nothing was removed from the "
-        f"index. Existing articles are still searchable, but anything "
-        f"new or edited in a failed category is missing until the next "
-        f"clean run.\n{body}"
-    )
+    parts = [headline]
+    if written:
+        parts.append(written)
+    parts.extend(consequences)
+    parts.append(body)
+    return "\n".join(parts)
+
+
+def _alert_fetch_failures(
+    articles_indexed: int, stats: dict | None = None
+) -> None:
+    """Post to Slack if the last fetch hit failures.
+
+    Without this the nightly sync fails into a log line nobody reads,
+    and the first symptom is the agent quietly citing articles that no
+    longer exist.
+    """
+    if not LAST_FETCH_FAILURES:
+        return
     try:
         from slack import post_to_log
-        post_to_log(message)
+        post_to_log(build_failure_alert(articles_indexed, stats))
     except Exception as e:
         print(f"[KB SYNC] Slack alert failed: {e}")
 

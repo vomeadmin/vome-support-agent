@@ -882,7 +882,9 @@ async def kb_sync_run(request: Request):
             # sync_articles_to_db inherits _kb.LAST_FETCH_COMPLETE, so a
             # partial fetch can never trigger the delete step.
             stats = _kb.sync_articles_to_db(articles) if articles else {}
-            _kb._alert_fetch_failures(articles_indexed=len(articles))
+            _kb._alert_fetch_failures(
+                articles_indexed=len(articles), stats=stats
+            )
             _kb_sync_status["status"] = "completed"
             _kb_sync_status["result"] = {
                 "articles_fetched": len(articles),

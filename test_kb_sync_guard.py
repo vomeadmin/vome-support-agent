@@ -192,7 +192,12 @@ def test_fetch_is_marked_incomplete_when_a_category_errors(monkeypatch):
 
     assert articles == []
     assert kb_sync.LAST_FETCH_COMPLETE is False
-    assert any("getArticles failed" in f for f in kb_sync.LAST_FETCH_FAILURES)
+    assert any(
+        "getArticles failed" in m for m in kb_sync.failure_messages()
+    )
+    assert [f["kind"] for f in kb_sync.LAST_FETCH_FAILURES] == [
+        kb_sync.FAILURE_CATEGORY
+    ]
 
 
 def test_fetch_is_marked_incomplete_when_an_article_detail_fails(monkeypatch):
@@ -283,3 +288,100 @@ def test_clean_fetch_is_marked_complete_and_drops_unpublished(monkeypatch):
     assert [a["id"] for a in articles] == ["ok1"]
     assert kb_sync.LAST_FETCH_COMPLETE is True
     assert kb_sync.LAST_FETCH_FAILURES == []
+
+
+# ---------------------------------------------------------------------
+# 5. The alert says what actually happened
+#
+# The first real alert read: "anything new or edited in a failed
+# category is missing until the next clean run." That run added 47
+# articles and updated 44, and no category failed. Two individual
+# detail calls did. Meanwhile the consequence that mattered went
+# unmentioned: the skipped delete left 17 rows pointing at articles Zoho
+# no longer publishes, and those stay citable.
+# ---------------------------------------------------------------------
+
+def _set_failures(monkeypatch, failures):
+    monkeypatch.setattr(kb_sync, "LAST_FETCH_FAILURES", list(failures))
+
+
+PROD_STATS = {"added": 47, "updated": 44, "unchanged": 409,
+              "removed": 0, "delete_skipped": True}
+
+
+def test_article_failures_are_not_described_as_missing_content(monkeypatch):
+    """Reproduces the real alert and pins the corrected wording."""
+    _set_failures(monkeypatch, [
+        {"kind": kb_sync.FAILURE_ARTICLE,
+         "message": "FAQs & Knowledge Base: getArticle detail failed for 1"},
+        {"kind": kb_sync.FAILURE_ARTICLE,
+         "message": "FAQs & Knowledge Base: getArticle detail failed for 2"},
+    ])
+
+    alert = kb_sync.build_failure_alert(500, PROD_STATS)
+
+    assert "new or edited" not in alert, (
+        "no category failed, so nothing new or edited was missing"
+    )
+    assert "stale rather than missing" in alert
+    assert "47 added" in alert and "44 updated" in alert
+
+
+def test_every_alert_names_the_unpruned_rows(monkeypatch):
+    """The consequence that is true on any incomplete run."""
+    _set_failures(monkeypatch, [
+        {"kind": kb_sync.FAILURE_ARTICLE, "message": "detail failed for 1"},
+    ])
+
+    alert = kb_sync.build_failure_alert(500, PROD_STATS)
+
+    assert "delete step was skipped" in alert.lower()
+    assert "can still cite them" in alert
+
+
+def test_a_real_category_failure_does_say_content_is_missing(monkeypatch):
+    _set_failures(monkeypatch, [
+        {"kind": kb_sync.FAILURE_CATEGORY,
+         "message": "FAQ et base de connaissances: getArticles failed"},
+    ])
+
+    alert = kb_sync.build_failure_alert(400, PROD_STATS)
+
+    assert "1 category could not be listed" in alert
+    assert "New and edited articles there are missing" in alert
+
+
+def test_losing_the_category_list_says_the_run_indexed_nothing(monkeypatch):
+    _set_failures(monkeypatch, [
+        {"kind": kb_sync.FAILURE_CATEGORY_LIST,
+         "message": "category list failed: 500"},
+    ])
+
+    alert = kb_sync.build_failure_alert(0, {})
+
+    assert "indexed nothing" in alert
+    assert "last good run" in alert
+
+
+def test_the_failure_list_is_capped(monkeypatch):
+    _set_failures(monkeypatch, [
+        {"kind": kb_sync.FAILURE_ARTICLE, "message": f"detail failed for {i}"}
+        for i in range(40)
+    ])
+
+    alert = kb_sync.build_failure_alert(500, PROD_STATS)
+
+    assert "...and 25 more" in alert
+
+
+def test_no_failures_posts_nothing(monkeypatch):
+    _set_failures(monkeypatch, [])
+    posted = []
+    monkeypatch.setattr(
+        kb_sync, "build_failure_alert",
+        lambda *a, **k: posted.append(1) or "x",
+    )
+
+    kb_sync._alert_fetch_failures(500, PROD_STATS)
+
+    assert posted == []
