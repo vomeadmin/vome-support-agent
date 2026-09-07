@@ -30,8 +30,11 @@ from status_constants import (
     ZOHO_FINAL_REVIEW,
     ZOHO_CLOSED,
 )
+from clickup_tasks import extract_comment_text
 from signatures import signature_name, SIGNATURE_DOMAIN
 from model_config import SUPPORT_MODEL
+import kb_context
+import knowledge
 
 _anthropic = anthropic.Anthropic()
 
@@ -129,11 +132,7 @@ def generate_draft(
         comment_lines = []
         for c in comments:
             user = c.get("user", {}).get("username", "Unknown")
-            text_parts = []
-            for ct in c.get("comment", []):
-                if ct.get("type") == "text":
-                    text_parts.append(ct.get("text", ""))
-            text = "".join(text_parts).strip()
+            text = extract_comment_text(c)
             if text:
                 comment_lines.append(f"{user}: {text}")
         engineer_comments = "\n".join(comment_lines)
@@ -143,6 +142,13 @@ def generate_draft(
 
     # Detect language
     language = _detect_language(formatted_thread) or "en"
+
+    kb_block = kb_context.build_ticket_kb_block(
+        subject=subject,
+        latest_message=redraft_instruction or "",
+        body=ticket_data.get("description", "") or "",
+        detected_lang=_detect_language(formatted_thread),
+    )
 
     # -----------------------------------------------------------------------
     # Build Claude prompt
@@ -168,6 +174,7 @@ def generate_draft(
 
 ## Classification
 {classification}
+{kb_block}
 
 ## Draft Type
 {draft_type}: {draft_instructions}
@@ -192,7 +199,12 @@ Generate ONLY the reply text. No meta-commentary."""
         response = _anthropic.messages.create(
             model=SUPPORT_MODEL,
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            # The Command Center already knows the category, so this
+            # surface can also pull that category's learned section.
+            system=knowledge.augment_system_prompt(
+                SYSTEM_PROMPT,
+                category=(classification or {}).get("category"),
+            ),
             messages=[{"role": "user", "content": user_prompt}],
         )
         draft_text = response.content[0].text.strip()

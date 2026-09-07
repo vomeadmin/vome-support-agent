@@ -47,6 +47,10 @@ from status_constants import (
     THREAD_ON_PROD_SENT,
 )
 from signatures import signature, sign_message
+from outbound_guard import (
+    guard_failure_notice,
+    validate_client_message,
+)
 from model_config import SUPPORT_MODEL
 from zoho_links import extract_zoho_ticket_id
 
@@ -312,8 +316,13 @@ def _on_prod_message(
     ticket_fields: dict | None = None,
     zoho_ticket_id: str = "",
     clickup_task_id: str = "",
+    notice: str = "",
 ) -> str:
-    """Build the ON PROD Slack message block."""
+    """Build the ON PROD Slack message block.
+
+    *notice* is prepended when the draft was held back rather than sent,
+    e.g. an outbound-guard rejection.
+    """
     zoho_url = (
         f"https://desk.zoho.com/support/vomevolunteer"
         f"/ShowHomePage.do#Cases/dv/{zoho_ticket_id}"
@@ -322,7 +331,10 @@ def _on_prod_message(
         f"https://app.clickup.com/t/{clickup_task_id}"
     ) if clickup_task_id else ""
 
-    lines = [
+    lines = []
+    if notice:
+        lines += [notice, ""]
+    lines += [
         f":rocket: *On Prod — #{ticket_number}*",
         f"*{engineer_name} marked this as fixed.*",
     ]
@@ -370,6 +382,7 @@ def _post_to_existing_thread(
     zoho_ticket_id: str = "",
     clickup_task_id: str = "",
     ticket_fields: dict | None = None,
+    notice: str = "",
 ) -> bool:
     """Post ON PROD notification as a reply in an existing Slack thread."""
     text = _on_prod_message(
@@ -377,6 +390,7 @@ def _post_to_existing_thread(
         ticket_fields=ticket_fields,
         zoho_ticket_id=zoho_ticket_id,
         clickup_task_id=clickup_task_id,
+        notice=notice,
     )
     try:
         _slack.chat_postMessage(
@@ -396,6 +410,7 @@ def _create_new_thread(
     engineer_name: str,
     draft: str,
     clickup_task_id: str,
+    notice: str = "",
 ) -> str | None:
     """
     Create a new #vome-tickets message for pre-Slack tickets.
@@ -409,6 +424,7 @@ def _create_new_thread(
         ticket_fields=ticket_fields,
         zoho_ticket_id=zoho_ticket_id,
         clickup_task_id=clickup_task_id,
+        notice=notice,
     )
     try:
         resp = _slack.chat_postMessage(channel=CHANNEL_FINAL_REVIEW, text=text)
@@ -828,13 +844,30 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
             + signature("vic")
         )
 
+    # Step 6b - outbound guard. Deterministic check that the draft is a
+    # client-facing message and not model commentary, internal notes, or a
+    # refusal. Fails closed: on rejection nothing is emailed, the ticket
+    # stays in Final Review, and the draft goes to Slack for a human with
+    # the reasons attached.
+    guard = validate_client_message(
+        draft,
+        category="on_prod",
+        contact_name=fields.get("contact_name", ""),
+    )
+    guard_notice = "" if guard["ok"] else guard_failure_notice(
+        "on_prod", guard
+    )
+
     # Step 7 — AUTO-SEND the resolution to the client (signed Vic), then
     # close the ticket on Zoho and the task on ClickUp.
     contact_email = fields.get("contact_email", "")
     cc_email = fields.get("cc_email", "")
 
     can_send = (
-        bool(contact_email) and bool(draft) and len(draft.strip()) >= 20
+        guard["ok"]
+        and bool(contact_email)
+        and bool(draft)
+        and len(draft.strip()) >= 20
     )
     sent = (
         _send_resolution_email(
@@ -867,10 +900,17 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
     # --- Fallback: cannot auto-send (no contact email, empty draft, or the
     # send failed). Degrade to the manual-review flow so nothing is lost: post
     # the draft to Slack with confirm/send/cancel; Zoho stays in Final Review.
-    print(
-        f"[ON PROD] Auto-send unavailable for ticket {zoho_ticket_id} "
-        "— falling back to Slack review"
-    )
+    if guard_notice:
+        print(
+            f"[ON PROD] Outbound guard blocked the draft for ticket "
+            f"{zoho_ticket_id}, nothing emailed - falling back to "
+            "Slack review"
+        )
+    else:
+        print(
+            f"[ON PROD] Auto-send unavailable for ticket {zoho_ticket_id} "
+            "— falling back to Slack review"
+        )
 
     if not thread_ts:
         thread_ts = _find_thread_ts(zoho_ticket_id)
@@ -886,6 +926,7 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
             zoho_ticket_id=zoho_ticket_id,
             clickup_task_id=task_id,
             ticket_fields=fields,
+            notice=guard_notice,
         )
         if not posted:
             return False
@@ -895,6 +936,7 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
             "— creating new message"
         )
         thread_ts = _create_new_thread(
+            notice=guard_notice,
             zoho_ticket_id=zoho_ticket_id,
             ticket_fields=fields,
             engineer_name=engineer_name,

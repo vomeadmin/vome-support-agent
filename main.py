@@ -139,6 +139,16 @@ app.include_router(ops_router, prefix="/ops")
 # APScheduler — daily digest at 17:00 ET (America/Montreal)
 # ---------------------------------------------------------------------------
 
+def _run_weekly_knowledge_refresh():
+    """Scheduler entry point for the self-learning pass.
+
+    Imported lazily so a heavy analysis module is not pulled in at boot.
+    """
+    from ticket_analyzer import run_weekly_knowledge_refresh
+
+    return run_weekly_knowledge_refresh()
+
+
 _scheduler = BackgroundScheduler(timezone="America/Montreal")
 _scheduler.add_job(
     send_daily_digest,
@@ -151,6 +161,26 @@ _scheduler.add_job(
 _scheduler.add_job(
     run_kb_sync,
     CronTrigger(hour=2, minute=0, timezone="America/Montreal"),
+)
+# Weekly self-learning pass, Sundays at 03:00 ET. Analyses the tickets and
+# ClickUp tasks that closed since the last run, regenerates the knowledge
+# book into Postgres, and drops the read cache so live prompts pick it up.
+# Runs after the 02:00 KB sync and well clear of the Monday reports.
+# It claims the day in Postgres, so a restart near the trigger cannot
+# double-run it, and each pass is capped (KNOWLEDGE_TICKET_LIMIT /
+# KNOWLEDGE_TASK_LIMIT) so the historical backlog is worked down over
+# several weeks instead of in one multi-hour run.
+_scheduler.add_job(
+    _run_weekly_knowledge_refresh,
+    CronTrigger(
+        day_of_week="sun",
+        hour=int(os.environ.get("KNOWLEDGE_REFRESH_HOUR", "3")),
+        minute=int(os.environ.get("KNOWLEDGE_REFRESH_MINUTE", "0")),
+        timezone="America/Montreal",
+    ),
+    misfire_grace_time=3600,
+    coalesce=True,
+    max_instances=1,
 )
 # Stale awaiting-client sweep at 07:30 ET. Runs LIVE: it closes tickets on both
 # Zoho and ClickUp and posts one Slack report. Set STALE_SWEEP_DRY_RUN=true to
@@ -702,15 +732,120 @@ async def run_knowledge_book(request: Request):
 
 @app.get("/knowledge-book/status")
 async def knowledge_book_status():
-    """Check the status of the ticket analysis pipeline."""
+    """Check the self-learning pipeline: what has been analysed from both
+    sources, and which sections are currently live in prompts."""
     from ticket_analyzer import get_analysis_stats
+    from clickup_knowledge import get_task_analysis_stats
+    from database import knowledge_index_status
+
     stats = get_analysis_stats()
+    task_stats = get_task_analysis_stats()
+    try:
+        index = knowledge_index_status()
+    except Exception as e:
+        index = {"error": str(e)}
+
     return {
         "pipeline": _analysis_status,
         "running": _analysis_running,
         "analyzed_tickets": stats,
         "total_analyzed": sum(stats.values()),
+        "analyzed_clickup_tasks": task_stats,
+        "total_tasks_analyzed": sum(task_stats.values()),
+        # `sections` is what knowledge.py actually injects into prompts.
+        # Empty means nothing has been learned yet, whatever the counts
+        # above say.
+        "live_knowledge": index,
     }
+
+
+_clickup_scan_running = False
+_clickup_scan_status = {"status": "idle", "started": None, "last_update": None}
+
+
+@app.post("/knowledge-book/clickup-scan")
+async def knowledge_book_clickup_scan(request: Request):
+    """Mine closed ClickUp tasks for support knowledge.
+
+    Pass ?limit=N to bound the run (default 150), or ?limit=0 for no
+    ceiling. Runs in a background thread.
+    """
+    global _clickup_scan_running, _clickup_scan_status
+    if _clickup_scan_running:
+        return {"status": "already_running", "info": _clickup_scan_status}
+
+    raw_limit = request.query_params.get("limit")
+    limit: int | None
+    if raw_limit is None:
+        limit = 150
+    else:
+        try:
+            parsed = int(raw_limit)
+            limit = None if parsed <= 0 else parsed
+        except ValueError:
+            limit = 150
+
+    import threading
+
+    def _run():
+        global _clickup_scan_running, _clickup_scan_status
+        _clickup_scan_running = True
+        _clickup_scan_status = {
+            "status": "running",
+            "started": datetime.now(timezone.utc).isoformat(),
+            "last_update": None,
+            "result": None,
+        }
+        try:
+            from clickup_knowledge import run_clickup_knowledge_scan
+            _clickup_scan_status["result"] = run_clickup_knowledge_scan(
+                limit=limit
+            )
+            _clickup_scan_status["status"] = "completed"
+        except Exception as e:
+            _clickup_scan_status["status"] = f"failed: {e}"
+        finally:
+            _clickup_scan_status["last_update"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
+            _clickup_scan_running = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "started", "info": _clickup_scan_status}
+
+
+@app.post("/knowledge-book/refresh")
+async def knowledge_book_refresh():
+    """Run the weekly self-learning pass now: analyse newly closed
+    tickets and ClickUp tasks, regenerate the book, refresh the cache."""
+    global _analysis_running, _analysis_status
+    if _analysis_running:
+        return {"status": "already_running", "info": _analysis_status}
+
+    import threading
+
+    def _run():
+        global _analysis_running, _analysis_status
+        _analysis_running = True
+        _analysis_status = {
+            "status": "running",
+            "started": datetime.now(timezone.utc).isoformat(),
+            "last_update": None,
+        }
+        try:
+            from ticket_analyzer import run_weekly_knowledge_refresh
+            _analysis_status["result"] = run_weekly_knowledge_refresh()
+            _analysis_status["status"] = "completed"
+        except Exception as e:
+            _analysis_status["status"] = f"failed: {e}"
+        finally:
+            _analysis_status["last_update"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
+            _analysis_running = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "started", "info": _analysis_status}
 
 
 _kb_sync_running = False
@@ -741,15 +876,18 @@ async def kb_sync_run(request: Request):
             "result": None,
         }
         try:
-            from kb_sync import (
-                fetch_all_kb_articles,
-                sync_articles_to_db,
-            )
-            articles = fetch_all_kb_articles()
-            stats = sync_articles_to_db(articles) if articles else {}
+            import kb_sync as _kb
+
+            articles = _kb.fetch_all_kb_articles()
+            # sync_articles_to_db inherits _kb.LAST_FETCH_COMPLETE, so a
+            # partial fetch can never trigger the delete step.
+            stats = _kb.sync_articles_to_db(articles) if articles else {}
+            _kb._alert_fetch_failures(articles_indexed=len(articles))
             _kb_sync_status["status"] = "completed"
             _kb_sync_status["result"] = {
                 "articles_fetched": len(articles),
+                "fetch_complete": _kb.LAST_FETCH_COMPLETE,
+                "fetch_failures": list(_kb.LAST_FETCH_FAILURES),
                 **stats,
             }
         except Exception as e:
@@ -1027,7 +1165,11 @@ async def kb_sync_debug():
 async def kb_sync_status():
     """Inspect the kb_articles index and the last sync run."""
     from database import kb_index_status
-    from kb_sync import LAST_FETCH_DEBUG
+    from kb_sync import (
+        LAST_FETCH_COMPLETE,
+        LAST_FETCH_DEBUG,
+        LAST_FETCH_FAILURES,
+    )
     try:
         index = kb_index_status()
     except Exception as e:
@@ -1036,6 +1178,10 @@ async def kb_sync_status():
         "pipeline": _kb_sync_status,
         "running": _kb_sync_running,
         "index": index,
+        # False means the last fetch hit a failure and the delete step was
+        # skipped, so the index may be missing recent articles.
+        "last_fetch_complete": LAST_FETCH_COMPLETE,
+        "last_fetch_failures": LAST_FETCH_FAILURES,
         "last_fetch_debug": LAST_FETCH_DEBUG,
     }
 

@@ -142,11 +142,7 @@ def fetch_thread(zoho_ticket_id: str) -> dict:
         raw_comments = get_clickup_comments(clickup_task_id)
         for c in raw_comments:
             user = c.get("user", {})
-            comment_text_parts = []
-            for ct in c.get("comment", []):
-                if ct.get("type") == "text":
-                    comment_text_parts.append(ct.get("text", ""))
-            text_combined = "".join(comment_text_parts).strip()
+            text_combined = extract_comment_text(c)
             if not text_combined:
                 continue
 

@@ -65,6 +65,10 @@ from status_constants import (
     ZOHO_CLOSED,
 )
 from signatures import signature, sign_message
+from outbound_guard import (
+    guard_failure_notice,
+    validate_client_message,
+)
 from model_config import SUPPORT_MODEL
 
 _anthropic = anthropic.Anthropic()
@@ -427,6 +431,40 @@ def handle_user_education(task_id: str, engineer_name: str) -> bool:
             " works so you can get what you need. If anything is still"
             " unclear after this, just reply and we'll be glad to help.\n"
             + signature("vic")
+        )
+
+    # 7a. Outbound guard. This is the check that was missing when ticket
+    # #8945 was emailed the model's refusal-to-draft commentary on
+    # 2026-09-07. The "user education" signal is trusted (step 6), so when a
+    # dev mislabels an open bug as user education the model is asked to
+    # explain a feature that is in fact broken. It may well decline, and
+    # that decline must never reach the client. Fails closed to human review.
+    guard = validate_client_message(
+        draft,
+        category="user_education",
+        contact_name=fields.get("contact_name", ""),
+    )
+    if not guard["ok"]:
+        return _hold_draft_for_confirm(
+            zoho_ticket_id=zoho_ticket_id,
+            clickup_task_id=task_id,
+            draft=draft,
+            dup={},
+            fields=fields,
+            thread_ts=thread_ts,
+            thread_data=thread_data,
+            ticket_number=ticket_number,
+            engineer_name=engineer_name,
+            store_pending=False,
+            notice=guard_failure_notice("user_education", guard),
+            clickup_note=(
+                "The outbound guard blocked Vic's explanation, so nothing "
+                "was emailed to the client and this task was left where "
+                "you set it. Reason: " + "; ".join(guard["reasons"])
+                + ". If this ticket is actually an open bug rather than "
+                "user education, move it back instead of resending."
+            ),
+            log_tag="GUARD",
         )
 
     # 7b. High-confidence duplicate guard. If this explanation would just

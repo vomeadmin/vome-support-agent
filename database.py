@@ -166,6 +166,24 @@ analyzed_tickets = Table(
     Column("analyzed_at", DateTime, default=datetime.now(timezone.utc)),
 )
 
+# Closed ClickUp tasks that have been mined for knowledge. Separate from
+# analyzed_tickets because a task is a different shape: an engineering
+# thread with a resolution, not a client conversation.
+analyzed_clickup_tasks = Table(
+    "analyzed_clickup_tasks",
+    _metadata,
+    Column("task_id", String, primary_key=True),
+    Column("name", String, default=""),
+    Column("list_name", String, default=""),
+    Column("category", String, default=""),
+    Column("module", String, default=""),
+    Column("zoho_ticket_id", String, default=""),
+    Column("comment_count", Integer, default=0),
+    Column("closed_at", DateTime, nullable=True),
+    Column("analysis", JSONB, default={}),
+    Column("analyzed_at", DateTime, default=datetime.now(timezone.utc)),
+)
+
 # Knowledge book sections -- versioned training content
 # generated from ticket analysis
 knowledge_sections = Table(
@@ -754,6 +772,12 @@ def search_kb_articles_db(
         "  AND ( SELECT count(*) FROM unnest(q.lexemes) lx "
         "         WHERE lx <> '' AND a.search_vector @@ lx::tsquery "
         "      ) >= LEAST(2, cardinality(q.lexemes)) "
+        # Never surface a draft or unpublished article: its help-center
+        # URL 404s for the client. Legacy rows can have an empty status,
+        # so this excludes the known-bad values rather than requiring
+        # 'Published' outright.
+        "  AND lower(coalesce(a.status, '')) "
+        "      NOT IN ('draft', 'unpublished', 'review', 'in review') "
     )
     params = {"q": query.strip(), "limit": limit, "cfg": cfg}
     if language in ("en", "fr"):
@@ -812,6 +836,13 @@ def kb_index_status() -> dict:
             )
         ).all())
 
+        by_status = dict(conn.execute(
+            text(
+                "SELECT COALESCE(NULLIF(status, ''), '(none)'), COUNT(*) "
+                "FROM kb_articles GROUP BY 1"
+            )
+        ).all())
+
         by_category = conn.execute(
             text(
                 "SELECT category, COUNT(*) AS n FROM kb_articles "
@@ -835,6 +866,7 @@ def kb_index_status() -> dict:
     return {
         "total": int(total),
         "by_language": {k: int(v) for k, v in by_lang.items()},
+        "by_status": {k: int(v) for k, v in by_status.items()},
         "top_categories": [(c, int(n)) for c, n in by_category],
         "synced_oldest": synced[0].isoformat() if synced and synced[0] else None,
         "synced_newest": synced[1].isoformat() if synced and synced[1] else None,
@@ -845,6 +877,104 @@ def kb_index_status() -> dict:
             modified[1].isoformat() if modified and modified[1] else None
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Knowledge sections (read side)
+# ---------------------------------------------------------------------------
+
+def get_current_knowledge_sections(
+    section_keys: list[str] | None = None,
+) -> list[dict]:
+    """Return the current version of each knowledge section.
+
+    ticket_analyzer has always written this table and nothing ever read
+    it, so everything it learned from closed tickets sat unused. This is
+    the read side. Postgres rather than the filesystem is the store on
+    purpose: the app runs on an ephemeral dyno, so a generated file is
+    wiped on the next restart and a prompt built at import time never
+    picks up a regeneration anyway.
+
+    Pass `section_keys` to fetch specific sections, or None for all.
+    """
+    if not DATABASE_URL:
+        return []
+    try:
+        engine = _get_engine()
+        sql = (
+            "SELECT section_key, title, content, version, ticket_count, "
+            "       updated_at "
+            "FROM knowledge_sections "
+            "WHERE is_current = 'true' "
+        )
+        params: dict = {}
+        if section_keys:
+            sql += "  AND section_key = ANY(:keys) "
+            params["keys"] = list(section_keys)
+        sql += "ORDER BY ticket_count DESC"
+
+        with engine.connect() as conn:
+            rows = conn.execute(text(sql), params).mappings().all()
+
+        return [
+            {
+                "section_key": r["section_key"],
+                "title": r["title"],
+                "content": r["content"] or "",
+                "version": r["version"],
+                "ticket_count": r["ticket_count"] or 0,
+                "updated_at": (
+                    r["updated_at"].isoformat() if r["updated_at"] else ""
+                ),
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[DB] get_current_knowledge_sections failed: {e}")
+        return []
+
+
+def knowledge_index_status() -> dict:
+    """Summarise what the agent has actually learned so far."""
+    if not DATABASE_URL:
+        return {"error": "DATABASE_URL not set"}
+    try:
+        engine = _get_engine()
+        with engine.connect() as conn:
+            tickets = conn.execute(
+                text("SELECT COUNT(*) FROM analyzed_tickets")
+            ).scalar() or 0
+            tasks = conn.execute(
+                text("SELECT COUNT(*) FROM analyzed_clickup_tasks")
+            ).scalar() or 0
+            sections = conn.execute(
+                text(
+                    "SELECT section_key, title, ticket_count, version, "
+                    "       updated_at "
+                    "FROM knowledge_sections WHERE is_current = 'true' "
+                    "ORDER BY ticket_count DESC"
+                )
+            ).mappings().all()
+
+        return {
+            "analyzed_tickets": int(tickets),
+            "analyzed_clickup_tasks": int(tasks),
+            "sections": [
+                {
+                    "section_key": r["section_key"],
+                    "title": r["title"],
+                    "source_count": r["ticket_count"] or 0,
+                    "version": r["version"],
+                    "updated_at": (
+                        r["updated_at"].isoformat()
+                        if r["updated_at"] else ""
+                    ),
+                }
+                for r in sections
+            ],
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ---------------------------------------------------------------------------

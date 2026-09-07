@@ -17,15 +17,21 @@ The Knowledge Book is a living training document organized by category:
 - FAQ entries (what to say for common questions)
 - Decision patterns (when to escalate, when to answer directly)
 
-Run this script once to process all historical tickets:
-    python ticket_analyzer.py
+Run this script to process historical tickets:
+    python ticket_analyzer.py              # bounded run
+    python ticket_analyzer.py --all        # no ceiling
+    python ticket_analyzer.py --limit 300
 
 It tracks progress in the database, so it's safe to restart --
-it will pick up where it left off.
+it will pick up where it left off. run_weekly_knowledge_refresh() is the
+scheduled entry point: it analyses newly closed tickets, mines newly
+closed ClickUp tasks (clickup_knowledge.py), regenerates the book and
+drops the read-side cache.
 
-The Knowledge Book output lives in:
-    knowledge_book/  (markdown files, one per section)
-    knowledge_book/_summary.md  (overview + stats)
+Postgres is the authoritative store. `knowledge_sections` is what
+knowledge.py reads into live prompts; the markdown under knowledge_book/
+is a local debugging convenience only, because the app runs on an
+ephemeral filesystem where generated files do not survive a restart.
 """
 
 import json
@@ -527,11 +533,122 @@ IMPORTANT:
 Write in markdown format. This will be read by both humans and AI agents."""
 
 
+ENGINEERING_SYNTHESIS_PROMPT = """You are writing the "How these issues get resolved" section of the Vome Support Knowledge Book, from {task_count} finished engineering tasks.
+
+Each entry below is a real closed task: what a client reported, what it turned out to be, and how it was resolved.
+
+{task_summaries}
+
+Write a training section that a support agent (human or AI) reads before drafting a reply. Include:
+
+1. **Recurring issues** -- the problems that come up again and again, what they look like from the client's side, and what they usually turn out to be
+2. **Diagnostic questions that work** -- the questions that actually narrow these down, grouped by symptom
+3. **Safe client-facing explanations** -- how to describe each recurring cause to a client, in plain warm language with zero internal detail
+4. **User education patterns** -- the cases that were not bugs at all, and how the client was walked through the right way to do it
+5. **Where to be careful** -- issues where the obvious answer is wrong, or where support should confirm before promising anything
+6. **Article gaps** -- topics that keep generating tickets and have no help center article
+
+Rules:
+- Ground every claim in the entries above. If something appears once, say so rather than presenting it as a pattern.
+- Never include internal engineering detail that would be unsafe to repeat to a client: no code, no file names, no engineer names.
+- Do not promise fixes or dates. A past fix does not mean a current one is coming.
+- Be specific. "Shifts appear an hour off when the org timezone and the shift timezone disagree" beats "timezone issues occur".
+
+Write in markdown. Keep it under 2500 words."""
+
+
+def _generate_engineering_section() -> int:
+    """Synthesise closed ClickUp tasks into the engineering_resolutions
+    section. Returns the number of tasks it was built from.
+
+    This is the half of the knowledge book that Zoho cannot provide: the
+    diagnosis, and what the issue actually turned out to be.
+    """
+    try:
+        from clickup_knowledge import get_all_task_analyses
+    except Exception as e:
+        print(f"[BOOK] clickup_knowledge unavailable: {e}")
+        return 0
+
+    task_analyses = get_all_task_analyses()
+    if not task_analyses:
+        print("[BOOK] No mined ClickUp tasks yet -- skipping engineering section")
+        return 0
+
+    print(
+        f"[BOOK] Generating engineering section from "
+        f"{len(task_analyses)} closed tasks..."
+    )
+
+    summaries = []
+    for t in task_analyses:
+        a = t["analysis"]
+        questions = a.get("diagnostic_questions") or []
+        summaries.append(
+            f"Task: {t['name']}\n"
+            f"  Category: {a.get('category', '?')} / "
+            f"module: {a.get('module', '?')}\n"
+            f"  Client saw: {a.get('problem_statement', 'N/A')}\n"
+            f"  Root cause: {a.get('root_cause', 'not stated')}\n"
+            f"  Resolution: {a.get('resolution_type', '?')} -- "
+            f"{a.get('resolution_summary', 'N/A')}\n"
+            f"  Told the client: {a.get('client_facing_explanation', '')}\n"
+            f"  Diagnostic questions: {', '.join(questions)}\n"
+            f"  Recurrence risk: {a.get('recurrence_risk', '?')}\n"
+            f"  Article candidate: {a.get('kb_article_candidate', False)} "
+            f"({a.get('kb_article_topic') or 'none'})\n"
+            f"  Training notes: {a.get('training_notes', '')}"
+        )
+
+    summaries_text = "\n\n---\n\n".join(summaries)
+    if len(summaries_text) > 20000:
+        summaries_text = summaries_text[:20000] + (
+            "\n\n[... additional tasks truncated]"
+        )
+
+    prompt = ENGINEERING_SYNTHESIS_PROMPT.format(
+        task_count=len(task_analyses),
+        task_summaries=summaries_text,
+    )
+
+    try:
+        response = _client.messages.create(
+            model=SUPPORT_MODEL,
+            max_tokens=4000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        content = response.content[0].text
+
+        (KNOWLEDGE_BOOK_DIR / "engineering_resolutions.md").write_text(
+            "# How These Issues Get Resolved\n\n"
+            f"*Generated from {len(task_analyses)} closed ClickUp tasks "
+            f"| Last updated: "
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M')}*\n\n"
+            f"{content}",
+            encoding="utf-8",
+        )
+        _save_knowledge_section(
+            "engineering_resolutions",
+            "How These Issues Get Resolved",
+            content,
+            len(task_analyses),
+        )
+        print("[BOOK] Written: engineering_resolutions")
+        return len(task_analyses)
+    except Exception as e:
+        print(f"[BOOK] Failed to generate engineering section: {e}")
+        return 0
+
+
 def generate_knowledge_book():
-    """Generate the full Knowledge Book from analyzed tickets."""
+    """Generate the full Knowledge Book from analyzed tickets and tasks."""
     analyses = get_all_analyses()
     if not analyses:
+        # Closed ClickUp tasks can still carry the whole book on their
+        # own, so an empty ticket table is not a reason to bail out.
         print("[BOOK] No analyzed tickets found")
+        _generate_engineering_section()
+        _refresh_read_cache()
         return
 
     print(f"[BOOK] Generating Knowledge Book from {len(analyses)} tickets...")
@@ -643,10 +760,26 @@ def generate_knowledge_book():
     # Generate Sam's Voice guide (cross-cutting)
     _generate_voice_guide(analyses)
 
+    # Generate the engineering resolutions section from closed ClickUp
+    # tasks. This is the source that carries the actual diagnosis.
+    _generate_engineering_section()
+
     # Generate summary
     _generate_summary(sections, analyses)
 
+    _refresh_read_cache()
+
     print("[BOOK] Knowledge Book generation complete!")
+
+
+def _refresh_read_cache():
+    """Drop knowledge.py's TTL cache so the new book goes live at once."""
+    try:
+        import knowledge
+        knowledge.clear_cache()
+        print("[BOOK] Read-side cache cleared")
+    except Exception as e:
+        print(f"[BOOK] Could not clear read cache: {e}")
 
 
 def _generate_voice_guide(analyses: list[dict]):
@@ -863,12 +996,26 @@ def _save_knowledge_section(
 # Main runner
 # =====================================================================
 
-def run_full_analysis():
-    """Run the complete analysis pipeline.
+def run_full_analysis(
+    limit: int | None = None,
+    generate_book: bool = True,
+) -> dict:
+    """Run the analysis pipeline.
 
     1. Fetch all ticket IDs from Zoho
     2. For each unanalyzed ticket: fetch detail, analyze, store
     3. Generate the Knowledge Book
+
+    `limit` caps how many tickets one run will analyse. The backlog is
+    ~2,300 closed tickets at roughly five seconds each, which is hours of
+    wall clock, so a scheduled run takes a bounded bite and the rest
+    carries to the next one. None means no ceiling.
+
+    Set `generate_book=False` to analyse without re-synthesising, which
+    the weekly refresh uses so the book is generated once at the end
+    rather than once per source.
+
+    Returns {total, already_analyzed, processed, failed, remaining}.
     """
     print("=" * 60)
     print("VOME KNOWLEDGE BOOK BUILDER")
@@ -878,21 +1025,37 @@ def run_full_analysis():
     # Initialize DB tables
     init_db()
 
+    outcome = {
+        "total": 0,
+        "already_analyzed": 0,
+        "processed": 0,
+        "failed": 0,
+        "remaining": 0,
+    }
+
     # Step 1: Fetch all ticket IDs
     all_tickets = fetch_all_ticket_ids()
     if not all_tickets:
         print("[ERROR] No tickets found in Zoho Desk")
-        return
+        return outcome
 
     # Step 2: Filter to unanalyzed tickets
     unanalyzed = [
         t for t in all_tickets
         if not is_ticket_analyzed(t["id"])
     ]
+    outcome["total"] = len(all_tickets)
+    outcome["already_analyzed"] = len(all_tickets) - len(unanalyzed)
+
+    if limit is not None and len(unanalyzed) > limit:
+        outcome["remaining"] = len(unanalyzed) - limit
+        unanalyzed = unanalyzed[:limit]
+
     print(
         f"\n[PROGRESS] {len(all_tickets)} total tickets, "
-        f"{len(all_tickets) - len(unanalyzed)} already analyzed, "
-        f"{len(unanalyzed)} remaining\n"
+        f"{outcome['already_analyzed']} already analyzed, "
+        f"{len(unanalyzed)} this run, "
+        f"{outcome['remaining']} left for the next run\n"
     )
 
     # Step 3: Process each ticket
@@ -969,6 +1132,9 @@ def run_full_analysis():
                 f"--- Categories so far: {stats} ---\n"
             )
 
+    outcome["processed"] = processed
+    outcome["failed"] = failed
+
     print(f"\n{'=' * 60}")
     print(
         f"Analysis complete: {processed} processed, "
@@ -977,8 +1143,9 @@ def run_full_analysis():
     print(f"{'=' * 60}\n")
 
     # Step 4: Generate Knowledge Book
-    print("[BOOK] Generating Knowledge Book...")
-    generate_knowledge_book()
+    if generate_book:
+        print("[BOOK] Generating Knowledge Book...")
+        generate_knowledge_book()
 
     # Final stats
     stats = get_analysis_stats()
@@ -995,7 +1162,117 @@ def run_full_analysis():
         f"{KNOWLEDGE_BOOK_DIR.absolute()}"
     )
     print(f"Completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    return outcome
+
+
+# =====================================================================
+# Weekly refresh (scheduled entry point)
+# =====================================================================
+
+# Per-run ceilings. Env-overridable because the right number depends on
+# how big the backlog still is: generous while backfilling, small once
+# the pipeline is only keeping up with the week's closures.
+WEEKLY_TICKET_LIMIT = int(os.environ.get("KNOWLEDGE_TICKET_LIMIT", "200"))
+WEEKLY_TASK_LIMIT = int(os.environ.get("KNOWLEDGE_TASK_LIMIT", "150"))
+
+
+def run_weekly_knowledge_refresh() -> dict:
+    """Learn from the week's closed work, then rebuild the book.
+
+    This is what makes the agent self-learning rather than a one-off
+    batch that somebody remembers to trigger. Order matters: both
+    sources are mined first, then the book is synthesised once, then the
+    read cache is dropped so live prompts pick it up.
+
+    Claims the run in Postgres so a restart near the trigger time, or a
+    second dyno, cannot double-run it.
+    """
+    from database import claim_sweeper_run, finish_sweeper_run
+
+    run_key = f"knowledge-refresh-{datetime.now().strftime('%Y-%m-%d')}"
+    if not claim_sweeper_run(run_key):
+        print(f"[KNOWLEDGE] {run_key} already claimed -- skipping")
+        return {"status": "already_ran"}
+
+    print("=" * 60)
+    print("WEEKLY KNOWLEDGE REFRESH")
+    print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 60)
+
+    summary: dict = {"tickets": {}, "clickup": {}, "book": "skipped"}
+
+    try:
+        summary["tickets"] = run_full_analysis(
+            limit=WEEKLY_TICKET_LIMIT, generate_book=False
+        )
+    except Exception as e:
+        print(f"[KNOWLEDGE] ticket analysis failed: {e}")
+        summary["tickets"] = {"error": str(e)}
+
+    try:
+        from clickup_knowledge import run_clickup_knowledge_scan
+        summary["clickup"] = run_clickup_knowledge_scan(
+            limit=WEEKLY_TASK_LIMIT
+        )
+    except Exception as e:
+        print(f"[KNOWLEDGE] ClickUp scan failed: {e}")
+        summary["clickup"] = {"error": str(e)}
+
+    # Rebuild once, from whatever both passes produced. Worth doing even
+    # if a pass errored: the other source may still have new rows.
+    try:
+        generate_knowledge_book()
+        summary["book"] = "regenerated"
+    except Exception as e:
+        print(f"[KNOWLEDGE] book generation failed: {e}")
+        summary["book"] = f"failed: {e}"
+
+    finish_sweeper_run(run_key, summary)
+    _post_refresh_summary(summary)
+
+    print("=" * 60)
+    print(f"WEEKLY KNOWLEDGE REFRESH COMPLETE: {summary}")
+    print("=" * 60)
+    return summary
+
+
+def _post_refresh_summary(summary: dict) -> None:
+    """Post a short Slack note so the pipeline is visibly alive."""
+    tickets = summary.get("tickets") or {}
+    tasks = summary.get("clickup") or {}
+    remaining = (
+        int(tickets.get("remaining", 0) or 0)
+        + int(tasks.get("remaining", 0) or 0)
+    )
+    backlog = (
+        f"\n{remaining} item(s) left in the backlog for next week."
+        if remaining else ""
+    )
+    message = (
+        f":books: *Weekly knowledge refresh*\n"
+        f"Tickets: {tickets.get('processed', 0)} newly analysed "
+        f"({tickets.get('already_analyzed', 0)} already known, "
+        f"{tickets.get('failed', 0)} failed)\n"
+        f"ClickUp tasks: {tasks.get('processed', 0)} newly mined "
+        f"({tasks.get('skipped', 0)} too thin to learn from, "
+        f"{tasks.get('failed', 0)} failed)\n"
+        f"Knowledge book: {summary.get('book')}"
+        f"{backlog}"
+    )
+    try:
+        from slack import post_to_log
+        post_to_log(message)
+    except Exception as e:
+        print(f"[KNOWLEDGE] Slack summary failed: {e}")
 
 
 if __name__ == "__main__":
-    run_full_analysis()
+    if "--weekly" in sys.argv:
+        run_weekly_knowledge_refresh()
+    elif "--book-only" in sys.argv:
+        generate_knowledge_book()
+    else:
+        run_limit = None if "--all" in sys.argv else 200
+        if "--limit" in sys.argv:
+            run_limit = int(sys.argv[sys.argv.index("--limit") + 1])
+        run_full_analysis(limit=run_limit)

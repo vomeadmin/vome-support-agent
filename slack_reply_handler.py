@@ -30,6 +30,8 @@ from agent import (
     fetch_ticket_from_zoho,
     get_last_mcp_error,
 )
+import kb_context
+import knowledge
 from clickup_tasks import (
     _map_type_option,
     _map_platform_option,
@@ -1030,6 +1032,12 @@ def _generate_draft(ticket_id: str) -> str:
     if detected:
         lang_note = f"\nRespond in {detected}.\n"
 
+    kb_block = kb_context.build_ticket_kb_block(
+        subject=subject,
+        body=body,
+        detected_lang=detected,
+    )
+
     user_message = (
         "Generate a client-facing draft response for this ticket.\n"
         "Follow all voice guidelines from the system prompt.\n"
@@ -1039,12 +1047,13 @@ def _generate_draft(ticket_id: str) -> str:
         f"Client: {contact_name}\n"
         f"Ticket body:\n{body}\n\n"
         f"Full thread:\n{thread_text}"
+        f"{kb_block}"
     )
 
     response = _anthropic.messages.create(
         model=SUPPORT_MODEL,
         max_tokens=1000,
-        system=SYSTEM_PROMPT,
+        system=knowledge.augment_system_prompt(SYSTEM_PROMPT),
         messages=[{"role": "user", "content": user_message}],
     )
     return response.content[0].text
@@ -1066,6 +1075,16 @@ def _generate_draft_from_instruction(
     subject = fields["subject"]
     thread_text = _format_conversations(conversations_result)
 
+    # Sam has already decided what to say. The KB is here so the draft
+    # can link the article that backs it up, and so the steps match what
+    # the help center actually documents.
+    kb_block = kb_context.build_ticket_kb_block(
+        subject=subject,
+        latest_message=sam_instruction,
+        body=body,
+        detected_lang=_detect_language(body) or _detect_language(thread_text),
+    )
+
     user_message = (
         f"Sam wants to send this message to the client: "
         f"'{sam_instruction}'\n\n"
@@ -1073,7 +1092,8 @@ def _generate_draft_from_instruction(
         f"Subject: {subject}\n"
         f"Client: {contact_name}\n"
         f"Ticket body:\n{body}\n\n"
-        f"Full thread:\n{thread_text}\n\n"
+        f"Full thread:\n{thread_text}\n"
+        f"{kb_block}\n"
         "Write a clean client-facing response following the voice guidelines "
         "in the system prompt. Keep it short and warm. "
         "Do not use em-dash. "
@@ -1083,7 +1103,7 @@ def _generate_draft_from_instruction(
     response = _anthropic.messages.create(
         model=SUPPORT_MODEL,
         max_tokens=800,
-        system=SYSTEM_PROMPT,
+        system=knowledge.augment_system_prompt(SYSTEM_PROMPT),
         messages=[{"role": "user", "content": user_message}],
     )
     return response.content[0].text

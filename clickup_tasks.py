@@ -15,6 +15,33 @@ from status_constants import CU_WRITE_QUEUED_LOWER, CU_WRITE_CLOSED_UPPER
 CLICKUP_API_TOKEN = os.environ.get("CLICKUP_API_TOKEN", "")
 CLICKUP_BASE = "https://api.clickup.com/api/v2"
 
+
+def extract_comment_text(comment: dict) -> str:
+    """Return the plain text of one ClickUp comment.
+
+    ClickUp gives a comment two ways: `comment_text`, a plain string, and
+    `comment`, a list of rich-text blocks. Every consumer here used to
+    walk the block list filtering on `block["type"] == "text"`, but the
+    blocks carry no `type` key at all, so the filter matched nothing and
+    the caller silently got an empty string. Prefer `comment_text` and
+    fall back to joining the blocks unfiltered.
+
+    Do not reuse this for MCP responses. Those content blocks really do
+    have a `type`, and their parsers are correct as written.
+    """
+    if not isinstance(comment, dict):
+        return ""
+
+    plain = comment.get("comment_text")
+    if isinstance(plain, str) and plain.strip():
+        return plain.strip()
+
+    parts = []
+    for block in comment.get("comment") or []:
+        if isinstance(block, dict):
+            parts.append(block.get("text", "") or "")
+    return "".join(parts).strip()
+
 # ---------------------------------------------------------------------------
 # List IDs
 # ---------------------------------------------------------------------------

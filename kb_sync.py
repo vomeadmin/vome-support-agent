@@ -8,7 +8,18 @@ This script:
 2. Fetches all articles in each category
 3. UPSERTs article content into Postgres -- only changed rows are
    touched (compared by Zoho's modifiedTime).
-4. Deletes any rows whose article was removed from Zoho.
+4. Deletes any rows whose article was removed from Zoho, but ONLY when
+   the fetch completed cleanly (see LAST_FETCH_COMPLETE below).
+
+Only Published articles are indexed. Drafts and unpublished articles
+live at portal URLs that 404 for clients, so quoting them would send a
+customer to a dead link.
+
+Deletion safety: the delete step removes every row whose id was not seen
+during the fetch. If a category errors mid-run, or an article's detail
+call fails, those ids are missing from the seen set and a blind delete
+would silently wipe them from the agent's knowledge. So the fetch tracks
+its own completeness and the delete is skipped whenever anything failed.
 
 At runtime, intake.py queries kb_articles via Postgres FTS to find
 relevant articles for the current conversation -- the full article
@@ -48,12 +59,28 @@ if sys.stdout.encoding != "utf-8":
 # Rate limiting
 ZOHO_DELAY = 1.5  # seconds between API calls
 
+# Only these Zoho article statuses are indexed. Zoho also returns
+# "Draft" and "Unpublished" from getArticles; both are invisible on the
+# public help center, so an answer grounded in one would cite a URL the
+# client cannot open.
+PUBLISHED_STATUSES = {"published"}
+
 
 # =====================================================================
 # Fetch articles from Zoho
 # =====================================================================
 
 LAST_FETCH_DEBUG: list[dict] = []
+
+# True only when the last fetch reached every category and every article
+# detail without a single failure. sync_articles_to_db refuses to run the
+# delete step unless this is True, so a partial fetch can never be
+# mistaken for "these articles no longer exist in Zoho".
+LAST_FETCH_COMPLETE: bool = False
+
+# Human-readable failures from the last fetch, surfaced in Slack and in
+# /kb-sync/status.
+LAST_FETCH_FAILURES: list[str] = []
 
 # Tokens that signal a category is French. Detected on lowercased
 # category name. `detail.locale` from Zoho always returns "en" (it
@@ -94,12 +121,18 @@ def fetch_all_kb_articles() -> list[dict]:
     Returns list of {id, title, content, permalink, category,
     modifiedTime, createdTime, language, status, url}.
 
+    Only Published articles are returned (see PUBLISHED_STATUSES).
+
     Side effect: writes a per-category trace into the module-level
     LAST_FETCH_DEBUG so /kb-sync/status can surface what happened
-    when a sync mysteriously returns 0 articles.
+    when a sync mysteriously returns 0 articles, and sets
+    LAST_FETCH_COMPLETE / LAST_FETCH_FAILURES so the caller knows
+    whether the delete step is safe to run.
     """
-    global LAST_FETCH_DEBUG
+    global LAST_FETCH_DEBUG, LAST_FETCH_COMPLETE, LAST_FETCH_FAILURES
     LAST_FETCH_DEBUG = []
+    LAST_FETCH_FAILURES = []
+    LAST_FETCH_COMPLETE = False
     articles = []
 
     print("[KB SYNC] Fetching KB categories...")
@@ -111,6 +144,7 @@ def fetch_all_kb_articles() -> list[dict]:
     if cat_err:
         print(f"[KB SYNC] Category fetch errored: {cat_err}")
         LAST_FETCH_DEBUG.append({"stage": "categories", "error": cat_err})
+        LAST_FETCH_FAILURES.append(f"category list failed: {cat_err}")
         return []
 
     raw_cats = _unwrap_mcp_result(cat_result)
@@ -119,6 +153,7 @@ def fetch_all_kb_articles() -> list[dict]:
         LAST_FETCH_DEBUG.append({
             "stage": "categories", "error": "empty response",
         })
+        LAST_FETCH_FAILURES.append("category list returned an empty response")
         return []
 
     categories = []
@@ -175,6 +210,10 @@ def fetch_all_kb_articles() -> list[dict]:
                     "from": page_from,
                     "error": page_err,
                 })
+                LAST_FETCH_FAILURES.append(
+                    f"{cat_name}: getArticles failed at from={page_from}: "
+                    f"{page_err}"
+                )
                 errored = True
                 break
 
@@ -191,6 +230,10 @@ def fetch_all_kb_articles() -> list[dict]:
             page_from += page_size
 
         if errored:
+            # Do NOT fall through to the article loop. Leaving this
+            # category out of the seen-ids set is what makes the delete
+            # step dangerous, which is why LAST_FETCH_COMPLETE stays
+            # False and the delete is skipped for the whole run.
             continue
 
         LAST_FETCH_DEBUG.append({
@@ -200,14 +243,31 @@ def fetch_all_kb_articles() -> list[dict]:
             "article_count": len(art_list),
         })
 
+        skipped_unpublished = 0
         for art in art_list:
             article_id = str(art.get("id", ""))
             if not article_id:
                 continue
 
+            # Cheap pre-filter: the list payload already carries status,
+            # so an unpublished article costs no detail call.
+            if not _is_published(art.get("status")):
+                skipped_unpublished += 1
+                continue
+
             time.sleep(ZOHO_DELAY)
             detail = _fetch_article_detail(article_id)
             if not detail:
+                LAST_FETCH_FAILURES.append(
+                    f"{cat_name}: getArticle detail failed for "
+                    f"{article_id}"
+                )
+                continue
+
+            # The detail payload is authoritative. An article unpublished
+            # between the list call and this one still gets dropped.
+            if not _is_published(detail.get("status")):
+                skipped_unpublished += 1
                 continue
 
             raw_content = detail.get("answer", "") or ""
@@ -241,10 +301,31 @@ def fetch_all_kb_articles() -> list[dict]:
                 "url": _build_article_url(permalink, article_id),
             })
 
-        print(f"[KB SYNC]   -> {len(art_list)} articles in {cat_name}")
+        if skipped_unpublished:
+            LAST_FETCH_DEBUG.append({
+                "stage": "status_filter",
+                "category": cat_name,
+                "skipped_unpublished": skipped_unpublished,
+            })
+        print(
+            f"[KB SYNC]   -> {len(art_list)} articles in {cat_name} "
+            f"({skipped_unpublished} skipped as unpublished)"
+        )
 
+    LAST_FETCH_COMPLETE = not LAST_FETCH_FAILURES
     print(f"[KB SYNC] Total articles fetched: {len(articles)}")
+    if not LAST_FETCH_COMPLETE:
+        print(
+            f"[KB SYNC] Fetch INCOMPLETE, "
+            f"{len(LAST_FETCH_FAILURES)} failure(s). "
+            f"Delete step will be skipped."
+        )
     return articles
+
+
+def _is_published(status: str | None) -> bool:
+    """True if a Zoho article status means the article is publicly live."""
+    return (status or "").strip().lower() in PUBLISHED_STATUSES
 
 
 def _fetch_article_detail(article_id: str) -> dict | None:
@@ -281,17 +362,33 @@ def _build_article_url(permalink: str, article_id: str) -> str:
 # Upsert into Postgres
 # =====================================================================
 
-def sync_articles_to_db(articles: list[dict]) -> dict:
+def sync_articles_to_db(
+    articles: list[dict],
+    allow_delete: bool | None = None,
+) -> dict:
     """UPSERT each article into kb_articles, then delete missing rows.
 
-    Returns {added, updated, unchanged, removed, skipped}.
+    `allow_delete` gates the delete step. Leave it None to inherit
+    LAST_FETCH_COMPLETE from the fetch that produced `articles`, which is
+    what every caller wants: the delete removes every row not seen during
+    the fetch, so running it after a partial fetch wipes whole categories
+    out of the agent's knowledge with no warning. Pass True only when you
+    are certain `articles` is the complete Zoho set.
+
+    Returns {added, updated, unchanged, removed, skipped,
+    skipped_unpublished, delete_skipped}.
     """
+    if allow_delete is None:
+        allow_delete = LAST_FETCH_COMPLETE
+
     stats = {
         "added": 0,
         "updated": 0,
         "unchanged": 0,
         "removed": 0,
         "skipped": 0,
+        "skipped_unpublished": 0,
+        "delete_skipped": False,
     }
 
     seen_ids = []
@@ -299,10 +396,21 @@ def sync_articles_to_db(articles: list[dict]) -> dict:
         article_id = str(article.get("id") or "")
         if not article_id:
             continue
-        # Skip articles with effectively no body
+
+        # Belt and braces. fetch_all_kb_articles already filters these
+        # out, but sync_articles_to_db is also called directly.
+        if not _is_published(article.get("status")):
+            stats["skipped_unpublished"] += 1
+            continue
+
+        # Skip articles with effectively no body, but still count them as
+        # seen. A sub-20-character body is far more often a stripped-HTML
+        # anomaly than a genuinely empty article, and keeping the last
+        # good row beats deleting a real article over a parse glitch.
         body = (article.get("content") or "").strip()
         if len(body) < 20:
             stats["skipped"] += 1
+            seen_ids.append(article_id)
             continue
 
         result = upsert_kb_article(article)
@@ -310,9 +418,12 @@ def sync_articles_to_db(articles: list[dict]) -> dict:
             stats[result] += 1
         seen_ids.append(article_id)
 
-    # Drop rows for articles that no longer exist in Zoho
-    if seen_ids:
+    # Drop rows for articles that no longer exist in Zoho, or that were
+    # unpublished since the last run. Only ever on a complete fetch.
+    if seen_ids and allow_delete:
         stats["removed"] = delete_missing_kb_articles(seen_ids)
+    elif seen_ids:
+        stats["delete_skipped"] = True
 
     return stats
 
@@ -374,19 +485,60 @@ def run_kb_sync():
     articles = fetch_all_kb_articles()
     if not articles:
         print("[KB SYNC] No articles to sync")
+        _alert_fetch_failures(articles_indexed=0)
         return
 
     stats = sync_articles_to_db(articles)
 
     print(f"\n{'=' * 60}")
     print("KB SYNC COMPLETE")
-    print(f"  Added:     {stats['added']}")
-    print(f"  Updated:   {stats['updated']}")
-    print(f"  Unchanged: {stats['unchanged']}")
-    print(f"  Removed:   {stats['removed']}")
-    print(f"  Skipped:   {stats['skipped']}  (empty body)")
+    print(f"  Added:       {stats['added']}")
+    print(f"  Updated:     {stats['updated']}")
+    print(f"  Unchanged:   {stats['unchanged']}")
+    print(f"  Removed:     {stats['removed']}")
+    print(f"  Skipped:     {stats['skipped']}  (empty body)")
+    print(
+        f"  Unpublished: {stats['skipped_unpublished']}  "
+        f"(draft/unpublished, not indexed)"
+    )
+    if stats["delete_skipped"]:
+        print("  Delete step SKIPPED (fetch was incomplete)")
     print(f"Completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
+
+    _alert_fetch_failures(articles_indexed=len(articles))
+
+
+def _alert_fetch_failures(articles_indexed: int) -> None:
+    """Post to Slack if the last fetch hit failures.
+
+    Without this the nightly sync fails into a log line nobody reads, and
+    the first symptom is the agent quietly not knowing about a whole
+    category of articles.
+    """
+    if not LAST_FETCH_FAILURES:
+        return
+
+    lines = LAST_FETCH_FAILURES[:15]
+    more = len(LAST_FETCH_FAILURES) - len(lines)
+    body = "\n".join(f"  - {line}" for line in lines)
+    if more > 0:
+        body += f"\n  - ...and {more} more"
+
+    message = (
+        f":warning: *KB sync ran incomplete* "
+        f"({len(LAST_FETCH_FAILURES)} failure(s), "
+        f"{articles_indexed} articles indexed)\n"
+        f"The delete step was skipped, so nothing was removed from the "
+        f"index. Existing articles are still searchable, but anything "
+        f"new or edited in a failed category is missing until the next "
+        f"clean run.\n{body}"
+    )
+    try:
+        from slack import post_to_log
+        post_to_log(message)
+    except Exception as e:
+        print(f"[KB SYNC] Slack alert failed: {e}")
 
 
 def print_kb_status():
@@ -410,6 +562,20 @@ def print_kb_status():
     by_lang = status.get("by_language", {}) or {}
     if by_lang:
         print(f"\nBy language: {by_lang}")
+
+    by_status = status.get("by_status", {}) or {}
+    if by_status:
+        print(f"By status:   {by_status}")
+        bad = {
+            k: v for k, v in by_status.items()
+            if k.strip().lower() in ("draft", "unpublished", "review")
+        }
+        if bad:
+            print(
+                f"  WARNING: {sum(bad.values())} non-published rows are "
+                f"indexed. They are filtered out at query time, and the "
+                f"next clean sync will remove them."
+            )
 
     top_cats = status.get("top_categories", []) or []
     if top_cats:

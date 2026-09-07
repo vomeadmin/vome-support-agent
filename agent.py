@@ -38,6 +38,8 @@ from status_constants import (
 )
 from signatures import signature, sign_message
 from model_config import SUPPORT_MODEL, SUPPORT_MODEL_FAST
+import kb_context
+import knowledge
 
 # Fix Windows console encoding for emoji in system_prompt.md
 if sys.stdout.encoding != "utf-8":
@@ -1947,6 +1949,15 @@ def process_ticket(ticket_data: dict) -> str | None:
             f"\n{latest_client_msg}\n"
         )
 
+    # Ground the draft in the real help center. Empty string when
+    # nothing relevant is indexed, so the prompt is unchanged in that case.
+    kb_block = kb_context.build_ticket_kb_block(
+        subject=subject,
+        latest_message=latest_client_msg,
+        body=body,
+        detected_lang=detected_lang,
+    )
+
     user_message = (
         "\u26a0\ufe0f MANDATORY PROCESSING RULE \u2014 READ FIRST:\n"
         "This input arrived via Zoho Desk webhook.\n"
@@ -1972,6 +1983,7 @@ def process_ticket(ticket_data: dict) -> str | None:
         f"Subject: {subject}\n"
         f"{lang_note}"
         f"{latest_msg_block}"
+        f"{kb_block}"
     )
     if extra_context:
         user_message += f"\n{extra_context}\n"
@@ -1984,7 +1996,10 @@ def process_ticket(ticket_data: dict) -> str | None:
         response = client.messages.create(
             model=SUPPORT_MODEL,
             max_tokens=2000,
-            system=SYSTEM_PROMPT,
+            # Built per request, not at import: the knowledge book lives
+            # in Postgres and is regenerated weekly, so a prompt frozen at
+            # boot would never see anything the agent has learned since.
+            system=knowledge.augment_system_prompt(SYSTEM_PROMPT),
             messages=[{"role": "user", "content": user_message}],
         )
         result = response.content[0].text

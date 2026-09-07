@@ -392,12 +392,9 @@ def fetch_active_tickets(
                     for c in reversed(comments):
                         commenter = c.get("user", {}).get("username", "")
                         if commenter and commenter.lower() not in ("sam", "sam fagen"):
-                            comment_text_parts = []
-                            for ct in c.get("comment", []):
-                                if ct.get("type") == "text":
-                                    comment_text_parts.append(ct.get("text", ""))
-                            if comment_text_parts:
-                                engineer_comment = f"{commenter}: {''.join(comment_text_parts)}"
+                            body = extract_comment_text(c)
+                            if body:
+                                engineer_comment = f"{commenter}: {body}"
                                 break
 
         # Also check: ClickUp status may override what we show

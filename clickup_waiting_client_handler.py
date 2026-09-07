@@ -46,6 +46,7 @@ from status_constants import (
     ZOHO_TAG_WAITING_CLIENT,
 )
 from signatures import signature, sign_message
+from outbound_guard import guard_failure_notice, validate_client_message
 from model_config import SUPPORT_MODEL
 from zoho_links import extract_zoho_ticket_id, alert_missing_ticket_link
 
@@ -752,17 +753,34 @@ def _hold_draft_for_confirm(
     thread_data: dict | None,
     ticket_number: str,
     engineer_name: str,
+    notice: str = "",
+    clickup_note: str = "",
+    log_tag: str = "DUP CHECK",
+    store_pending: bool = True,
 ) -> bool:
-    """High-confidence duplicate: do NOT auto-send and do NOT change the
-    status the engineer set. Hold the draft for confirm/send/cancel in Slack
-    and leave a ClickUp note so the engineer knows it's waiting on a human.
+    """Hold a draft back: do NOT auto-send and do NOT change the status the
+    engineer set. Post the draft for confirm/send/cancel in Slack and leave a
+    ClickUp note so the engineer knows it's waiting on a human.
+
+    Used for two kinds of hold:
+      - a high-confidence duplicate (pass *dup*), and
+      - an outbound-guard rejection (pass *notice* and *clickup_note*).
+
+    With *store_pending* False the draft is posted for reference but NOT
+    stored as pending_send, so a bare "confirm" in Slack cannot fire it.
+    Whoever picks it up has to send their own version. Used for guard
+    rejections, where the draft is known bad rather than merely redundant.
     """
-    warning = (
-        ":warning: *Possible duplicate -- NOT sent.* It looks like we already "
-        f"sent the client a similar reply. {dup.get('reason', '')}".strip()
-    )
-    if dup.get("prior"):
-        warning += f"\n>_Earlier:_ {dup['prior']}"
+    if notice:
+        warning = notice
+    else:
+        warning = (
+            ":warning: *Possible duplicate -- NOT sent.* It looks like we "
+            "already sent the client a similar reply. "
+            f"{dup.get('reason', '')}".strip()
+        )
+        if dup.get("prior"):
+            warning += f"\n>_Earlier:_ {dup['prior']}"
     body = _waiting_client_message(
         ticket_number, engineer_name, draft,
         ticket_fields=fields, zoho_ticket_id=zoho_ticket_id,
@@ -791,20 +809,23 @@ def _hold_draft_for_confirm(
                 clickup_task_id=clickup_task_id,
             )
     except SlackApiError as e:
-        print(f"[DUP CHECK] Slack post failed: {e.response['error']}")
+        print(f"[{log_tag}] Slack post failed: {e.response['error']}")
         return False
-    _store_pending_send(thread_ts, draft)
+    if store_pending:
+        _store_pending_send(thread_ts, draft)
     try:
         _add_clickup_comment(
             clickup_task_id,
-            "Vic detected a possible duplicate reply and did NOT send it. "
-            f"{dup.get('reason', '')} Confirm or cancel in the support "
-            "Slack thread.",
+            clickup_note or (
+                "Vic detected a possible duplicate reply and did NOT send "
+                f"it. {dup.get('reason', '')} Confirm or cancel in the "
+                "support Slack thread."
+            ),
         )
     except Exception as e:
-        print(f"[DUP CHECK] ClickUp comment failed: {e}")
+        print(f"[{log_tag}] ClickUp comment failed: {e}")
     print(
-        f"[DUP CHECK] Held possible duplicate for ticket {zoho_ticket_id}, "
+        f"[{log_tag}] Held draft for ticket {zoho_ticket_id}, "
         f"task {clickup_task_id} -- awaiting Slack confirm"
     )
     return True
@@ -897,6 +918,37 @@ def handle_needs_client_info(
             " details, such as screenshots, steps to"
             " reproduce, or the affected user's email?\n"
             + signature("vic")
+        )
+
+    # 7a. Outbound guard. Deterministic check that the draft is actually a
+    # client-facing message and not model commentary, internal notes, or a
+    # refusal. Fails closed: a rejected draft is held for a human and the
+    # ticket is left exactly as the engineer set it.
+    guard = validate_client_message(
+        draft,
+        category="needs_client_info",
+        contact_name=fields.get("contact_name", ""),
+    )
+    if not guard["ok"]:
+        return _hold_draft_for_confirm(
+            zoho_ticket_id=zoho_ticket_id,
+            clickup_task_id=task_id,
+            draft=draft,
+            dup={},
+            fields=fields,
+            thread_ts=thread_ts,
+            thread_data=thread_data,
+            ticket_number=ticket_number,
+            engineer_name=engineer_name,
+            store_pending=False,
+            notice=guard_failure_notice("needs_client_info", guard),
+            clickup_note=(
+                "The outbound guard blocked Vic's info request, so nothing "
+                "was emailed to the client. Reason: "
+                + "; ".join(guard["reasons"])
+                + ". Review it in the support Slack thread."
+            ),
+            log_tag="GUARD",
         )
 
     # 7b. High-confidence duplicate guard. If this draft would just repeat a
