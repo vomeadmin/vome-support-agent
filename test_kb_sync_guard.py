@@ -175,6 +175,10 @@ def _fake_zoho(monkeypatch, articles_response):
                     "permalink": f"article-{aid}", "status": "Published",
                     "modifiedTime": "2026-09-01T10:00:00.000Z",
                     "createdTime": "2026-08-01T10:00:00.000Z"}
+        if tool_name == "ZohoDesk_getArticleTranslations":
+            # Default: English only. Tests that care about translations
+            # stub _collect_translations directly.
+            return {"data": [{"locale": "en", "status": "Published"}]}
         return None
 
     monkeypatch.setattr(kb_sync, "_zoho_desk_call", _call)
@@ -399,7 +403,7 @@ def test_no_failures_posts_nothing(monkeypatch):
 # ---------------------------------------------------------------------
 
 def test_a_routine_prune_goes_through(monkeypatch):
-    rec = _patch_db(monkeypatch)
+    _patch_db(monkeypatch)
     monkeypatch.setattr(kb_sync, "LAST_FETCH_COMPLETE", True)
     monkeypatch.setattr(
         kb_sync, "delete_missing_kb_articles", lambda ids: 7
@@ -458,3 +462,117 @@ def test_no_alert_when_nothing_was_refused(monkeypatch):
     kb_sync._alert_mass_delete({"delete_refused": 0, "removed": 3})
 
     assert posted == []
+
+
+# ---------------------------------------------------------------------
+# 7. Translations
+#
+# The French help center used to be a separate root category of
+# standalone articles. It is now translations attached to the English
+# articles, sharing their article id. getArticles returns only the
+# default translation, so from the sync's point of view French vanished:
+# the category went to zero and all 94 rows were pruned, leaving the
+# index 100% English while Zoho still held every French article.
+# ---------------------------------------------------------------------
+
+def test_translations_get_their_own_row_id():
+    assert kb_sync.translation_row_id("123", "fr") == "123:fr"
+    assert kb_sync.translation_row_id("123", "FR") == "123:fr"
+    # The default keeps the bare id so existing rows are untouched.
+    assert kb_sync.translation_row_id("123", "en") == "123"
+    assert kb_sync.translation_row_id("123", "") == "123"
+
+
+def test_the_locale_is_in_the_help_center_url():
+    """A French answer citing /portal/en/ sends the client to the
+    English article."""
+    fr = kb_sync._build_article_url("mot-de-passe", "1", "fr")
+    assert "/portal/fr/kb/articles/mot-de-passe" in fr
+    en = kb_sync._build_article_url("password", "1")
+    assert "/portal/en/kb/articles/password" in en
+
+
+def _stub_translations(monkeypatch, listing, bodies):
+    monkeypatch.setattr(
+        kb_sync, "_fetch_article_translations", lambda aid: listing
+    )
+    monkeypatch.setattr(
+        kb_sync, "_fetch_translation_detail",
+        lambda aid, loc, **k: bodies.get(loc),
+    )
+    monkeypatch.setattr(kb_sync.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(kb_sync, "LAST_FETCH_FAILURES", [])
+
+
+def test_a_published_french_translation_becomes_a_row(monkeypatch):
+    _stub_translations(
+        monkeypatch,
+        [{"locale": "en", "status": "Published"},
+         {"locale": "fr", "status": "Published"}],
+        {"fr": {
+            "locale": "fr", "status": "Published",
+            "title": "J'ai oublié mon mot de passe",
+            "permalink": "j-ai-oublie-mon-mot-de-passe",
+            "answer": "<p>" + "Pour réinitialiser " * 5 + "</p>",
+        }},
+    )
+
+    rows = kb_sync._collect_translations("123", "FAQs")
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == "123:fr"
+    assert row["language"] == "fr"
+    assert "réinitialiser" in row["content"]
+    assert "/portal/fr/" in row["url"]
+    assert kb_sync.LAST_FETCH_FAILURES == []
+
+
+def test_the_default_locale_is_not_duplicated(monkeypatch):
+    """It is already indexed from getArticle."""
+    _stub_translations(
+        monkeypatch, [{"locale": "en", "status": "Published"}], {}
+    )
+    assert kb_sync._collect_translations("123", "FAQs") == []
+
+
+def test_an_unpublished_translation_is_skipped(monkeypatch):
+    _stub_translations(
+        monkeypatch, [{"locale": "fr", "status": "Draft"}], {}
+    )
+    assert kb_sync._collect_translations("123", "FAQs") == []
+
+
+def test_a_failed_translation_list_is_recorded_not_swallowed(monkeypatch):
+    """Otherwise a Zoho blip looks like 'no French version any more' and
+    the delete step prunes it."""
+    _stub_translations(monkeypatch, None, {})
+
+    rows = kb_sync._collect_translations("123", "FAQs")
+
+    assert rows == []
+    assert len(kb_sync.LAST_FETCH_FAILURES) == 1
+    assert "getArticleTranslations failed" in (
+        kb_sync.LAST_FETCH_FAILURES[0]["message"]
+    )
+
+
+def test_a_failed_translation_body_is_recorded(monkeypatch):
+    _stub_translations(
+        monkeypatch, [{"locale": "fr", "status": "Published"}], {}
+    )
+
+    rows = kb_sync._collect_translations("123", "FAQs")
+
+    assert rows == []
+    assert any(
+        "getArticleTranslation failed" in f["message"]
+        for f in kb_sync.LAST_FETCH_FAILURES
+    )
+
+
+def test_no_translations_is_a_real_answer_not_a_failure(monkeypatch):
+    _stub_translations(monkeypatch, [], {})
+
+    assert kb_sync._collect_translations("123", "FAQs") == []
+    assert kb_sync.LAST_FETCH_FAILURES == []

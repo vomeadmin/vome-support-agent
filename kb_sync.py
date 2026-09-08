@@ -31,6 +31,7 @@ Manual: `python kb_sync.py` to sync, `python kb_sync.py --status` to
 inspect index health.
 """
 
+import os
 import re
 import sys
 import time
@@ -71,6 +72,18 @@ PUBLISHED_STATUSES = {"published"}
 # delete step for that run and, if it happened most nights, would mean
 # articles deleted in Zoho were never pruned from the index.
 DETAIL_ATTEMPTS = 3
+
+# Sync translations as well as the default locale. Set
+# KB_SYNC_TRANSLATIONS=false to fall back to default-only, which is what
+# the sync did before the help center was restructured.
+SYNC_TRANSLATIONS = (
+    os.environ.get("KB_SYNC_TRANSLATIONS", "true").strip().lower()
+    not in ("false", "0", "no")
+)
+
+# The locale Zoho treats as the article's own. Everything else is a
+# translation and gets its own indexed row.
+DEFAULT_LOCALE = "en"
 
 
 # =====================================================================
@@ -343,6 +356,11 @@ def fetch_all_kb_articles() -> list[dict]:
                 "url": _build_article_url(permalink, article_id),
             })
 
+            if SYNC_TRANSLATIONS:
+                articles.extend(
+                    _collect_translations(article_id, cat_name)
+                )
+
         if skipped_unpublished:
             LAST_FETCH_DEBUG.append({
                 "stage": "status_filter",
@@ -363,6 +381,71 @@ def fetch_all_kb_articles() -> list[dict]:
             f"Delete step will be skipped."
         )
     return articles
+
+
+def _collect_translations(article_id: str, cat_name: str) -> list[dict]:
+    """Indexable rows for every published non-default translation.
+
+    Records a failure (rather than returning silently) when the
+    translation list or a body cannot be fetched, so a Zoho blip cannot
+    look like "this article has no French version any more" and let the
+    delete step prune it.
+    """
+    out: list[dict] = []
+    translations = _fetch_article_translations(article_id)
+    if translations is None:
+        _record_failure(
+            FAILURE_ARTICLE,
+            f"{cat_name}: getArticleTranslations failed for {article_id}",
+        )
+        return out
+
+    for translation in translations:
+        locale = (translation.get("locale") or "").strip().lower()
+        if not locale or locale == DEFAULT_LOCALE:
+            continue
+        if not _is_published(translation.get("status")):
+            continue
+
+        time.sleep(ZOHO_DELAY)
+        detail = _fetch_translation_detail(article_id, locale)
+        if not detail:
+            _record_failure(
+                FAILURE_ARTICLE,
+                f"{cat_name}: getArticleTranslation failed for "
+                f"{article_id} [{locale}]",
+            )
+            continue
+        if not _is_published(detail.get("status")):
+            continue
+
+        body = re.sub(r"<[^>]+>", " ", detail.get("answer", "") or "")
+        body = re.sub(r"\s+", " ", body).strip()
+        permalink = detail.get("permalink") or translation.get(
+            "permalink", ""
+        )
+
+        out.append({
+            "id": translation_row_id(article_id, locale),
+            "title": detail.get("title") or translation.get("title", ""),
+            "content": body,
+            "permalink": permalink,
+            "category": cat_name,
+            "modifiedTime": (
+                detail.get("modifiedTime")
+                or translation.get("modifiedTime", "")
+            ),
+            "createdTime": (
+                detail.get("createdTime")
+                or translation.get("createdTime", "")
+            ),
+            # Straight from Zoho, not guessed from the category name.
+            "language": locale,
+            "status": detail.get("status", ""),
+            "url": _build_article_url(permalink, article_id, locale),
+        })
+
+    return out
 
 
 def _is_published(status: str | None) -> bool:
@@ -411,11 +494,82 @@ def _fetch_article_detail(
     return None
 
 
-def _build_article_url(permalink: str, article_id: str) -> str:
-    base = "https://support.vomevolunteer.com/portal/en/kb/articles"
+def _build_article_url(
+    permalink: str, article_id: str, locale: str = DEFAULT_LOCALE
+) -> str:
+    """Help center URL for one translation.
+
+    The locale is part of the path, so a French translation has to be
+    linked as /portal/fr/... A French answer citing the /portal/en/ URL
+    sends the client to the English article.
+    """
+    loc = (locale or DEFAULT_LOCALE).strip().lower() or DEFAULT_LOCALE
+    base = f"https://support.vomevolunteer.com/portal/{loc}/kb/articles"
     if permalink:
         return f"{base}/{permalink}"
     return f"{base}/{article_id}"
+
+
+def translation_row_id(article_id: str, locale: str) -> str:
+    """Primary key for one translation.
+
+    Translations share their article's id, so the default keeps the bare
+    id (leaving existing rows untouched) and every other locale is
+    suffixed.
+    """
+    if not locale or locale.strip().lower() == DEFAULT_LOCALE:
+        return str(article_id)
+    return f"{article_id}:{locale.strip().lower()}"
+
+
+def _fetch_article_translations(article_id: str) -> list[dict] | None:
+    """List an article's translations. None means the call failed.
+
+    An empty list is a real answer (no translations); None is not, and
+    the caller records it as a failure so the delete step stays blocked.
+    """
+    result = _zoho_desk_call(
+        "ZohoDesk_getArticleTranslations",
+        {
+            # This tool wants `articleId`, unlike getArticle which wants
+            # `id`. Getting it wrong returns a mandatory-path-variable
+            # error rather than an empty result.
+            "path_variables": {"articleId": str(article_id)},
+            "query_params": {"orgId": str(ZOHO_ORG_ID)},
+        },
+    )
+    if isinstance(result, dict) and result.get("isError"):
+        return None
+    raw = _unwrap_mcp_result(result)
+    if isinstance(raw, dict):
+        if "isError" in raw:
+            return None
+        return raw.get("data", []) or []
+    if isinstance(raw, list):
+        return raw
+    return None
+
+
+def _fetch_translation_detail(
+    article_id: str, locale: str, attempts: int = DETAIL_ATTEMPTS
+) -> dict | None:
+    """Fetch one translation's body, retrying transient errors."""
+    for attempt in range(1, max(1, attempts) + 1):
+        result = _zoho_desk_call(
+            "ZohoDesk_getArticleTranslation",
+            {
+                # `id` here, not `articleId`.
+                "path_variables": {"id": str(article_id), "locale": locale},
+                "query_params": {"orgId": str(ZOHO_ORG_ID)},
+            },
+        )
+        if not (isinstance(result, dict) and result.get("isError")):
+            raw = _unwrap_mcp_result(result)
+            if isinstance(raw, dict) and "isError" not in raw:
+                return raw
+        if attempt < attempts:
+            time.sleep(ZOHO_DELAY * attempt)
+    return None
 
 
 # =====================================================================
