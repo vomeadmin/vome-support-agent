@@ -385,3 +385,76 @@ def test_no_failures_posts_nothing(monkeypatch):
     kb_sync._alert_fetch_failures(500, PROD_STATS)
 
     assert posted == []
+
+
+# ---------------------------------------------------------------------
+# 6. Blast radius
+#
+# The completeness guard catches a fetch that errored. It cannot catch a
+# category that returns an empty list SUCCESSFULLY, which is
+# indistinguishable from every article in it having been deleted. That
+# happened for real: the French category returned 0 with no error and all
+# 94 French rows were pruned. Correct that time. A permissions blip or a
+# truncated page looks identical and would not be.
+# ---------------------------------------------------------------------
+
+def test_a_routine_prune_goes_through(monkeypatch):
+    rec = _patch_db(monkeypatch)
+    monkeypatch.setattr(kb_sync, "LAST_FETCH_COMPLETE", True)
+    monkeypatch.setattr(
+        kb_sync, "delete_missing_kb_articles", lambda ids: 7
+    )
+
+    stats = kb_sync.sync_articles_to_db([_article("1")])
+
+    assert stats["removed"] == 7
+    assert stats["delete_refused"] == 0
+
+
+def test_a_refused_mass_delete_is_reported_and_removes_nothing(monkeypatch):
+    _patch_db(monkeypatch)
+    monkeypatch.setattr(kb_sync, "LAST_FETCH_COMPLETE", True)
+    # The DB layer signals a refusal with a negative count.
+    monkeypatch.setattr(
+        kb_sync, "delete_missing_kb_articles", lambda ids: -94
+    )
+
+    stats = kb_sync.sync_articles_to_db([_article("1")])
+
+    assert stats["removed"] == 0, "a refused pass must delete nothing"
+    assert stats["delete_refused"] == 94
+
+
+def test_the_mass_delete_alert_names_the_likely_cause(monkeypatch):
+    posted = []
+
+    class _FakeSlack:
+        @staticmethod
+        def post_to_log(msg):
+            posted.append(msg)
+
+    import sys
+    monkeypatch.setitem(sys.modules, "slack", _FakeSlack)
+
+    kb_sync._alert_mass_delete({"delete_refused": 94})
+
+    assert posted, "a refused mass delete must alert"
+    assert "94 rows" in posted[0]
+    assert "category reported empty" in posted[0]
+    assert "Nothing was removed" in posted[0]
+
+
+def test_no_alert_when_nothing_was_refused(monkeypatch):
+    posted = []
+
+    class _FakeSlack:
+        @staticmethod
+        def post_to_log(msg):
+            posted.append(msg)
+
+    import sys
+    monkeypatch.setitem(sys.modules, "slack", _FakeSlack)
+
+    kb_sync._alert_mass_delete({"delete_refused": 0, "removed": 3})
+
+    assert posted == []

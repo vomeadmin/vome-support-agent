@@ -452,6 +452,9 @@ def sync_articles_to_db(
         "skipped": 0,
         "skipped_unpublished": 0,
         "delete_skipped": False,
+        # Set when the delete was refused for exceeding the blast-radius
+        # cap, holding the number of rows it declined to remove.
+        "delete_refused": 0,
     }
 
     seen_ids = []
@@ -484,7 +487,13 @@ def sync_articles_to_db(
     # Drop rows for articles that no longer exist in Zoho, or that were
     # unpublished since the last run. Only ever on a complete fetch.
     if seen_ids and allow_delete:
-        stats["removed"] = delete_missing_kb_articles(seen_ids)
+        removed = delete_missing_kb_articles(seen_ids)
+        if removed < 0:
+            # Refused for blast radius. Nothing was deleted.
+            stats["delete_refused"] = -removed
+            stats["removed"] = 0
+        else:
+            stats["removed"] = removed
     elif seen_ids:
         stats["delete_skipped"] = True
 
@@ -566,10 +575,44 @@ def run_kb_sync():
     )
     if stats["delete_skipped"]:
         print("  Delete step SKIPPED (fetch was incomplete)")
+    if stats["delete_refused"]:
+        print(
+            f"  Delete step REFUSED: would have removed "
+            f"{stats['delete_refused']} rows, over the blast-radius cap"
+        )
     print(f"Completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
     _alert_fetch_failures(articles_indexed=len(articles), stats=stats)
+    _alert_mass_delete(stats)
+
+
+def _alert_mass_delete(stats: dict) -> None:
+    """Shout when the delete step refused a mass removal.
+
+    This is the case the completeness guard cannot see: a category that
+    returns an empty list successfully looks exactly like every article
+    in it being deleted. Somebody has to look at it.
+    """
+    refused = stats.get("delete_refused") or 0
+    if not refused:
+        return
+    message = (
+        f":rotating_light: *KB sync refused a mass delete* "
+        f"({refused} rows).\n"
+        f"The fetch completed without errors, but pruning that many rows "
+        f"means a whole category reported empty. Nothing was removed and "
+        f"the index is unchanged.\n"
+        f"If a category really was emptied in Zoho this is correct and "
+        f"the rows can be cleared by re-running the sync with the "
+        f"override. If not, check the category in Zoho before anything "
+        f"else."
+    )
+    try:
+        from slack import post_to_log
+        post_to_log(message)
+    except Exception as e:
+        print(f"[KB SYNC] mass-delete alert failed: {e}")
 
 
 def build_failure_alert(

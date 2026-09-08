@@ -699,16 +699,63 @@ def upsert_kb_article(article: dict) -> str:
         return "added"
 
 
-def delete_missing_kb_articles(seen_ids: list[str]) -> int:
+# Share of the index a single sync may prune before it is treated as a
+# mass-deletion event rather than routine cleanup. Ordinary nights remove
+# a handful of rows; anything approaching a fifth of the index means a
+# category stopped reporting its contents.
+MAX_DELETE_RATIO = 0.15
+
+# Below this the ratio is meaningless, so small indexes are exempt.
+DELETE_RATIO_FLOOR = 50
+
+
+def delete_missing_kb_articles(
+    seen_ids: list[str], force: bool = False
+) -> int:
     """Delete kb_articles rows whose zoho_article_id is NOT in seen_ids.
 
-    Called after a full sync to drop articles deleted in Zoho.
-    Returns the number of rows deleted.
+    Called after a full sync to drop articles deleted in Zoho. Returns
+    the number of rows deleted, or a NEGATIVE count when the pass was
+    refused for exceeding MAX_DELETE_RATIO, so the caller can report the
+    size of what it declined to do.
+
+    The completeness guard in kb_sync catches a fetch that errored. It
+    cannot catch a category that returns an empty list successfully,
+    which looks identical to every article in it having been deleted.
+    This is the second rail: routine cleanup is a handful of rows, so a
+    pass that would remove a large share of the index is a category that
+    stopped reporting rather than a real bulk removal.
+
+    Pass force=True to carry out a genuine bulk removal once confirmed.
     """
     if not DATABASE_URL or not seen_ids:
         return 0
     engine = _get_engine()
     with engine.begin() as conn:
+        total = conn.execute(
+            text("SELECT COUNT(*) FROM kb_articles")
+        ).scalar() or 0
+        doomed = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM kb_articles "
+                "WHERE zoho_article_id != ALL(:ids)"
+            ),
+            {"ids": list(seen_ids)},
+        ).scalar() or 0
+
+        if (
+            not force
+            and total >= DELETE_RATIO_FLOOR
+            and doomed > total * MAX_DELETE_RATIO
+        ):
+            print(
+                f"[DB] REFUSING to delete {doomed} of {total} kb_articles "
+                f"rows ({doomed / total:.0%}, cap {MAX_DELETE_RATIO:.0%}). "
+                f"A category most likely returned empty. Re-run with "
+                f"force=True once confirmed."
+            )
+            return -doomed
+
         result = conn.execute(
             text(
                 "DELETE FROM kb_articles "
