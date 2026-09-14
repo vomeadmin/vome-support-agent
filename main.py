@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -35,11 +36,14 @@ from agent import (
 from ops.router import ops_router
 from intake import run_intake_turn
 from kb_search import run_kb_health_scan
+from kb_gap import run_monthly_kb_gap_pass
 from kb_sync import run_kb_sync
 from clickup_assignee_handler import handle_assignee_updated
 from clickup_needs_review_handler import handle_escalated
 from clickup_user_education_handler import handle_user_education
 from clickup_waiting_client_handler import handle_needs_client_info
+from calendly_api import verify_signature as verify_calendly_signature
+from calendly_booking_handler import handle_calendly_event
 from database import init_db
 from field_feedback import handle_field_feedback
 from on_prod_handler import handle_on_prod
@@ -77,6 +81,11 @@ def _check_env():
         print("ERROR: ZOHO_DESK_MCP_URL not configured")
     if not crm_url.startswith("http"):
         print("ERROR: ZOHO_CRM_MCP_URL not configured")
+    if not os.environ.get("CALENDLY_WEBHOOK_SIGNING_KEY"):
+        print(
+            "NOTE: CALENDLY_WEBHOOK_SIGNING_KEY not set, "
+            "/webhook/calendly will accept unsigned posts"
+        )
 
 
 def _extract_zoho_payload(raw_body: bytes) -> tuple[dict, str]:
@@ -224,6 +233,32 @@ _scheduler.add_job(
         timezone="America/Montreal",
     ),
     misfire_grace_time=1800,
+    coalesce=True,
+    max_instances=1,
+)
+# Help centre gap pass, first Tuesday of the month at 09:00 ET.
+#
+# Monthly rather than weekly on purpose. The output is "write these five
+# articles", which is a month of someone's slack time, and filing the same
+# five topics every week would train everyone to ignore the report.
+#
+# Tuesday rather than Monday to stay clear of run_kb_health_scan (Mon 09:00)
+# and run_monday_report (Mon 07:00), both of which already post to Slack.
+# It reads analyzed_clickup_tasks, so it wants to land after at least one
+# Sunday knowledge refresh has run.
+#
+# day="1-7" combined with day_of_week="tue" is how cron spells "first Tuesday":
+# the day range limits it to the first week, the weekday picks the day.
+_scheduler.add_job(
+    run_monthly_kb_gap_pass,
+    CronTrigger(
+        day="1-7",
+        day_of_week="tue",
+        hour=int(os.environ.get("KB_GAP_HOUR", "9")),
+        minute=int(os.environ.get("KB_GAP_MINUTE", "0")),
+        timezone="America/Montreal",
+    ),
+    misfire_grace_time=3600,
     coalesce=True,
     max_instances=1,
 )
@@ -539,6 +574,51 @@ async def clickup_status_webhook(request: Request):
 # Support widget intake
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Calendly webhook -- bookings into Zoho CRM and Slack
+#
+# Subscribe with scripts/setup_calendly_webhook.py. Calendly has no webhook
+# UI, subscriptions are API only.
+# Events: invitee.created, invitee.canceled
+# ---------------------------------------------------------------------------
+
+@app.post("/webhook/calendly")
+async def calendly_webhook(request: Request):
+    raw_body = await request.body()
+
+    signature = request.headers.get("Calendly-Webhook-Signature", "")
+    if not verify_calendly_signature(raw_body, signature):
+        print("[CALENDLY] Rejected webhook with a bad signature")
+        return Response(content="Invalid signature", status_code=403)
+
+    try:
+        body = json.loads(raw_body)
+    except Exception:
+        print("[CALENDLY] Unparseable webhook body")
+        return {"status": "ignored"}
+
+    payload = body.get("payload") or {}
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    print(
+        f"[{timestamp}] Calendly {body.get('event', 'unknown')} "
+        f"from {payload.get('email') or 'no email'} "
+        f"-- {(payload.get('scheduled_event') or {}).get('name') or 'no event type'}"
+    )
+
+    try:
+        # Off the event loop: the handler makes several blocking Zoho and
+        # Slack calls and this is a single worker.
+        result = await asyncio.to_thread(handle_calendly_event, body)
+    except Exception as e:
+        # Always answer 2xx. A non-2xx makes Calendly retry, and replaying a
+        # booking that already created a lead is worse than one lost log line.
+        # handle_calendly_event catches its own errors, this is the backstop.
+        print(f"[CALENDLY ERROR] {e}")
+        return {"status": "error"}
+
+    return {"status": result.get("status", "ok")}
+
+
 @app.post("/chat/intake")
 async def chat_intake(request: Request):
     body = await request.json()
@@ -820,6 +900,80 @@ async def knowledge_book_clickup_scan(request: Request):
 
 _setup_guide_running = False
 _setup_guide_status = {"status": "idle", "started": None, "last_update": None}
+
+
+_kb_gap_running = False
+_kb_gap_status = {"status": "idle", "started": None, "last_update": None}
+
+
+@app.post("/kb-gap/cluster")
+async def kb_gap_cluster(request: Request):
+    """Run the help centre gap clustering pass now.
+
+    Pass ?dry_run=true to cluster and report without creating ClickUp tasks
+    or drafting articles. Use that first after any change to the prompt:
+    the pass files real tasks into the intake list and there is no undo
+    beyond deleting them by hand.
+
+    ?window=N overrides the lookback in days, ?max=N the number of topics
+    filed in one pass.
+    """
+    global _kb_gap_running, _kb_gap_status
+    if _kb_gap_running:
+        return {"status": "already_running", "info": _kb_gap_status}
+
+    params = request.query_params
+    dry_run = (params.get("dry_run") or "").lower() in ("1", "true", "yes")
+
+    def _int_param(name: str, default: int) -> int:
+        try:
+            return int(params.get(name) or default)
+        except ValueError:
+            return default
+
+    window = _int_param("window", 90)
+    max_topics = _int_param("max", 5)
+
+    import threading
+
+    def _run():
+        global _kb_gap_running, _kb_gap_status
+        _kb_gap_running = True
+        _kb_gap_status = {
+            "status": "running",
+            "started": datetime.now(timezone.utc).isoformat(),
+            "last_update": None,
+            "result": None,
+        }
+        try:
+            from kb_gap import run_kb_gap_clustering
+            _kb_gap_status["result"] = run_kb_gap_clustering(
+                window_days=window,
+                max_topics=max_topics,
+                dry_run=dry_run,
+            )
+            _kb_gap_status["status"] = "completed"
+        except Exception as e:
+            _kb_gap_status["status"] = f"failed: {e}"
+        finally:
+            _kb_gap_status["last_update"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
+            _kb_gap_running = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "started", "dry_run": dry_run, "info": _kb_gap_status}
+
+
+@app.get("/kb-gap/status")
+async def kb_gap_status():
+    """Last gap pass result, plus what is currently filed."""
+    from kb_gap import _seen_topics
+    try:
+        topics = _seen_topics()
+    except Exception as e:
+        topics = {"error": str(e)}
+    return {"run": _kb_gap_status, "filed_topics": topics}
 
 
 @app.post("/knowledge-book/setup-guide")

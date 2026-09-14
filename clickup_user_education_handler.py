@@ -58,6 +58,7 @@ from clickup_waiting_client_handler import (
     _store_pending_send,
 )
 from database import get_thread, save_thread, update_thread
+from kb_gap import record_user_education_gap
 from zoho_links import alert_missing_ticket_link
 from status_constants import (
     THREAD_CLOSED,
@@ -484,6 +485,39 @@ def handle_user_education(task_id: str, engineer_name: str) -> bool:
             ticket_number=ticket_number,
             engineer_name=engineer_name,
         )
+
+    # 7c. Record the help centre gap signal.
+    #
+    # An engineer marking a task "user education" is our strongest evidence
+    # that the help centre has a hole: a client asked, and the answer turned
+    # out to be "here is how it works" rather than a fix. Before this, that
+    # signal died here. The gap counter only ever saw Vic widget traffic
+    # (kb_search.check_and_create_kb_task had two call sites, both in
+    # intake.py), so the questions that arrive by email were invisible to
+    # the thing that decides which articles to write.
+    #
+    # Placed after both guards deliberately. The outbound guard catches an
+    # open bug mislabelled as user education, and that is not a help centre
+    # gap, so a guard-blocked draft returns above without recording. A
+    # held duplicate does not record either: we already explained it, so the
+    # article question was answered at least once. Everything reaching here
+    # is either auto-sent (step 8) or handed to Slack for a manual send
+    # (step 9), and both are genuine user education.
+    #
+    # Best effort. This is instrumentation bolted onto a handler that emails
+    # clients, so it must never be the reason a client does not get a reply.
+    try:
+        record_user_education_gap(
+            subject=fields.get("subject", ""),
+            description=fields.get("description", "") or conversations_text,
+            explanation=engineer_context,
+            org_id=((thread_data or {}).get("crm") or {}).get("account_name"),
+            user_email=contact_email,
+            zoho_ticket_id=zoho_ticket_id,
+            clickup_task_id=task_id,
+        )
+    except Exception as e:
+        print(f"[USER ED] gap signal failed (continuing): {e}")
 
     # 8. Auto-send the explanation to the client (signed Vic)
     can_send = (

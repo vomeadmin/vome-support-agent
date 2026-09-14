@@ -10,6 +10,7 @@ import os
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Integer,
@@ -65,6 +66,45 @@ kb_deflection_log = Table(
     Column("org_id", String, nullable=True),
     Column("user_email", String, nullable=True),
     Column("created_at", DateTime, default=datetime.now(timezone.utc)),
+    # Which surface produced the signal: "vic_widget" (a question the
+    # widget could not deflect) or "user_education" (an engineer marked a
+    # ClickUp task user education, so a client misunderstood the product).
+    # Older rows predate the column and are all widget rows, which is why
+    # readers COALESCE it to vic_widget rather than treating NULL as its
+    # own source.
+    Column("source", String, nullable=True),
+    Column("zoho_ticket_id", String, nullable=True),
+    Column("clickup_task_id", String, nullable=True),
+    # The underlying question in one sentence, and the module it sits in.
+    # The fingerprint alone is too terse to cluster well, and re-deriving
+    # this at cluster time would mean re-reading every source ticket.
+    Column("question", String, nullable=True),
+    Column("module", String, nullable=True),
+    # Whether the help centre already had a fresh article at the time the
+    # signal was recorded. A covered topic that keeps generating signals is
+    # a findability problem, not a missing article, and the two need
+    # different work.
+    Column("kb_covered", Boolean, nullable=True),
+)
+
+# One row per help centre topic the monthly clustering pass has filed.
+# Exists purely so a topic is not re-filed every month while someone is
+# still writing the article. kb_gap.run_kb_gap_clustering reads it before
+# creating anything.
+kb_gap_topics = Table(
+    "kb_gap_topics",
+    _metadata,
+    Column("topic_key", String, primary_key=True),
+    Column("title", String, default=""),
+    Column("module", String, default=""),
+    Column("signal_count", Integer, default=0),
+    Column("clickup_task_id", String, default=""),
+    # "open" while the article is unwritten, "published" once it ships.
+    # Only a published topic is eligible to be filed again, which is how a
+    # topic that resurfaces a year later gets a refresh task.
+    Column("status", String, default="open"),
+    Column("first_filed_at", DateTime, default=datetime.now(timezone.utc)),
+    Column("last_seen_at", DateTime, default=datetime.now(timezone.utc)),
 )
 
 
@@ -333,6 +373,25 @@ def init_db():
                 try:
                     conn.execute(text(
                         f"ALTER TABLE ticket_threads {m}"
+                    ))
+                except Exception:
+                    pass
+        # Migrate: kb_deflection_log predates the gap-clustering work, so
+        # existing deployments have the five original columns only.
+        # create_all above will not alter a table that already exists.
+        with engine.begin() as conn:
+            kb_gap_migrations = [
+                "ADD COLUMN IF NOT EXISTS source VARCHAR",
+                "ADD COLUMN IF NOT EXISTS zoho_ticket_id VARCHAR",
+                "ADD COLUMN IF NOT EXISTS clickup_task_id VARCHAR",
+                "ADD COLUMN IF NOT EXISTS question VARCHAR",
+                "ADD COLUMN IF NOT EXISTS module VARCHAR",
+                "ADD COLUMN IF NOT EXISTS kb_covered BOOLEAN",
+            ]
+            for m in kb_gap_migrations:
+                try:
+                    conn.execute(text(
+                        f"ALTER TABLE kb_deflection_log {m}"
                     ))
                 except Exception:
                     pass
@@ -1582,3 +1641,132 @@ def get_eng_report_history(
     except Exception as e:
         print(f"[DB ERROR] get_eng_report_history failed: {e}")
         return []
+
+
+# ---------------------------------------------------------------------------
+# Calendly bookings
+# ---------------------------------------------------------------------------
+# One row per Calendly invitee. Three jobs:
+#   * dedup, because Calendly retries a webhook it does not get a 2xx from
+#   * reschedule correlation, since the new invitee only carries the OLD
+#     invitee URI and we need the CRM record and meeting it resolved to
+#   * cancellation, which arrives with no CRM context at all
+
+calendly_bookings = Table(
+    "calendly_bookings",
+    _metadata,
+    Column("invitee_uri", String, primary_key=True),
+    Column("event_uri", String, default=""),
+    Column("event_type_uri", String, default=""),
+    Column("event_type_name", String, default=""),
+    Column("invitee_email", String, default=""),
+    Column("invitee_name", String, default=""),
+    Column("start_time", String, default=""),
+    Column("status", String, default="active"),
+    Column("last_event", String, default=""),
+    Column("crm_module", String, default=""),
+    Column("crm_record_id", String, default=""),
+    Column("crm_meeting_id", String, default=""),
+    Column("slack_channel", String, default=""),
+    Column("slack_ts", String, default=""),
+    Column("created_at", DateTime, default=datetime.now(timezone.utc)),
+    Column("updated_at", DateTime, default=datetime.now(timezone.utc)),
+)
+
+_CALENDLY_COLUMNS = (
+    "event_uri", "event_type_uri", "event_type_name", "invitee_email",
+    "invitee_name", "start_time", "status", "last_event", "crm_module",
+    "crm_record_id", "crm_meeting_id", "slack_channel", "slack_ts",
+)
+
+
+def save_calendly_booking(booking: dict) -> None:
+    """Insert or update one Calendly booking row.
+
+    A reschedule writes a new row (new invitee URI) carrying the CRM ids
+    copied off the old one, so the link survives any number of reschedules.
+    """
+    invitee_uri = booking.get("invitee_uri", "")
+    if not DATABASE_URL or not invitee_uri:
+        return
+    now = datetime.now(timezone.utc)
+    row = {"invitee_uri": invitee_uri, "created_at": now, "updated_at": now}
+    for column in _CALENDLY_COLUMNS:
+        row[column] = booking.get(column, "") or ""
+
+    columns = ", ".join(["invitee_uri", *_CALENDLY_COLUMNS, "created_at", "updated_at"])
+    placeholders = ", ".join(
+        [":invitee_uri", *[f":{c}" for c in _CALENDLY_COLUMNS],
+         ":created_at", ":updated_at"]
+    )
+    # Never let a later write blank out CRM ids an earlier one resolved.
+    updates = ", ".join(
+        [
+            f"{c} = COALESCE(NULLIF(EXCLUDED.{c}, ''), calendly_bookings.{c})"
+            if c in ("crm_module", "crm_record_id", "crm_meeting_id",
+                     "slack_channel", "slack_ts")
+            else f"{c} = EXCLUDED.{c}"
+            for c in _CALENDLY_COLUMNS
+        ]
+        + ["updated_at = EXCLUDED.updated_at"]
+    )
+
+    try:
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"INSERT INTO calendly_bookings ({columns}) "
+                    f"VALUES ({placeholders}) "
+                    f"ON CONFLICT (invitee_uri) DO UPDATE SET {updates}"
+                ),
+                row,
+            )
+        print(f"[DB] Calendly booking saved: {invitee_uri}")
+    except Exception as e:
+        print(f"[DB ERROR] Failed to save Calendly booking {invitee_uri}: {e}")
+
+
+def get_calendly_booking(invitee_uri: str) -> dict | None:
+    """Fetch one booking row by invitee URI."""
+    if not DATABASE_URL or not invitee_uri:
+        return None
+    try:
+        engine = _get_engine()
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(
+                    "SELECT * FROM calendly_bookings WHERE invitee_uri = :uri"
+                ),
+                {"uri": invitee_uri},
+            ).mappings().first()
+        return dict(result) if result else None
+    except Exception as e:
+        print(f"[DB ERROR] Failed to read Calendly booking {invitee_uri}: {e}")
+        return None
+
+
+def mark_calendly_booking_canceled(
+    invitee_uri: str, last_event: str = "invitee.canceled"
+) -> None:
+    """Flag a booking canceled without touching its CRM ids."""
+    if not DATABASE_URL or not invitee_uri:
+        return
+    try:
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE calendly_bookings "
+                    "SET status = 'canceled', last_event = :last_event, "
+                    "    updated_at = :now "
+                    "WHERE invitee_uri = :uri"
+                ),
+                {
+                    "uri": invitee_uri,
+                    "last_event": last_event,
+                    "now": datetime.now(timezone.utc),
+                },
+            )
+    except Exception as e:
+        print(f"[DB ERROR] Failed to cancel Calendly booking {invitee_uri}: {e}")
