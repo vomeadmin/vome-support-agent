@@ -143,6 +143,7 @@ def normalize_booking(body: dict) -> dict:
         "start_time": scheduled.get("start_time") or "",
         "end_time": scheduled.get("end_time") or "",
         "location": _location_text(location),
+        "location_slack": _location_slack(location),
         "host_name": host.get("user_name") or "",
         "host_email": host.get("user_email") or "",
         "host_uri": host.get("user") or "",
@@ -158,15 +159,51 @@ def normalize_booking(body: dict) -> dict:
     }
 
 
+_LOCATION_LABELS = {
+    "microsoft_teams_conference": "Microsoft Teams",
+    "google_conference": "Google Meet",
+    "zoom_conference": "Zoom",
+    "gotomeeting_conference": "GoToMeeting",
+    "webex_conference": "Webex",
+    "physical": "In person",
+    "outbound_call": "Phone call (we call them)",
+    "inbound_call": "Phone call (they call us)",
+    "custom": "Custom",
+}
+
+
+def _location_label(kind: str) -> str:
+    """Turn Calendly's location type into something a human wrote."""
+    if not kind:
+        return ""
+    return _LOCATION_LABELS.get(
+        kind, kind.replace("_conference", "").replace("_", " ").title()
+    )
+
+
 def _location_text(location: dict) -> str:
-    """Render Calendly's polymorphic location object as one line."""
+    """Render Calendly's polymorphic location object as one plain line."""
     if not location:
         return ""
-    kind = location.get("type") or ""
+    label = _location_label(location.get("type") or "")
     for key in ("join_url", "location", "text", "additional_info"):
         if location.get(key):
-            return f"{kind}: {location[key]}" if kind else str(location[key])
-    return kind
+            return f"{label}: {location[key]}" if label else str(location[key])
+    return label
+
+
+def _location_slack(location: dict) -> str:
+    """Same location, but as a named Slack link when there is a URL."""
+    if not location:
+        return ""
+    label = _location_label(location.get("type") or "") or "Join"
+    for key in ("join_url", "location", "text", "additional_info"):
+        value = location.get(key)
+        if not value:
+            continue
+        text = str(value)
+        return f"<{text}|{label}>" if text.startswith("http") else f"{label}: {text}"
+    return label
 
 
 # ---------------------------------------------------------------------------
@@ -389,8 +426,14 @@ def _format_time_range(booking: dict) -> str:
     if duration:
         text = f"{text} ({duration})"
 
+    # Montreal and New York share an offset for most of the year, so comparing
+    # timezone NAMES printed the same clock time twice. Compare the offset.
     invitee_tz = booking.get("timezone", "")
-    if invitee_tz and invitee_tz != DISPLAY_TIMEZONE:
+    same_clock = (
+        start.astimezone(_zone(invitee_tz)).utcoffset() == local.utcoffset()
+        if invitee_tz else True
+    )
+    if invitee_tz and invitee_tz != DISPLAY_TIMEZONE and not same_clock:
         their = start.astimezone(_zone(invitee_tz))
         text += (
             f", {their.strftime('%I:%M %p').lstrip('0')} for them "
@@ -479,8 +522,9 @@ def build_blocks(booking: dict, crm: dict, meeting_ok: bool, kind: str) -> tuple
         fields.append(
             {"type": "mrkdwn", "text": f"*{label}*\n{hosts}"}
         )
-    if booking.get("location"):
-        fields.append({"type": "mrkdwn", "text": f"*Where*\n{booking['location']}"})
+    where = booking.get("location_slack") or booking.get("location")
+    if where:
+        fields.append({"type": "mrkdwn", "text": f"*Where*\n{where}"})
     blocks.append({"type": "section", "fields": fields})
 
     # The CRM line is the point of the whole post, so it stands alone.

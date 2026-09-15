@@ -1500,6 +1500,63 @@ async def kb_sync_status():
     }
 
 
+@app.get("/debug/calendly-config")
+async def debug_calendly_config(check: int = 0):
+    """What the RUNNING process sees for the Calendly pipeline.
+
+    Never returns a secret, only whether one is present. Pass ?check=1 to also
+    attempt a live Zoho CRM token refresh and read, which is the difference
+    between "the variable is set" and "the variable works".
+    """
+    import calendly_booking_handler as cbh
+    import zoho_crm_api
+
+    def present(name: str) -> bool:
+        return bool(os.environ.get(name))
+
+    report = {
+        "calendly": {
+            "pat": present("CALENDLY_PAT"),
+            "signing_key_set": present("CALENDLY_WEBHOOK_SIGNING_KEY"),
+            "signature_enforced": present("CALENDLY_WEBHOOK_SIGNING_KEY"),
+        },
+        "slack": {
+            "bot_token": present("SLACK_BOT_TOKEN"),
+            "bookings_channel": cbh.CHANNEL_BOOKINGS or "(missing)",
+            "sdr_channel": cbh.CHANNEL_SDR or "(missing)",
+            "sdr_matchers": cbh.CALENDLY_SDR_EVENT_TYPES,
+            "also_post_to_main": cbh.CALENDLY_SDR_ALSO_MAIN,
+            "ron_mention": bool(cbh.RON_SLACK_USER_ID),
+        },
+        "zoho_crm": {
+            "client_id": present("ZOHO_CRM_CLIENT_ID"),
+            "client_secret": present("ZOHO_CRM_CLIENT_SECRET"),
+            "refresh_token": present("ZOHO_CRM_REFRESH_TOKEN"),
+            "configured": zoho_crm_api.is_configured(),
+            "api_base": zoho_crm_api.ZOHO_CRM_API_BASE,
+        },
+        "database": present("DATABASE_URL"),
+    }
+
+    if check:
+        # The live test. A set variable and a working one are different things.
+        try:
+            zoho_crm_api._refresh_access_token()
+            resp = zoho_crm_api._api_request(
+                "GET", "/Leads", params={"per_page": 1, "fields": "Last_Name"}
+            )
+            status = resp.status_code if resp else "no response"
+            report["zoho_crm"]["live_check"] = (
+                "ok" if status in (200, 204) else f"HTTP {status}"
+            )
+            if resp is not None and status not in (200, 204):
+                report["zoho_crm"]["live_error"] = resp.text[:300]
+        except Exception as e:
+            report["zoho_crm"]["live_check"] = f"token refresh failed: {str(e)[:300]}"
+
+    return report
+
+
 @app.get("/health")
 async def health():
     env_status = {v: bool(os.environ.get(v)) for v in REQUIRED_ENV}
