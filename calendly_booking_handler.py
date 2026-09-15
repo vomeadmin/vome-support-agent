@@ -272,18 +272,54 @@ def resolve_crm_record(booking: dict) -> dict:
     # 1. Email, contacts before leads: a converted contact is the better home.
     for module in ("Contacts", "Leads"):
         try:
-            record = zoho_crm_api.search_by_email(module, email)
+            found = zoho_crm_api.find_by_email(module, email)
         except Exception as e:
             print(f"[CALENDLY] {module} email search failed: {e}")
-            record = None
-        if record:
-            result.update({
-                "module": module,
-                "id": str(record.get("id", "")),
-                "name": _record_name(record) or result["name"],
-                "match": "email",
-            })
-            return result
+            found = {"record": None, "quality": "none", "matches": []}
+
+        record = found.get("record")
+        if not record:
+            continue
+
+        secondary = found.get("quality") == "secondary"
+
+        # A secondary-field hit is ambiguous. It is either the same person's
+        # old address, in which case the surname agrees, or a COLLEAGUE who
+        # listed this address on their own record, in which case it does not.
+        # Filing a meeting on that colleague is how Lara Hollaway's booking
+        # ended up on Angela Loos.
+        if secondary and not _names_agree(record, booking):
+            result["warnings"].append(
+                f"Skipped {_record_name(record) or 'a ' + module.lower()[:-1]} "
+                f"in {module}, who lists {email} as a secondary address but "
+                "has a different name than the person who booked."
+            )
+            continue
+
+        result.update({
+            "module": module,
+            "id": str(record.get("id", "")),
+            "name": _record_name(record) or result["name"],
+            "match": "email",
+        })
+
+        if secondary:
+            result["warnings"].append(
+                f"Matched on a secondary email. This record's primary address "
+                f"is {record.get('Email') or 'unknown'}, the booking came from "
+                f"{email}. Same surname, so treated as the same person."
+            )
+        else:
+            same_primary = [
+                r for r in found.get("matches", [])
+                if (r.get("Email") or "").strip().lower() == email.strip().lower()
+            ]
+            if len(same_primary) > 1:
+                result["warnings"].append(
+                    f"{len(same_primary)} {module.lower()} share {email}. "
+                    "Used the most recently updated one."
+                )
+        return result
 
     # 2. Exact name. Only trusted when it is unambiguous.
     first, last = booking.get("first_name", ""), booking.get("last_name", "")
@@ -355,6 +391,18 @@ def resolve_crm_record(booking: dict) -> dict:
             "Could not create the CRM lead. Add it by hand."
         )
     return result
+
+
+def _names_agree(record: dict, booking: dict) -> bool:
+    """Same surname, ignoring case and spacing.
+
+    Deliberately surname only. First names vary (Liz vs Elizabeth) far more
+    than family names, and this guard only has to separate two different
+    people at the same organization.
+    """
+    theirs = (record.get("Last_Name") or "").strip().lower()
+    ours = (booking.get("last_name") or "").strip().lower()
+    return bool(theirs and ours and theirs == ours)
 
 
 def _record_name(record: dict) -> str:
@@ -713,6 +761,9 @@ def _handle_created(booking: dict) -> dict:
                 record_id=crm["id"],
                 description=_note_body(booking),
                 venue=booking.get("location", ""),
+                meeting_type=zoho_crm_api.meeting_type_for(
+                    booking.get("event_type_name", "")
+                ),
             )
             meeting_ok = bool(details)
             meeting_id = str((details or {}).get("id", ""))

@@ -34,9 +34,14 @@ class FakeCRM:
     """Stands in for zoho_crm_api, recording every write."""
 
     def __init__(self, contacts=None, leads=None, name_matches=None,
-                 account=None, company_lead=None):
+                 account=None, company_lead=None, secondary=None,
+                 duplicates=None):
         self.contacts = contacts or {}
         self.leads = leads or {}
+        # email -> record that carries it on a NON primary field
+        self.secondary = secondary or {}
+        # email -> extra records sharing the same primary address
+        self.duplicates = duplicates or {}
         self.name_matches = name_matches or {}
         self.account = account
         self.company_lead = company_lead
@@ -46,8 +51,19 @@ class FakeCRM:
         self.meeting_updates = []
         self._next_id = 1000
 
+    def find_by_email(self, module, email):
+        store = self.contacts if module == "Contacts" else self.leads
+        record = store.get(email)
+        if record:
+            matches = [record] + self.duplicates.get(email, [])
+            return {"record": record, "quality": "primary", "matches": matches}
+        record = self.secondary.get((module, email))
+        if record:
+            return {"record": record, "quality": "secondary", "matches": [record]}
+        return {"record": None, "quality": "none", "matches": []}
+
     def search_by_email(self, module, email):
-        return (self.contacts if module == "Contacts" else self.leads).get(email)
+        return self.find_by_email(module, email)["record"]
 
     def search_by_name(self, module, first, last):
         return self.name_matches.get((module, first, last), [])
@@ -76,13 +92,18 @@ class FakeCRM:
         return {"id": "note-1"}
 
     def create_meeting(self, title, start_time, end_time, module, record_id,
-                       description="", venue=""):
+                       description="", venue="", meeting_type=""):
         self._next_id += 1
         self.meetings.append({
             "id": str(self._next_id), "title": title, "start": start_time,
             "end": end_time, "module": module, "record_id": record_id,
+            "meeting_type": meeting_type,
         })
         return {"id": str(self._next_id)}
+
+    def meeting_type_for(self, name):
+        import zoho_crm_api
+        return zoho_crm_api.meeting_type_for(name)
 
     def update_meeting(self, event_id, fields):
         self.meeting_updates.append({"id": event_id, "fields": fields})
@@ -592,3 +613,142 @@ def test_slack_lists_every_host(collective):
     rendered = json.dumps(collective["slack"].posts[0]["blocks"])
     assert "*Hosts*" in rendered
     assert "Ron Segev, Jennifer Jackson" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Secondary email addresses
+#
+# Incident 2026-09-15. Lara Hollaway booked a meeting. Angela Loos, a colleague
+# at the same organization, carried lhollaway@lscarolinas.net in her
+# Secondary_Email field. Zoho's ?email= search matches every email field and
+# returned Angela first, per_page=1 took her, and Lara's meeting was filed on
+# Angela's record.
+# ---------------------------------------------------------------------------
+
+ANGELA = {
+    "id": "4693275000117781214", "First_Name": "Angela", "Last_Name": "Loos",
+    "Email": "aloos@lscarolinas.net",
+    "Secondary_Email": "lhollaway@lscarolinas.net",
+}
+LARA = {
+    "id": "4693275000097043411", "First_Name": "Lara", "Last_Name": "Hollaway",
+    "Email": "lhollaway@lscarolinas.net",
+}
+
+
+def test_a_colleagues_secondary_email_never_takes_the_meeting(env):
+    """The incident. Angela must not receive Lara's booking."""
+    env["crm"].secondary[("Contacts", "lhollaway@lscarolinas.net")] = ANGELA
+
+    result = handler.handle_calendly_event(make_payload(
+        email="lhollaway@lscarolinas.net", name="Lara Hollaway",
+    ))
+
+    assert result["crm"]["id"] != ANGELA["id"]
+    for meeting in env["crm"].meetings:
+        assert meeting["record_id"] != ANGELA["id"]
+    assert any("secondary address" in w for w in result["crm"]["warnings"])
+
+
+def test_the_real_person_wins_over_a_secondary_hit(env):
+    """With Lara present on her primary address, she is the match."""
+    env["crm"].contacts["lhollaway@lscarolinas.net"] = LARA
+    env["crm"].secondary[("Contacts", "lhollaway@lscarolinas.net")] = ANGELA
+
+    result = handler.handle_calendly_event(make_payload(
+        email="lhollaway@lscarolinas.net", name="Lara Hollaway",
+    ))
+
+    assert result["crm"]["id"] == LARA["id"]
+    assert result["crm"]["warnings"] == []
+
+
+def test_a_persons_own_old_address_still_matches(env):
+    """Same surname means it is an alias, not a colleague. Use it, but say so."""
+    old_record = {
+        "id": "555", "First_Name": "Lara", "Last_Name": "Hollaway",
+        "Email": "lara@oldemployer.org",
+        "Secondary_Email": "lhollaway@lscarolinas.net",
+    }
+    env["crm"].secondary[("Contacts", "lhollaway@lscarolinas.net")] = old_record
+
+    result = handler.handle_calendly_event(make_payload(
+        email="lhollaway@lscarolinas.net", name="Lara Hollaway",
+    ))
+
+    assert result["crm"]["id"] == "555"
+    assert any("secondary email" in w.lower() for w in result["crm"]["warnings"])
+
+
+def test_a_shared_primary_address_is_flagged(env):
+    """Two people on one inbox. Newest wins, and the post admits the choice."""
+    env["crm"].contacts["team@shared.org"] = {
+        "id": "1", "Last_Name": "Newer", "Email": "team@shared.org",
+    }
+    env["crm"].duplicates["team@shared.org"] = [
+        {"id": "2", "Last_Name": "Older", "Email": "team@shared.org"},
+    ]
+
+    result = handler.handle_calendly_event(make_payload(email="team@shared.org"))
+
+    assert result["crm"]["id"] == "1"
+    assert any("share team@shared.org" in w for w in result["crm"]["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# The Reason field (Meeting_Type)
+# ---------------------------------------------------------------------------
+
+import zoho_crm_api as _crm
+
+
+@pytest.mark.parametrize("event_type_name, expected", [
+    ("Demo Meeting [VOME]", "Demo"),
+    ("[Vome] Live Demo", "Demo"),
+    ("Vome Deminar", "Demo"),
+    ("D\u00e9monstration Vome", "Demo"),
+    ("Discovery Call [VOME]", "Discover Call"),
+    ("[Vome] Brief Discovery Call", "Discover Call"),
+    ("[Vome] Appel de d\u00e9couverte", "Discover Call"),
+    ("Appel d'introduction", "Discover Call"),
+    ("[Vome] Account Review", "Account Review"),
+    ("Vome: Revue de compte", "Account Review"),
+    ("[Vome] Onboarding Meeting", "Onboarding Call"),
+    ("[Vome] Training Session", "Training Session"),
+    ("Vome: Session de formation", "Training Session"),
+    ("Vome Support / Soutien Vome", "Customer Support"),
+])
+def test_reason_is_inferred_from_the_title(event_type_name, expected):
+    assert _crm.meeting_type_for(event_type_name) == expected
+
+
+@pytest.mark.parametrize("event_type_name", [
+    "30 Minute Meeting",
+    "15 Minute Meeting",
+    "60 Minute Meeting",
+    "Investment opportunity: Vome",
+    "",
+])
+def test_an_uninformative_title_leaves_reason_empty(event_type_name):
+    """A wrong Reason is worse than none. Somebody will report on this field."""
+    assert _crm.meeting_type_for(event_type_name) == ""
+
+
+def test_every_mapped_value_exists_in_the_picklist():
+    """Guards a typo becoming a rejected write."""
+    for _, value in _crm._MEETING_TYPE_KEYWORDS:
+        assert value in _crm.MEETING_TYPE_VALUES
+
+
+def test_the_reason_reaches_the_meeting(env):
+    handler.handle_calendly_event(make_payload(
+        event_type_name="Demo Meeting [VOME]",
+    ))
+    assert env["crm"].meetings[0]["meeting_type"] == "Demo"
+
+
+def test_a_generic_title_sends_no_reason(env):
+    handler.handle_calendly_event(make_payload(
+        event_type_name="30 Minute Meeting",
+    ))
+    assert env["crm"].meetings[0]["meeting_type"] == ""

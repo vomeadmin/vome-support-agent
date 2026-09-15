@@ -165,18 +165,62 @@ def _clean_criteria_value(value: str) -> str:
 # Lookups
 # ---------------------------------------------------------------------------
 
-def search_by_email(module: str, email: str) -> dict | None:
-    """Find a Contact or Lead by email. module is 'Contacts' or 'Leads'."""
+def find_by_email(module: str, email: str) -> dict:
+    """Find a Contact or Lead by email, preferring an exact PRIMARY match.
+
+    Zoho's ?email= search matches EVERY email field on a record, Secondary_Email
+    included. A colleague who listed this person's address as their secondary
+    can therefore outrank the person themselves, and with per_page=1 you never
+    find out. That put a booked meeting on the wrong contact once already.
+
+    Returns {"record", "quality", "matches"} where quality is:
+      primary   an exact hit on the Email field, the one you want
+      secondary the address lives on some other field of that record
+      none      nothing matched
+    """
+    result: dict = {"record": None, "quality": "none", "matches": []}
     if not email:
-        return None
+        return result
+
     resp = _api_request(
         "GET", f"/{module}/search",
-        params={"email": email, "per_page": 1},
+        params={"email": email, "per_page": 10},
     )
-    record = _first_record(resp)
-    if record:
-        print(f"[ZOHO-CRM] {module} email match {record.get('id')} for {email}")
-    return record
+    if resp is not None and resp.status_code == 204:
+        return result
+    records = _all_records(resp)
+    result["matches"] = records
+    if not records:
+        return result
+
+    target = email.strip().lower()
+    exact = [
+        r for r in records
+        if (r.get("Email") or "").strip().lower() == target
+    ]
+
+    if exact:
+        # Several people can legitimately share a primary address (a shared
+        # inbox). Newest wins, and the caller warns about the ambiguity.
+        exact.sort(key=lambda r: r.get("Modified_Time") or "", reverse=True)
+        result["record"] = exact[0]
+        result["quality"] = "primary"
+    else:
+        result["record"] = records[0]
+        result["quality"] = "secondary"
+
+    record = result["record"]
+    print(
+        f"[ZOHO-CRM] {module} {result['quality']} email match "
+        f"{record.get('id')} for {email} "
+        f"({len(records)} row(s) matched)"
+    )
+    return result
+
+
+def search_by_email(module: str, email: str) -> dict | None:
+    """Best matching Contact or Lead for an email, or None."""
+    return find_by_email(module, email)["record"]
 
 
 def search_by_name(module: str, first_name: str, last_name: str) -> list[dict]:
@@ -330,6 +374,68 @@ def to_zoho_datetime(value: str) -> str:
     return f"{stamp}{offset[:3]}:{offset[3:]}"
 
 
+# Meeting_Type is labelled "Reason" in the CRM UI. It is a picklist, so only
+# these exact strings are accepted. Read from /settings/fields on 2026-09-15:
+#   -None-, Discover Call, Demo, Account Review, Training Session,
+#   Onboarding Call, Deal stage, Registration Review, Customer Support,
+#   General, Referral Partnership
+# ("Discover Call" really is spelled that way in the picklist.)
+MEETING_TYPE_VALUES = (
+    "Discover Call", "Demo", "Account Review", "Training Session",
+    "Onboarding Call", "Deal stage", "Registration Review",
+    "Customer Support", "General", "Referral Partnership",
+)
+
+# First match wins. Matched against the accent-stripped, lowercased event type
+# NAME only, never the slug: "Vome: Training Session" has the slug
+# vome-platform-demo, and calling that a Demo would be wrong.
+# A title that says nothing useful, "30 Minute Meeting", maps to nothing and
+# the field is left empty rather than guessed at.
+_MEETING_TYPE_KEYWORDS = (
+    ("account review", "Account Review"),
+    ("revue de compte", "Account Review"),
+    ("onboarding", "Onboarding Call"),
+    ("training", "Training Session"),
+    ("formation", "Training Session"),
+    ("registration", "Registration Review"),
+    ("referral", "Referral Partnership"),
+    ("partnership", "Referral Partnership"),
+    ("partenariat", "Referral Partnership"),
+    ("support", "Customer Support"),
+    ("soutien", "Customer Support"),
+    ("discovery", "Discover Call"),
+    ("discover", "Discover Call"),
+    ("decouverte", "Discover Call"),
+    ("introduction", "Discover Call"),
+    ("deminar", "Demo"),
+    ("demonstration", "Demo"),
+    ("demo", "Demo"),
+)
+
+
+def _strip_accents(text: str) -> str:
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(c)
+    )
+
+
+def meeting_type_for(event_type_name: str) -> str:
+    """Infer the Reason picklist value from a Calendly event type name.
+
+    Returns "" when the title carries no signal. An empty Reason is correct;
+    a wrong one is worse than none, because somebody will report on it.
+    """
+    if not event_type_name:
+        return ""
+    haystack = _strip_accents(event_type_name).lower()
+    for keyword, value in _MEETING_TYPE_KEYWORDS:
+        if keyword in haystack:
+            return value
+    return ""
+
+
 def create_meeting(
     title: str,
     start_time: str,
@@ -338,6 +444,7 @@ def create_meeting(
     record_id: str,
     description: str = "",
     venue: str = "",
+    meeting_type: str = "",
 ) -> dict | None:
     """Create an Event (Meeting) linked to a Lead or Contact.
 
@@ -356,7 +463,16 @@ def create_meeting(
     if venue:
         base["Venue"] = venue[:250]
 
-    linked = dict(base)
+    # Reason. Only ever a value from the picklist, and dropped on retry if the
+    # org has since renamed its options, because a meeting with no Reason beats
+    # no meeting at all.
+    typed = dict(base)
+    if meeting_type and meeting_type in MEETING_TYPE_VALUES:
+        typed["Meeting_Type"] = meeting_type
+    elif meeting_type:
+        print(f"[ZOHO-CRM] Ignoring unknown Reason value {meeting_type!r}")
+
+    linked = dict(typed)
     if record_id:
         if module == "Contacts":
             linked["Who_Id"] = record_id
@@ -373,6 +489,16 @@ def create_meeting(
     if details:
         print(f"[ZOHO-CRM] Meeting created {details.get('id')} for {module}/{record_id}")
         return details
+
+    # Reason is the likeliest thing an org changes under us, so shed it first
+    # and keep the record link, which matters far more.
+    if typed.get("Meeting_Type") and record_id:
+        print("[ZOHO-CRM] Retrying meeting create without the Reason field")
+        retry = {k: v for k, v in linked.items() if k != "Meeting_Type"}
+        resp = _api_request("POST", "/Events", json_body={"data": [retry]})
+        details = _write_result(resp, "meeting create (no Reason retry)")
+        if details:
+            return details
 
     if not record_id:
         return None
