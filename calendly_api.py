@@ -51,7 +51,7 @@ def _request(
 
     url = path if path.startswith("http") else f"{API_BASE}{path}"
     try:
-        return httpx.request(
+        resp = httpx.request(
             method, url,
             json=json_body, params=params,
             headers=_headers(), timeout=15,
@@ -59,6 +59,15 @@ def _request(
     except Exception as e:
         print(f"[CALENDLY-API] Request error {method} {path}: {e}")
         return None
+
+    # Calendly says exactly what is wrong in the body, including which scope a
+    # token is missing. Swallowing it turns a one minute fix into an hour.
+    if resp.status_code >= 400:
+        print(
+            f"[CALENDLY-API] {method} {path} -> {resp.status_code}: "
+            f"{resp.text[:400]}"
+        )
+    return resp
 
 
 # ---------------------------------------------------------------------------

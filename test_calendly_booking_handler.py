@@ -165,6 +165,7 @@ def make_payload(
     rescheduled=False,
     event_type_name="Demo Meeting [VOME]",
     questions=None,
+    memberships=None,
 ):
     if questions is None:
         questions = [
@@ -206,7 +207,7 @@ def make_payload(
                 "start_time": "2026-09-21T18:00:00.000000Z",
                 "end_time": "2026-09-21T19:00:00.000000Z",
                 "location": {"type": "zoom", "join_url": "https://zoom.us/j/1"},
-                "event_memberships": [{
+                "event_memberships": memberships or [{
                     "user": "https://api.calendly.com/users/U1",
                     "user_email": "ron@vomevolunteer.com",
                     "user_name": "Ron",
@@ -522,3 +523,72 @@ def test_calendly_timestamps_convert_to_zoho_format():
         zoho_crm_api.to_zoho_datetime("2026-09-21T18:00:00.000000Z")
         == "2026-09-21T18:00:00+00:00"
     )
+
+
+# ---------------------------------------------------------------------------
+# Collective (team) event types
+#
+# These are the real shape of the SDR's two calendars: two hosts, and NO slug,
+# because Calendly does not give collective event types one. Matching has to
+# fall back to the uuid or the exact name, and host matching has to look past
+# the first membership or the second host is invisible.
+# ---------------------------------------------------------------------------
+
+COLLECTIVE_HOSTS = [
+    {
+        "user": "https://api.calendly.com/users/U1",
+        "user_email": "r.segev@vomevolunteer.co",
+        "user_name": "Ron Segev",
+    },
+    {
+        "user": "https://api.calendly.com/users/U2",
+        "user_email": "j.jackson@vomevolunteer.com",
+        "user_name": "Jennifer Jackson",
+    },
+]
+
+
+@pytest.fixture
+def collective(env, monkeypatch):
+    """A collective booking: two hosts, no slug from the API."""
+    monkeypatch.setattr(handler.calendly_api, "get_event_type", lambda uri: {})
+    return env
+
+
+def test_host_match_finds_a_second_host(collective, monkeypatch):
+    monkeypatch.setattr(
+        handler, "CALENDLY_SDR_EVENT_TYPES",
+        ["host:j.jackson@vomevolunteer.com"],
+    )
+    booking = handler.normalize_booking(make_payload(memberships=COLLECTIVE_HOSTS))
+    assert booking["event_type_slug"] == ""
+    assert handler.route_channels(booking) == [SDR_CHANNEL]
+
+
+def test_uuid_matches_when_there_is_no_slug(collective, monkeypatch):
+    monkeypatch.setattr(handler, "CALENDLY_SDR_EVENT_TYPES", ["et1"])
+    booking = handler.normalize_booking(make_payload(memberships=COLLECTIVE_HOSTS))
+    assert handler.route_channels(booking) == [SDR_CHANNEL]
+
+
+def test_exact_name_matches_when_there_is_no_slug(collective, monkeypatch):
+    monkeypatch.setattr(
+        handler, "CALENDLY_SDR_EVENT_TYPES", ["demo meeting [vome]"]
+    )
+    booking = handler.normalize_booking(make_payload(memberships=COLLECTIVE_HOSTS))
+    assert handler.route_channels(booking) == [SDR_CHANNEL]
+
+
+def test_a_host_who_is_not_on_the_booking_does_not_match(collective, monkeypatch):
+    monkeypatch.setattr(
+        handler, "CALENDLY_SDR_EVENT_TYPES", ["host:someone.else@vome.com"]
+    )
+    booking = handler.normalize_booking(make_payload(memberships=COLLECTIVE_HOSTS))
+    assert handler.route_channels(booking) == [MAIN_CHANNEL]
+
+
+def test_slack_lists_every_host(collective):
+    handler.handle_calendly_event(make_payload(memberships=COLLECTIVE_HOSTS))
+    rendered = json.dumps(collective["slack"].posts[0]["blocks"])
+    assert "*Hosts*" in rendered
+    assert "Ron Segev, Jennifer Jackson" in rendered

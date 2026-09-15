@@ -51,19 +51,48 @@ def cmd_whoami() -> None:
 
 
 def cmd_event_types() -> None:
-    _, org_uri = _me()
-    types = calendly_api.list_event_types(org_uri)
-    if not types:
+    """List every event type, including collective ones.
+
+    Querying by organization alone silently omits collective (team) event
+    types, which is exactly the kind you want to route on. They only appear
+    under each member, so union the per-member lists and dedupe by URI.
+    """
+    user_uri, org_uri = _me()
+
+    found: dict[str, dict] = {}
+    for et in calendly_api.list_event_types(org_uri):
+        found[et.get("uri", "")] = et
+
+    members = calendly_api.list_organization_members(org_uri)
+    for member in members:
+        member_uri = (member.get("user") or {}).get("uri", "")
+        if not member_uri:
+            continue
+        resp = calendly_api._request(
+            "GET", "/event_types", params={"user": member_uri, "count": 100}
+        )
+        if not resp or resp.status_code != 200:
+            continue
+        for et in resp.json().get("collection", []):
+            found.setdefault(et.get("uri", ""), et)
+
+    if not found:
         print("No event types returned.")
         return
-    print(f"{len(types)} event type(s). Use the slug in CALENDLY_SDR_EVENT_TYPES.\n")
-    for et in types:
-        owner = et.get("profile") or {}
-        print(f"  name:  {et.get('name', '')}")
-        print(f"  slug:  {et.get('slug', '')}")
-        print(f"  owner: {owner.get('name', '')}")
-        print(f"  uri:   {et.get('uri', '')}")
-        print(f"  active: {et.get('active')}   duration: {et.get('duration')} min")
+
+    print(
+        f"{len(found)} event type(s) across {len(members)} member(s). "
+        "Use the uuid in CALENDLY_SDR_EVENT_TYPES: collective types have no "
+        "slug, so uuid or exact name is the only way to match them.\n"
+    )
+    for et in sorted(found.values(), key=lambda t: (t.get("name") or "").lower()):
+        owner = (et.get("profile") or {}).get("name", "")
+        pooling = et.get("pooling_type") or "solo"
+        print(f"  name:    {et.get('name', '')}")
+        print(f"  uuid:    {(et.get('uri') or '').rsplit('/', 1)[-1]}")
+        print(f"  slug:    {et.get('slug') or '(none, collective)'}")
+        print(f"  owner:   {owner}   kind: {pooling}")
+        print(f"  active:  {et.get('active')}   duration: {et.get('duration')} min")
         print()
 
 

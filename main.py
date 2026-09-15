@@ -86,6 +86,24 @@ def _check_env():
             "NOTE: CALENDLY_WEBHOOK_SIGNING_KEY not set, "
             "/webhook/calendly will accept unsigned posts"
         )
+    # One line on boot beats guessing which of six variables is missing on a
+    # platform where the app and the setup script read different environments.
+    calendly_missing = [
+        v for v in (
+            "CALENDLY_PAT",
+            "SLACK_CHANNEL_CALENDLY_BOOKINGS",
+            "SLACK_CHANNEL_CALENDLY_SDR",
+            "ZOHO_CRM_REFRESH_TOKEN",
+        )
+        if not os.environ.get(v)
+    ]
+    if calendly_missing:
+        print(
+            "NOTE: Calendly booking pipeline missing "
+            + ", ".join(calendly_missing)
+        )
+    else:
+        print("Startup: Calendly booking pipeline fully configured")
 
 
 def _extract_zoho_payload(raw_body: bytes) -> tuple[dict, str]:

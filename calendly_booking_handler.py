@@ -146,6 +146,15 @@ def normalize_booking(body: dict) -> dict:
         "host_name": host.get("user_name") or "",
         "host_email": host.get("user_email") or "",
         "host_uri": host.get("user") or "",
+        # Collective event types have several hosts. Routing and display both
+        # need all of them, or an SDR listed second is invisible.
+        "host_names": ", ".join(
+            m.get("user_name") or "" for m in memberships if m.get("user_name")
+        ),
+        "host_emails": [
+            (m.get("user_email") or "").lower()
+            for m in memberships if m.get("user_email")
+        ],
     }
 
 
@@ -166,7 +175,11 @@ def _location_text(location: dict) -> str:
 
 def _matches_token(booking: dict, token: str) -> bool:
     if token.startswith("host:"):
-        return (booking.get("host_email") or "").lower() == token[5:].strip()
+        wanted = token[5:].strip()
+        hosts = booking.get("host_emails") or [
+            (booking.get("host_email") or "").lower()
+        ]
+        return wanted in hosts
     candidates = {
         (booking.get("event_type_name") or "").lower(),
         (booking.get("event_type_slug") or "").lower(),
@@ -460,8 +473,12 @@ def build_blocks(booking: dict, crm: dict, meeting_ok: bool, kind: str) -> tuple
         {"type": "mrkdwn", "text": f"*Who*\n{who_line}"},
         {"type": "mrkdwn", "text": f"*When*\n{_format_time_range(booking)}"},
     ]
-    if booking.get("host_name"):
-        fields.append({"type": "mrkdwn", "text": f"*Host*\n{booking['host_name']}"})
+    hosts = booking.get("host_names") or booking.get("host_name")
+    if hosts:
+        label = "Hosts" if "," in hosts else "Host"
+        fields.append(
+            {"type": "mrkdwn", "text": f"*{label}*\n{hosts}"}
+        )
     if booking.get("location"):
         fields.append({"type": "mrkdwn", "text": f"*Where*\n{booking['location']}"})
     blocks.append({"type": "section", "fields": fields})
