@@ -825,6 +825,62 @@ def delete_missing_kb_articles(
         return result.rowcount or 0
 
 
+def _kb_search_sql(language: str | None) -> str:
+    """Build the KB full-text search SQL.
+
+    Split out from search_kb_articles_db so the bind parameters can be
+    asserted without a database. Write a Postgres cast as a bare double colon
+    directly after a bind name and SQLAlchemy stops treating it as a bind at
+    all, passing the name through to Postgres literally. That took every KB
+    lookup out of service and failed no test. Always use CAST(:name AS type).
+    See test_kb_search_sql.py.
+
+    We OR the query terms so an article matching *some* of the words still
+    surfaces, but a pure OR lets one common word ("account", "question",
+    "feature") pull up an off-topic article, which is how "Billing or account
+    question" once surfaced "Can minors volunteer?". To keep recall without
+    the junk:
+
+      * split the plainto lexemes (plainto ANDs them with ' & ')
+      * match on the OR of those lexemes (recall)
+      * require a row to match at least LEAST(2, term_count) of them, so a
+        one-common-word coincidence drops out while a genuine multi-word
+        question that hits most terms still matches
+      * rank by how many terms matched first, then ts_rank_cd density
+
+    plainto sanitises user input, so each split lexeme is a valid single-term
+    to_tsquery.
+    """
+    sql = (
+        "WITH q AS ("
+        "  SELECT regexp_split_to_array("
+        "           plainto_tsquery(CAST(:cfg AS regconfig), :q)::text, ' & '"
+        "         ) AS lexemes"
+        ") "
+        "SELECT a.zoho_article_id, a.title, a.body, a.url, a.permalink, "
+        "       a.category, a.language, a.modified_time, "
+        "       ts_rank_cd(a.search_vector, q_or.q) AS score, "
+        "       ( SELECT count(*) FROM unnest(q.lexemes) lx "
+        "          WHERE lx <> '' AND a.search_vector @@ lx::tsquery "
+        "       ) AS match_count "
+        "FROM kb_articles a, q, "
+        "     to_tsquery(CAST(:cfg AS regconfig), "
+        "       array_to_string(q.lexemes, ' | ')) AS q_or(q) "
+        "WHERE a.search_vector @@ q_or.q "
+        "  AND ( SELECT count(*) FROM unnest(q.lexemes) lx "
+        "         WHERE lx <> '' AND a.search_vector @@ lx::tsquery "
+        "      ) >= LEAST(2, cardinality(q.lexemes)) "
+        # Never surface a draft or unpublished article: its help-center URL
+        # 404s for the client. Legacy rows can have an empty status, so this
+        # excludes the known-bad values rather than requiring 'Published'.
+        "  AND lower(coalesce(a.status, '')) "
+        "      NOT IN ('draft', 'unpublished', 'review', 'in review') "
+    )
+    if language in ("en", "fr"):
+        sql += "  AND a.language = :lang "
+    return sql + "ORDER BY match_count DESC, score DESC LIMIT :limit"
+
+
 def search_kb_articles_db(
     query: str,
     language: str | None = None,
@@ -859,37 +915,11 @@ def search_kb_articles_db(
     #
     # plainto sanitises user input, so each split lexeme is a valid
     # single-term to_tsquery.
-    sql = (
-        "WITH q AS ("
-        "  SELECT regexp_split_to_array("
-        "           plainto_tsquery(:cfg::regconfig, :q)::text, ' & '"
-        "         ) AS lexemes"
-        ") "
-        "SELECT a.zoho_article_id, a.title, a.body, a.url, a.permalink, "
-        "       a.category, a.language, a.modified_time, "
-        "       ts_rank_cd(a.search_vector, q_or.q) AS score, "
-        "       ( SELECT count(*) FROM unnest(q.lexemes) lx "
-        "          WHERE lx <> '' AND a.search_vector @@ lx::tsquery "
-        "       ) AS match_count "
-        "FROM kb_articles a, q, "
-        "     to_tsquery(:cfg::regconfig, "
-        "       array_to_string(q.lexemes, ' | ')) AS q_or(q) "
-        "WHERE a.search_vector @@ q_or.q "
-        "  AND ( SELECT count(*) FROM unnest(q.lexemes) lx "
-        "         WHERE lx <> '' AND a.search_vector @@ lx::tsquery "
-        "      ) >= LEAST(2, cardinality(q.lexemes)) "
-        # Never surface a draft or unpublished article: its help-center
-        # URL 404s for the client. Legacy rows can have an empty status,
-        # so this excludes the known-bad values rather than requiring
-        # 'Published' outright.
-        "  AND lower(coalesce(a.status, '')) "
-        "      NOT IN ('draft', 'unpublished', 'review', 'in review') "
-    )
+    sql = _kb_search_sql(language)
     params = {"q": query.strip(), "limit": limit, "cfg": cfg}
     if language in ("en", "fr"):
-        sql += "  AND a.language = :lang "
         params["lang"] = language
-    sql += "ORDER BY match_count DESC, score DESC LIMIT :limit"
+
 
     with engine.connect() as conn:
         rows = conn.execute(text(sql), params).mappings().all()
