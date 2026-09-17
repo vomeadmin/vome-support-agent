@@ -255,6 +255,12 @@ FOLDER: Feature Requests
 ### ClickUp task hits ON PROD
 1. ClickUp fires webhook to `/webhook/clickup-status`
 2. Agent reads Zoho Ticket Link from task, fetches ticket + conversations
+2b. Automated "Vome Error Report" tickets (filed by the web app's
+   ErrorBoundary, detected in [error_reports.py](error_reports.py)) stop here:
+   the Zoho ticket and ClickUp task are closed silently, no client email and
+   no Final Review, just a Slack record. Nobody wrote them by hand, so a
+   resolution note means nothing to whoever receives it. Same detector keeps
+   intake from auto-acknowledging them.
 3. Claude generates resolution draft
 4. Posts to Slack thread with confirm/send/cancel options
 5. On confirm: sends resolution to client via Zoho

@@ -9,6 +9,9 @@ When a ClickUp task status changes to ON PROD:
   3. Generate a resolution draft with Claude
   4. Find the existing Slack thread (or create a new one)
   5. Post the ON PROD notification with a pending draft
+
+Automated "Vome Error Report" tickets are the exception: they are closed
+silently with no client email (see error_reports.is_error_report).
 """
 
 import json
@@ -47,6 +50,7 @@ from status_constants import (
     THREAD_ON_PROD_SENT,
 )
 from signatures import signature, sign_message
+from error_reports import is_error_report
 from outbound_guard import (
     guard_failure_notice,
     validate_client_message,
@@ -618,6 +622,60 @@ def _on_prod_skipped_message(
     return "\n".join(lines)
 
 
+def _on_prod_error_report_message(
+    ticket_number: str,
+    engineer_name: str,
+    ticket_fields: dict | None = None,
+    zoho_ticket_id: str = "",
+    clickup_task_id: str = "",
+) -> str:
+    """Build the 'automated error report closed silently' Slack record."""
+    zoho_url = (
+        f"https://desk.zoho.com/support/vomevolunteer"
+        f"/ShowHomePage.do#Cases/dv/{zoho_ticket_id}"
+    ) if zoho_ticket_id else ""
+    clickup_url = (
+        f"https://app.clickup.com/t/{clickup_task_id}"
+    ) if clickup_task_id else ""
+
+    lines = [
+        f":white_check_mark: *On Prod — #{ticket_number} — closed,"
+        " no email sent*",
+        f"*{engineer_name} marked this fixed. This is an automated Vome"
+        " Error Report, so it was closed silently.*",
+    ]
+    if ticket_fields:
+        contact_name = ticket_fields.get("contact_name", "")
+        contact_email = ticket_fields.get("contact_email", "")
+        subject = ticket_fields.get("subject", "")
+        contact_line = (
+            f"{contact_name} ({contact_email})"
+            if contact_email
+            else contact_name or "Unknown"
+        )
+        lines.append(f"*Contact:* {contact_line}")
+        lines.append(f"*Subject:* {subject}")
+
+    link_parts = []
+    if zoho_url:
+        link_parts.append(f"<{zoho_url}|Zoho>")
+    if clickup_url:
+        link_parts.append(f"<{clickup_url}|ClickUp>")
+    if link_parts:
+        lines.append(" | ".join(link_parts))
+
+    lines += [
+        "",
+        _SEP,
+        ":no_bell: *No email sent (automated error report)*",
+        "Nobody wrote this ticket by hand, so a resolution note would not"
+        " mean anything to the person it reached.",
+        _SEP,
+        "Zoho ticket closed | ClickUp task closed.",
+    ]
+    return "\n".join(lines)
+
+
 def _post_on_prod_record(
     zoho_ticket_id: str,
     clickup_task_id: str,
@@ -687,6 +745,32 @@ def _notify_auto_sent(
     )
 
 
+def _notify_closed_error_report(
+    zoho_ticket_id: str,
+    clickup_task_id: str,
+    engineer_name: str,
+    ticket_fields: dict,
+    thread_ts: str | None,
+) -> None:
+    """Post the 'closed, no email (automated error report)' record to Slack."""
+    ticket_number = zoho_ticket_id
+    if thread_ts:
+        ticket_number = (
+            (get_thread(thread_ts) or {}).get("ticket_number")
+            or zoho_ticket_id
+        )
+    text = _on_prod_error_report_message(
+        ticket_number, engineer_name,
+        ticket_fields=ticket_fields,
+        zoho_ticket_id=zoho_ticket_id,
+        clickup_task_id=clickup_task_id,
+    )
+    _post_on_prod_record(
+        zoho_ticket_id, clickup_task_id, text,
+        THREAD_CLOSED, ticket_fields, thread_ts,
+    )
+
+
 def _notify_closed_no_send(
     zoho_ticket_id: str,
     clickup_task_id: str,
@@ -728,7 +812,12 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
     Slack. If the reply cannot be auto-sent (no contact email, empty draft,
     or a send error), it falls back to posting a review draft to Slack with
     confirm/send/cancel and leaves the ticket in Final Review.
-    Returns True on success (auto-sent or review draft posted).
+
+    Automated Vome Error Reports never get a client email: the Zoho ticket
+    and the ClickUp task are closed silently and only a Slack record is
+    posted.
+    Returns True on success (auto-sent, closed silently, or review draft
+    posted).
     """
     print(f"[ON PROD] Task {task_id} marked on prod by {engineer_name}")
 
@@ -779,19 +868,46 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
 
     print(f"[ON PROD] Zoho ticket ID: {zoho_ticket_id}")
 
-    # Step 3 — set Zoho ticket status to Final Review
-    _set_zoho_status_final_review(zoho_ticket_id)
-
-    # Step 4 — fetch Zoho ticket + conversations
+    # Step 3 — fetch Zoho ticket + conversations
     zoho_ticket = fetch_ticket_from_zoho(zoho_ticket_id)
     conversations_result = fetch_ticket_conversations(zoho_ticket_id)
 
     fields = _extract_ticket_fields(zoho_ticket) if zoho_ticket else {}
     conversations_text = _format_conversations(conversations_result)
 
+    thread_ts = _find_thread_ts(zoho_ticket_id)
+
+    # Step 3b — automated Vome Error Reports get no client email. Nobody
+    # wrote them by hand and the person who triggered one rarely connects a
+    # resolution note back to anything they did, so close the ticket silently.
+    # Checked before the Final Review write so these never surface in that
+    # queue at all.
+    if is_error_report(
+        fields.get("subject", ""),
+        fields.get("description", ""),
+        task_title,
+        description,
+    ):
+        _set_zoho_status_closed(zoho_ticket_id)
+        update_clickup_status_finished(task_id)
+        _notify_closed_error_report(
+            zoho_ticket_id=zoho_ticket_id,
+            clickup_task_id=task_id,
+            engineer_name=engineer_name,
+            ticket_fields=fields,
+            thread_ts=thread_ts,
+        )
+        print(
+            f"[ON PROD] Vome Error Report — closed silently, no client"
+            f" email — ticket {zoho_ticket_id}"
+        )
+        return True
+
+    # Step 4 — set Zoho ticket status to Final Review
+    _set_zoho_status_final_review(zoho_ticket_id)
+
     # Step 5 — determine client language from thread_map
     language = None
-    thread_ts = _find_thread_ts(zoho_ticket_id)
     if thread_ts:
         thread_entry = get_thread(thread_ts) or {}
         classification_data = thread_entry.get("classification") or {}
@@ -911,9 +1027,6 @@ def handle_on_prod(task_id: str, engineer_name: str) -> bool:
             f"[ON PROD] Auto-send unavailable for ticket {zoho_ticket_id} "
             "— falling back to Slack review"
         )
-
-    if not thread_ts:
-        thread_ts = _find_thread_ts(zoho_ticket_id)
 
     if thread_ts:
         thread_entry = get_thread(thread_ts) or {}

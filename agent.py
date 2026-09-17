@@ -37,6 +37,7 @@ from status_constants import (
     ZOHO_AWAITING_CLIENT_RESPONSE,
 )
 from signatures import signature, sign_message
+from error_reports import is_error_report
 from model_config import SUPPORT_MODEL, SUPPORT_MODEL_FAST
 import kb_context
 import knowledge
@@ -1830,8 +1831,7 @@ def process_ticket(ticket_data: dict) -> str | None:
         print(f"Zoho fetch failed -- falling back to webhook payload for ticket {ticket_id}")
 
     # Error reports from Vome frontend — Sam handles these directly
-    combined_text = f"{subject} {body or ''}".lower()
-    if "vome error report" in combined_text or "error report ===" in combined_text:
+    if is_error_report(subject, body):
         print(f"Vome Error Report detected in ticket {ticket_id} -- leaving as New for Sam")
         return None
 
