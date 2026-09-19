@@ -522,22 +522,52 @@ def translation_row_id(article_id: str, locale: str) -> str:
     return f"{article_id}:{locale.strip().lower()}"
 
 
-def _fetch_article_translations(article_id: str) -> list[dict] | None:
+def _fetch_article_translations(
+    article_id: str, attempts: int = DETAIL_ATTEMPTS
+) -> list[dict] | None:
     """List an article's translations. None means the call failed.
 
     An empty list is a real answer (no translations); None is not, and
     the caller records it as a failure so the delete step stays blocked.
+    Only the None path is retried, so "this article genuinely has no
+    translations" still costs one call.
+
+    Retries for the same reason getArticle has them: the proxy drops the
+    occasional call, and one drop here marks the whole run incomplete and
+    skips the delete step for the night.
     """
-    result = _zoho_desk_call(
-        "ZohoDesk_getArticleTranslations",
-        {
-            # This tool wants `articleId`, unlike getArticle which wants
-            # `id`. Getting it wrong returns a mandatory-path-variable
-            # error rather than an empty result.
-            "path_variables": {"articleId": str(article_id)},
-            "query_params": {"orgId": str(ZOHO_ORG_ID)},
-        },
-    )
+    for attempt in range(1, max(1, attempts) + 1):
+        result = _zoho_desk_call(
+            "ZohoDesk_getArticleTranslations",
+            {
+                # This tool wants `articleId`, unlike getArticle which
+                # wants `id`. Getting it wrong returns a mandatory-path-
+                # variable error rather than an empty result.
+                "path_variables": {"articleId": str(article_id)},
+                # Zoho defaults this list to 10 per page. Vome only ships
+                # en and fr today, but the default would silently drop
+                # locales 11+ rather than fail.
+                "query_params": {
+                    "orgId": str(ZOHO_ORG_ID),
+                    "limit": 50,
+                },
+            },
+        )
+        translations = _parse_translation_list(result)
+        if translations is not None:
+            return translations
+
+        if attempt < attempts:
+            time.sleep(ZOHO_DELAY * attempt)
+            print(
+                f"[KB SYNC]   retrying getArticleTranslations "
+                f"{article_id} (attempt {attempt + 1}/{attempts})"
+            )
+    return None
+
+
+def _parse_translation_list(result: object) -> list[dict] | None:
+    """Translation rows from one MCP response, or None if it errored."""
     if isinstance(result, dict) and result.get("isError"):
         return None
     raw = _unwrap_mcp_result(result)
@@ -790,11 +820,23 @@ def build_failure_alert(
     categories = by_kind.get(FAILURE_CATEGORY, [])
     articles = by_kind.get(FAILURE_ARTICLE, [])
 
-    headline = (
-        f":warning: *KB sync ran incomplete* "
-        f"({len(LAST_FETCH_FAILURES)} failure(s), "
-        f"{articles_indexed} articles fetched)"
-    )
+    # A category failure means content is genuinely absent from this
+    # run. Article failures only leave rows stale. Both are worth
+    # posting, but they should not open with the same word, or the
+    # serious one reads like the routine one and gets skimmed past.
+    content_missing = bool(category_list or categories)
+    if content_missing:
+        headline = (
+            f":warning: *KB sync ran incomplete* "
+            f"({len(LAST_FETCH_FAILURES)} failure(s), "
+            f"{articles_indexed} articles fetched)"
+        )
+    else:
+        headline = (
+            f":information_source: *KB sync finished with stale rows* "
+            f"({len(LAST_FETCH_FAILURES)} article(s) not refetched, "
+            f"{articles_indexed} articles fetched)"
+        )
 
     if stats:
         written = (
@@ -823,9 +865,10 @@ def build_failure_alert(
         )
     if articles:
         consequences.append(
-            f"{len(articles)} article(s) could not be fetched. Their "
-            f"existing rows were left untouched, so they are stale "
-            f"rather than missing, and everything else indexed normally."
+            f"{len(articles)} article(s) could not be fetched, each "
+            f"after {DETAIL_ATTEMPTS} attempts. Their existing rows were "
+            f"left untouched, so they are stale rather than missing, and "
+            f"everything else indexed normally."
         )
 
     # The one that is true on every incomplete run, and the one the

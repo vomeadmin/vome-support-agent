@@ -8,6 +8,7 @@ Uses SQLAlchemy Core for simple table operations.
 import json
 import os
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from sqlalchemy import (
     Boolean,
@@ -323,10 +324,28 @@ def _kb_articles_index_sql() -> str:
     )
 
 
+def _database_url_is_usable(url: str) -> bool:
+    """True if `url` actually names a server to connect to.
+
+    The bare placeholder `postgresql://` is truthy, so an empty-value
+    check passes it straight through to SQLAlchemy, which fills in the
+    blanks with libpq defaults and connects to localhost:5432. The
+    failure then reads "connection to server at localhost ... no
+    password supplied", which sends you looking for a Postgres problem
+    instead of an unset variable.
+    """
+    if not url:
+        return False
+    try:
+        return bool(urlparse(url).hostname)
+    except ValueError:
+        return False
+
+
 def _get_engine():
     global _engine
     if _engine is None:
-        if not DATABASE_URL:
+        if not _database_url_is_usable(DATABASE_URL):
             raise RuntimeError(
                 "DATABASE_URL not set — cannot connect to PostgreSQL"
             )

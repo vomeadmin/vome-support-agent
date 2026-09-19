@@ -343,6 +343,31 @@ def test_every_alert_names_the_unpruned_rows(monkeypatch):
     assert "can still cite them" in alert
 
 
+def test_stale_rows_do_not_open_with_the_incomplete_headline(monkeypatch):
+    """Otherwise a night of stale rows and a night of missing categories
+    open with the same word and the serious one gets skimmed past."""
+    _set_failures(monkeypatch, [
+        {"kind": kb_sync.FAILURE_ARTICLE, "message": "detail failed for 1"},
+    ])
+
+    alert = kb_sync.build_failure_alert(891, PROD_STATS)
+
+    assert "stale rows" in alert
+    assert "ran incomplete" not in alert
+    assert ":warning:" not in alert
+
+
+def test_a_missing_category_still_opens_with_a_warning(monkeypatch):
+    _set_failures(monkeypatch, [
+        {"kind": kb_sync.FAILURE_CATEGORY, "message": "getArticles failed"},
+    ])
+
+    alert = kb_sync.build_failure_alert(400, PROD_STATS)
+
+    assert ":warning:" in alert
+    assert "ran incomplete" in alert
+
+
 def test_a_real_category_failure_does_say_content_is_missing(monkeypatch):
     _set_failures(monkeypatch, [
         {"kind": kb_sync.FAILURE_CATEGORY,
@@ -576,3 +601,56 @@ def test_no_translations_is_a_real_answer_not_a_failure(monkeypatch):
 
     assert kb_sync._collect_translations("123", "FAQs") == []
     assert kb_sync.LAST_FETCH_FAILURES == []
+
+
+def test_a_transient_translation_list_failure_is_retried(monkeypatch):
+    """One dropped list call used to block the delete step for the whole
+    night, the same way it once did for getArticle."""
+    calls = []
+
+    def _call(tool_name, arguments):
+        calls.append(arguments["path_variables"]["articleId"])
+        if len(calls) == 1:
+            return {"isError": True, "content": []}
+        return {"data": [{"locale": "fr", "status": "Published"}]}
+
+    monkeypatch.setattr(kb_sync, "_zoho_desk_call", _call)
+    monkeypatch.setattr(kb_sync, "_unwrap_mcp_result", lambda r: r)
+    monkeypatch.setattr(kb_sync.time, "sleep", lambda *_: None)
+
+    got = kb_sync._fetch_article_translations("123")
+
+    assert got == [{"locale": "fr", "status": "Published"}]
+    assert len(calls) == 2, "must retry after a transient failure"
+
+
+def test_translation_list_retries_are_bounded(monkeypatch):
+    calls = []
+
+    def _call(tool_name, arguments):
+        calls.append(1)
+        return {"isError": True, "content": []}
+
+    monkeypatch.setattr(kb_sync, "_zoho_desk_call", _call)
+    monkeypatch.setattr(kb_sync, "_unwrap_mcp_result", lambda r: r)
+    monkeypatch.setattr(kb_sync.time, "sleep", lambda *_: None)
+
+    assert kb_sync._fetch_article_translations("123") is None
+    assert len(calls) == kb_sync.DETAIL_ATTEMPTS
+
+
+def test_an_empty_translation_list_is_not_retried(monkeypatch):
+    """Most articles have no translations, so retrying the empty answer
+    would triple the call count for the common case."""
+    calls = []
+
+    def _call(tool_name, arguments):
+        calls.append(1)
+        return {"data": []}
+
+    monkeypatch.setattr(kb_sync, "_zoho_desk_call", _call)
+    monkeypatch.setattr(kb_sync, "_unwrap_mcp_result", lambda r: r)
+    monkeypatch.setattr(kb_sync.time, "sleep", lambda *_: None)
+
+    assert kb_sync._fetch_article_translations("123") == []
+    assert len(calls) == 1
